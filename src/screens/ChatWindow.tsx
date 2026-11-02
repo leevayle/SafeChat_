@@ -295,11 +295,17 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
                       })}
                     {mine &&
                       (m.state === 'sent' ? (
-                        <Check size={14} />
+                        <Check size={14} strokeWidth={2.5} aria-label="Sent" />
+                      ) : m.state === 'delivered' ? (
+                        <CheckCheck size={14} strokeWidth={2.5} className="opacity-90" aria-label="Delivered" />
                       ) : (
                         <CheckCheck
                           size={14}
-                          className={m.state === 'read' && settings.readReceipts ? 'text-sky-300' : ''}
+                          strokeWidth={2.5}
+                          className={
+                            settings.readReceipts !== false ? 'text-sky-300' : 'opacity-90'
+                          }
+                          aria-label="Read"
                         />
                       ))}
                   </p>

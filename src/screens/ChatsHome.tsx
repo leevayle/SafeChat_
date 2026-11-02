@@ -298,19 +298,27 @@ export function ChatsHome({
                   className="flex w-full items-center gap-3 border-b border-gray-100/80 px-3 py-3.5 text-left last:border-0 hover:bg-gray-50/80"
                 >
                   {meta && meta.total > 0 ? (
-                    <button
-                      type="button"
+                    <span
+                      role="button"
+                      tabIndex={0}
                       onClick={(e) => {
                         e.stopPropagation()
                         onOpenStatus(c.contactId)
                       }}
-                      className="shrink-0"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          onOpenStatus(c.contactId)
+                        }
+                      }}
+                      className="shrink-0 cursor-pointer"
                       aria-label="View status"
                     >
                       <StatusRing total={meta.total} viewed={meta.viewed} size={56}>
                         <Avatar contact={ct} size={46} />
                       </StatusRing>
-                    </button>
+                    </span>
                   ) : (
                     <Avatar contact={ct} size={52} />
                   )}
@@ -322,9 +330,7 @@ export function ChatsHome({
                         {c.mine && (
                           <span
                             className={`text-[11px] font-black leading-none ${
-                              c.state === 'read'
-                                ? 'text-brand-blue'
-                                : 'text-gray-400'
+                              c.state === 'read' ? 'text-brand-blue' : 'text-gray-400'
                             }`}
                             title={c.state || 'sent'}
                           >

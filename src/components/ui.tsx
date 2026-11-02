@@ -42,11 +42,22 @@ export function OptionList({ options, value, onPick }: { options: string[]; valu
 }
 
 export function Toast({ msg, clear }: { msg: string | null; clear: () => void }) {
-  useEffect(() => { if (!msg) return; const t = setTimeout(clear, 2000); return () => clearTimeout(t) }, [msg, clear])
+  useEffect(() => {
+    if (!msg) return
+    const t = setTimeout(() => clear(), 2200)
+    return () => clearTimeout(t)
+  }, [msg, clear])
   return (
-    <AnimatePresence>
+    <AnimatePresence mode="wait">
       {msg && (
-        <motion.div initial={{ y: 30, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 30, opacity: 0 }} className="pointer-events-none absolute inset-x-0 bottom-24 z-[80] flex justify-center">
+        <motion.div
+          key={msg}
+          initial={{ y: 30, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 30, opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="pointer-events-none absolute inset-x-0 bottom-24 z-[80] flex justify-center"
+        >
           <span className="rounded-full bg-ink px-5 py-2.5 text-sm font-bold text-white shadow-xl">{msg}</span>
         </motion.div>
       )}

@@ -95,7 +95,7 @@ export function StatusTab() {
         </button>
       </header>
 
-      <div className="px-5">
+      <div className="px-5 pt-2.5">
         <h2 className="mb-3 text-xl font-black">Status</h2>
 
         {/* My statuses — horizontal rounded rectangles + trailing + */}

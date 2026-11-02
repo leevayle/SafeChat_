@@ -138,7 +138,7 @@ function mapContact(c: any): ApiContact {
     id: peerId,
     entryId: String(c.id || peerId),
     peerId,
-    phone: c.phone || '',
+    phone: c.phone_number || c.phone || '',
     username: c.username || '',
     name: c.display_name || c.name || c.username || '',
     savedName: c.nickname || c.savedName || c.display_name || c.name || '',
@@ -161,15 +161,23 @@ function mapMessage(m: any, meId?: string): ApiMsg {
     }
   } catch { /* */ }
   const from = String(m.sender_id || m.from || '')
+  const media = m.media_attachments || m.media || []
+  const firstMedia = Array.isArray(media) && media.length ? media[0] : null
+  const image =
+    (firstMedia && (firstMedia.url || firstMedia.data || firstMedia.src)) ||
+    m.image ||
+    null
+  let state: ApiMsg['state'] = (m.delivery_status as any) || 'sent'
+  if (state !== 'sent' && state !== 'delivered' && state !== 'read') state = 'sent'
   return {
     id: String(m.id || m._id),
     from,
     to: String(m.to || ''),
     text: m.content ?? m.text ?? '',
-    image: null,
+    image,
     time: created,
     timeLabel,
-    state: (m.delivery_status as any) || 'sent',
+    state,
     mine: meId ? from === meId : !!m.mine,
     conversationId: m.conversation_id,
     messageType: m.message_type,
@@ -203,7 +211,7 @@ function mapConversation(c: any, meId?: string): ChatPreview {
     time,
     unread: c.unread_count || 0,
     mine: last ? String(last.sender_id) === meId : false,
-    state: 'sent',
+    state: ((last?.delivery_status as ApiMsg['state']) || 'sent') as ChatPreview['state'],
     iso: iso || undefined,
   }
 }
@@ -514,10 +522,17 @@ export const api = {
     return { messages: list.map((m: any) => mapMessage(m, mid)) }
   },
 
-  send: async (conversationId: string, text: string, _image?: string | null) => {
+  send: async (conversationId: string, text: string, image?: string | null) => {
+    const payload: Record<string, unknown> = {
+      content: text || (image ? '' : ''),
+      message_type: image ? 'image' : 'text',
+    }
+    if (image) {
+      payload.media_attachments = [{ type: 'image', url: image }]
+    }
     const msg = await req<any>(`/api/v1/messages/conversations/${conversationId}`, {
       method: 'POST',
-      body: JSON.stringify({ content: text, message_type: 'text' }),
+      body: JSON.stringify(payload),
     })
     return { message: mapMessage(msg, meId()) }
   },
@@ -587,14 +602,19 @@ export const api = {
     return { status: (list || []).map(mapStatus) }
   },
 
-  postStatus: async (text: string, _image?: string | null) => {
+  postStatus: async (text: string, image?: string | null) => {
+    const payload: Record<string, unknown> = {
+      content: text || '',
+      status_type: image ? 'image' : 'text',
+      visibility: 'contacts',
+      expires_in_hours: 24,
+    }
+    if (image) {
+      payload.media_attachments = [{ type: 'image', url: image }]
+    }
     const s = await req<any>('/api/v1/statuses', {
       method: 'POST',
-      body: JSON.stringify({
-        content: text,
-        status_type: 'text',
-        visibility: 'contacts',
-      }),
+      body: JSON.stringify(payload),
     })
     return { status: mapStatus(s) }
   },

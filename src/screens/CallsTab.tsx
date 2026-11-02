@@ -56,7 +56,7 @@ export function CallsTab({ onCall, onSimulateIncoming }: Props) {
         </button>
       </header>
 
-      <h2 className="mb-1 px-5 text-xl font-black">Recent calls</h2>
+      <h2 className="mb-1 px-5 pt-2.5 text-xl font-black">Recent calls</h2>
       <ul className="mt-2 px-2">
         {calls.length === 0 && (
           <p className="px-4 py-12 text-center font-bold text-gray-400">No recent calls</p>
