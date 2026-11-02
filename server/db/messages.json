@@ -88,7 +88,7 @@
       "to": "umvyxgr5gb0n9au",
       "text": "Sounds great!",
       "time": "2026-11-02T07:53:03.664Z",
-      "state": "delivered"
+      "state": "read"
     }
   ],
   "umvye0jcitf3d1c:umvyxgr5gb0n9au": [
@@ -108,6 +108,15 @@
       "text": "B",
       "image": null,
       "time": "2026-11-02T07:56:42.646Z",
+      "state": "read"
+    },
+    {
+      "id": "mmvz4ktcqohdg50",
+      "from": "umvye0jcitf3d1c",
+      "to": "umvyxgr5gb0n9au",
+      "text": "📷 Photo",
+      "image": "/uploads/users/2b323534373438363733353338/chats/756d767965306a6369746633643163756d76797867723567_mvz4ktca.jpg",
+      "time": "2026-11-02T10:37:48.314Z",
       "state": "read"
     }
   ]
