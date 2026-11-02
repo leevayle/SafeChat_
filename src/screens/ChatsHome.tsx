@@ -32,17 +32,20 @@ export function ChatsHome({
   const [q, setQ] = useState('')
   const [menu, setMenu] = useState(false)
 
-  const contactById = (id: string) =>
-    contacts.find((c) => c.id === id) || {
+  const contactById = (id: string, fallback?: { name?: string; photo?: string | null; hue?: [string, string] }) => {
+    const hit = contacts.find((c) => c.id === id || c.peerId === id)
+    if (hit) return hit
+    return {
       id,
-      name: id,
-      username: id,
+      name: fallback?.name || id,
+      username: '',
       phone: '',
       bio: '',
-      photo: null,
+      photo: fallback?.photo ?? null,
       online: false,
-      hue: ['#7B2CBF', '#6389EB'] as [string, string],
+      hue: (fallback?.hue || ['#7B2CBF', '#6389EB']) as [string, string],
     }
+  }
 
   /** status counts per user: total + how many I've viewed */
   const statusMeta = useMemo(() => {
@@ -59,7 +62,7 @@ export function ChatsHome({
   const list = useMemo(
     () =>
       chats.filter((c) => {
-        const ct = contactById(c.contactId)
+        const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
         if (
           q &&
           !ct.name.toLowerCase().includes(q.toLowerCase()) &&
@@ -210,7 +213,7 @@ export function ChatsHome({
             </p>
           )}
           {list.map((c, i) => {
-            const ct = contactById(c.contactId)
+            const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
             const meta = statusMeta[c.contactId]
             return (
               <motion.li

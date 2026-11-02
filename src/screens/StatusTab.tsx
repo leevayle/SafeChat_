@@ -1,8 +1,9 @@
-import { useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, ImagePlus, X, Settings as SettingsIcon, Eye } from 'lucide-react'
 import { BrandMark } from '../components/AppHeaderLogo'
 import { Avatar } from '../components/Avatar'
+import { StatusRing } from '../components/StatusRing'
 import { api } from '../api'
 import { useStore } from '../store'
 import { PillButton } from '../components/PillButton'
@@ -28,6 +29,34 @@ export function StatusTab() {
 
   const mine = statusList.filter((s) => s.userId === me?.id)
   const others = statusList.filter((s) => s.userId !== me?.id)
+
+  /** one row per user — segment ring by status count (same as chats home) */
+  const recentUsers = useMemo(() => {
+    const map = new Map<
+      string,
+      { userId: string; user: any; total: number; viewed: number; latest: any }
+    >()
+    for (const s of others) {
+      const cur = map.get(s.userId)
+      const viewedOne = me && Array.isArray(s.views) && s.views.includes(me.id) ? 1 : 0
+      if (!cur) {
+        map.set(s.userId, {
+          userId: s.userId,
+          user: s.user,
+          total: 1,
+          viewed: viewedOne,
+          latest: s,
+        })
+      } else {
+        cur.total += 1
+        cur.viewed += viewedOne
+        // keep newest as latest by comparing ago is hard; prefer later in list if API is newest-first
+        cur.latest = s
+        if (s.user) cur.user = s.user
+      }
+    }
+    return Array.from(map.values())
+  }, [others, me])
 
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
@@ -113,35 +142,37 @@ export function StatusTab() {
         </div>
 
         <p className="mb-2 mt-6 text-sm font-extrabold text-gray-500">Recent updates</p>
-        {others.length === 0 && (
+        {recentUsers.length === 0 && (
           <p className="py-6 text-center text-sm font-bold text-gray-400">No recent status</p>
         )}
-        {others.map((s, i) => (
-          <motion.div
-            key={s.id}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.04 }}
-            className="flex items-center gap-3 rounded-3xl p-2.5 hover:bg-gray-100"
-          >
-            <span className="rounded-full p-[3px] ring-[3px] ring-brand-purple">
-              <Avatar
-                contact={s.user || { id: s.userId, name: '?', hue: ['#7B2CBF', '#6389EB'] }}
-                size={48}
-              />
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="font-extrabold">{s.user?.name || 'User'}</p>
-              <p className="truncate text-sm font-semibold text-gray-500">
-                {s.text || (s.image ? 'Photo' : '')}
-              </p>
-              <p className="text-xs font-bold text-gray-400">{s.ago}</p>
-            </div>
-            {s.image && (
-              <img src={mediaUrl(s.image)} alt="" className="h-12 w-12 rounded-xl object-cover" />
-            )}
-          </motion.div>
-        ))}
+        {recentUsers.map((g, i) => {
+          const s = g.latest
+          const contact = g.user || { id: g.userId, name: '?', hue: ['#7B2CBF', '#6389EB'] as [string, string] }
+          return (
+            <motion.div
+              key={g.userId}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.04 }}
+              className="flex items-center gap-3 rounded-3xl p-2.5 hover:bg-gray-100"
+            >
+              <StatusRing total={g.total} viewed={g.viewed} size={56}>
+                <Avatar contact={contact} size={46} />
+              </StatusRing>
+              <div className="min-w-0 flex-1">
+                <p className="font-extrabold">{contact.name || 'User'}</p>
+                <p className="truncate text-sm font-semibold text-gray-500">
+                  {s.text || (s.image ? 'Photo' : '')}
+                  {g.total > 1 ? ` · ${g.total} updates` : ''}
+                </p>
+                <p className="text-xs font-bold text-gray-400">{s.ago}</p>
+              </div>
+              {s.image && (
+                <img src={mediaUrl(s.image)} alt="" className="h-12 w-12 rounded-xl object-cover" />
+              )}
+            </motion.div>
+          )
+        })}
       </div>
 
       {/* Composer */}

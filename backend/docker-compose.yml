@@ -1,0 +1,55 @@
+version: "3.9"
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: safechat-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: safechat
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: safechat-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    container_name: safechat-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017
+      - MONGODB_DB_NAME=safechat
+      - REDIS_URL=redis://redis:6379/0
+      - APP_ENV=development
+      - SECRET_KEY=dev-docker-secret-key-change-me-in-production-at-least-64-chars
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./storage:/app/storage
+      - ./archives:/app/archives
+    restart: unless-stopped
+
+volumes:
+  mongodb_data:
+  redis_data:

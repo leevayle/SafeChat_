@@ -1,0 +1,421 @@
+"""Conversation and messaging service."""
+from datetime import datetime, timezone
+from typing import List, Optional, Dict, Any, Tuple
+from bson import ObjectId
+from app.core.database import get_database
+from app.core.exceptions import (
+    NotFoundError,
+    ForbiddenError,
+    ConflictError,
+    ValidationError,
+)
+from app.models.messaging import ConversationType, MessageType, DeliveryStatus
+from app.core.security import generate_idempotency_key
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class MessagingService:
+    @staticmethod
+    async def get_or_create_private_conversation(
+        user_id: str, other_username: str
+    ) -> dict:
+        db = get_database()
+        other = await db.users.find_one({"username": other_username.lower().strip()})
+        if not other:
+            raise NotFoundError("User not found")
+        other_id = str(other["_id"])
+        if other_id == user_id:
+            raise ValidationError("Cannot create conversation with yourself")
+
+        # Check block either direction
+        blocked = await db.blocked_users.find_one(
+            {
+                "$or": [
+                    {"blocker_id": user_id, "blocked_id": other_id},
+                    {"blocker_id": other_id, "blocked_id": user_id},
+                ]
+            }
+        )
+        if blocked:
+            raise ForbiddenError("Cannot message this user")
+
+        participants = sorted([user_id, other_id])
+        existing = await db.conversations.find_one(
+            {
+                "conversation_type": ConversationType.PRIVATE.value,
+                "participant_ids": participants,
+            }
+        )
+        if existing:
+            return await MessagingService._serialize_conversation(existing, user_id)
+
+        now = datetime.now(timezone.utc)
+        doc = {
+            "conversation_type": ConversationType.PRIVATE.value,
+            "participant_ids": participants,
+            "group_id": None,
+            "created_at": now,
+            "updated_at": now,
+            "last_message_at": None,
+            "last_message_id": None,
+            "conversation_settings": {},
+        }
+        result = await db.conversations.insert_one(doc)
+        doc["_id"] = result.inserted_id
+        return await MessagingService._serialize_conversation(doc, user_id)
+
+    @staticmethod
+    async def list_conversations(user_id: str, limit: int = 50, cursor: Optional[str] = None) -> dict:
+        db = get_database()
+        query: Dict[str, Any] = {"participant_ids": user_id}
+        if cursor and ObjectId.is_valid(cursor):
+            # cursor is last_message_at iso or conversation _id; use last_message_at for ordering
+            pass  # simple limit for now
+
+        cursor_q = (
+            db.conversations.find(query)
+            .sort([("last_message_at", -1), ("updated_at", -1)])
+            .limit(min(limit, 100))
+        )
+        items = []
+        async for conv in cursor_q:
+            items.append(await MessagingService._serialize_conversation(conv, user_id))
+        return {"conversations": items, "next_cursor": None}
+
+    @staticmethod
+    async def get_conversation(conversation_id: str, user_id: str) -> dict:
+        db = get_database()
+        if not ObjectId.is_valid(conversation_id):
+            raise ValidationError("Invalid conversation id")
+        conv = await db.conversations.find_one({"_id": ObjectId(conversation_id)})
+        if not conv:
+            raise NotFoundError("Conversation not found")
+        if user_id not in conv.get("participant_ids", []):
+            raise ForbiddenError("Not a participant")
+        return await MessagingService._serialize_conversation(conv, user_id)
+
+    @staticmethod
+    async def send_message(
+        conversation_id: str,
+        sender_id: str,
+        content: Optional[str] = None,
+        message_type: str = "text",
+        reply_to_message_id: Optional[str] = None,
+        media_attachments: Optional[List[Dict]] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> dict:
+        db = get_database()
+        if not ObjectId.is_valid(conversation_id):
+            raise ValidationError("Invalid conversation id")
+        conv = await db.conversations.find_one({"_id": ObjectId(conversation_id)})
+        if not conv:
+            raise NotFoundError("Conversation not found")
+        if sender_id not in conv.get("participant_ids", []):
+            raise ForbiddenError("Not a participant")
+
+        # Idempotency
+        if idempotency_key:
+            existing = await db.messages.find_one({"idempotency_key": idempotency_key})
+            if existing:
+                return await MessagingService._serialize_message(existing)
+
+        try:
+            mt = MessageType(message_type)
+        except ValueError:
+            raise ValidationError(f"Invalid message_type: {message_type}")
+
+        if mt == MessageType.TEXT and not content:
+            raise ValidationError("Text messages require content")
+
+        if reply_to_message_id:
+            if not ObjectId.is_valid(reply_to_message_id):
+                raise ValidationError("Invalid reply_to_message_id")
+            reply = await db.messages.find_one(
+                {"_id": ObjectId(reply_to_message_id), "conversation_id": conversation_id}
+            )
+            if not reply:
+                raise NotFoundError("Reply target message not found")
+
+        now = datetime.now(timezone.utc)
+        msg = {
+            "conversation_id": conversation_id,
+            "sender_id": sender_id,
+            "message_type": mt.value,
+            "content": content,
+            "media_attachments": media_attachments or [],
+            "reply_to_message_id": reply_to_message_id,
+            "forwarded_from": None,
+            "created_at": now,
+            "updated_at": now,
+            "deleted_at": None,
+            "delivery_status": DeliveryStatus.SENT.value,
+            "idempotency_key": idempotency_key or generate_idempotency_key(),
+            "edited": False,
+        }
+        result = await db.messages.insert_one(msg)
+        msg_id = str(result.inserted_id)
+        msg["_id"] = result.inserted_id
+
+        await db.conversations.update_one(
+            {"_id": ObjectId(conversation_id)},
+            {
+                "$set": {
+                    "last_message_at": now,
+                    "last_message_id": msg_id,
+                    "updated_at": now,
+                }
+            },
+        )
+
+        # Receipts for other participants
+        for pid in conv["participant_ids"]:
+            if pid != sender_id:
+                await db.message_receipts.update_one(
+                    {"message_id": msg_id, "user_id": pid},
+                    {
+                        "$setOnInsert": {
+                            "message_id": msg_id,
+                            "user_id": pid,
+                            "conversation_id": conversation_id,
+                            "delivered_at": None,
+                            "read_at": None,
+                            "created_at": now,
+                        }
+                    },
+                    upsert=True,
+                )
+
+        await db.user_activity_logs.insert_one(
+            {
+                "user_id": sender_id,
+                "event_type": "message",
+                "action": "sent",
+                "resource_type": "message",
+                "resource_id": msg_id,
+                "timestamp": now,
+                "metadata": {"conversation_id": conversation_id},
+            }
+        )
+        return await MessagingService._serialize_message(msg)
+
+    @staticmethod
+    async def get_messages(
+        conversation_id: str,
+        user_id: str,
+        limit: int = 50,
+        before_id: Optional[str] = None,
+    ) -> dict:
+        db = get_database()
+        if not ObjectId.is_valid(conversation_id):
+            raise ValidationError("Invalid conversation id")
+        conv = await db.conversations.find_one({"_id": ObjectId(conversation_id)})
+        if not conv:
+            raise NotFoundError("Conversation not found")
+        if user_id not in conv.get("participant_ids", []):
+            raise ForbiddenError("Not a participant")
+
+        query: Dict[str, Any] = {
+            "conversation_id": conversation_id,
+            "deleted_at": None,
+        }
+        if before_id and ObjectId.is_valid(before_id):
+            query["_id"] = {"$lt": ObjectId(before_id)}
+
+        cursor = (
+            db.messages.find(query)
+            .sort("created_at", -1)
+            .limit(min(limit, 100))
+        )
+        messages = []
+        async for m in cursor:
+            messages.append(await MessagingService._serialize_message(m))
+        messages.reverse()  # chronological
+        next_cursor = messages[0]["id"] if messages and len(messages) == limit else None
+        return {"messages": messages, "next_cursor": next_cursor}
+
+    @staticmethod
+    async def edit_message(message_id: str, user_id: str, content: str) -> dict:
+        db = get_database()
+        if not ObjectId.is_valid(message_id):
+            raise ValidationError("Invalid message id")
+        msg = await db.messages.find_one({"_id": ObjectId(message_id)})
+        if not msg or msg.get("deleted_at"):
+            raise NotFoundError("Message not found")
+        if msg["sender_id"] != user_id:
+            raise ForbiddenError("Can only edit your own messages")
+        if msg["message_type"] != MessageType.TEXT.value:
+            raise ValidationError("Only text messages can be edited")
+
+        now = datetime.now(timezone.utc)
+        await db.messages.update_one(
+            {"_id": ObjectId(message_id)},
+            {"$set": {"content": content, "updated_at": now, "edited": True}},
+        )
+        msg["content"] = content
+        msg["updated_at"] = now
+        msg["edited"] = True
+        return await MessagingService._serialize_message(msg)
+
+    @staticmethod
+    async def delete_message(message_id: str, user_id: str) -> None:
+        db = get_database()
+        if not ObjectId.is_valid(message_id):
+            raise ValidationError("Invalid message id")
+        msg = await db.messages.find_one({"_id": ObjectId(message_id)})
+        if not msg or msg.get("deleted_at"):
+            raise NotFoundError("Message not found")
+        if msg["sender_id"] != user_id:
+            raise ForbiddenError("Can only delete your own messages")
+
+        now = datetime.now(timezone.utc)
+        await db.messages.update_one(
+            {"_id": ObjectId(message_id)},
+            {"$set": {"deleted_at": now, "content": None, "updated_at": now}},
+        )
+
+    @staticmethod
+    async def mark_delivered(message_id: str, user_id: str) -> None:
+        db = get_database()
+        if not ObjectId.is_valid(message_id):
+            raise ValidationError("Invalid message id")
+        now = datetime.now(timezone.utc)
+        await db.message_receipts.update_one(
+            {"message_id": message_id, "user_id": user_id},
+            {"$set": {"delivered_at": now}},
+        )
+
+    @staticmethod
+    async def mark_read(conversation_id: str, user_id: str, up_to_message_id: Optional[str] = None) -> int:
+        db = get_database()
+        if not ObjectId.is_valid(conversation_id):
+            raise ValidationError("Invalid conversation id")
+        conv = await db.conversations.find_one({"_id": ObjectId(conversation_id)})
+        if not conv or user_id not in conv.get("participant_ids", []):
+            raise ForbiddenError("Not a participant")
+
+        now = datetime.now(timezone.utc)
+        query: Dict[str, Any] = {
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "read_at": None,
+        }
+        if up_to_message_id and ObjectId.is_valid(up_to_message_id):
+            # mark all up to that message (by creation order is complex; mark all for simplicity)
+            pass
+        result = await db.message_receipts.update_many(
+            query, {"$set": {"read_at": now, "delivered_at": now}}
+        )
+        return result.modified_count
+
+    @staticmethod
+    async def react_to_message(message_id: str, user_id: str, emoji: str) -> dict:
+        db = get_database()
+        if not ObjectId.is_valid(message_id):
+            raise ValidationError("Invalid message id")
+        msg = await db.messages.find_one({"_id": ObjectId(message_id), "deleted_at": None})
+        if not msg:
+            raise NotFoundError("Message not found")
+        conv = await db.conversations.find_one({"_id": ObjectId(msg["conversation_id"])})
+        if not conv or user_id not in conv.get("participant_ids", []):
+            raise ForbiddenError("Not a participant")
+
+        now = datetime.now(timezone.utc)
+        await db.message_reactions.update_one(
+            {"message_id": message_id, "user_id": user_id, "emoji": emoji},
+            {
+                "$setOnInsert": {
+                    "message_id": message_id,
+                    "user_id": user_id,
+                    "emoji": emoji,
+                    "created_at": now,
+                }
+            },
+            upsert=True,
+        )
+        return {"message_id": message_id, "emoji": emoji, "user_id": user_id}
+
+    @staticmethod
+    async def remove_reaction(message_id: str, user_id: str, emoji: str) -> None:
+        db = get_database()
+        await db.message_reactions.delete_one(
+            {"message_id": message_id, "user_id": user_id, "emoji": emoji}
+        )
+
+    @staticmethod
+    async def _serialize_message(msg: dict) -> dict:
+        db = get_database()
+        sender = await db.users.find_one({"_id": ObjectId(msg["sender_id"])})
+        return {
+            "id": str(msg["_id"]),
+            "conversation_id": msg["conversation_id"],
+            "sender_id": msg["sender_id"],
+            "sender_username": sender["username"] if sender else None,
+            "sender_display_name": sender["display_name"] if sender else None,
+            "message_type": msg["message_type"],
+            "content": msg.get("content"),
+            "media_attachments": msg.get("media_attachments") or [],
+            "reply_to_message_id": msg.get("reply_to_message_id"),
+            "forwarded_from": msg.get("forwarded_from"),
+            "created_at": msg["created_at"].isoformat() if msg.get("created_at") else None,
+            "updated_at": msg["updated_at"].isoformat() if msg.get("updated_at") else None,
+            "deleted_at": msg["deleted_at"].isoformat() if msg.get("deleted_at") else None,
+            "delivery_status": msg.get("delivery_status", "sent"),
+            "edited": msg.get("edited", False),
+        }
+
+    @staticmethod
+    async def _serialize_conversation(conv: dict, viewer_id: str) -> dict:
+        db = get_database()
+        participants = []
+        for pid in conv.get("participant_ids", []):
+            u = await db.users.find_one({"_id": ObjectId(pid)})
+            if u:
+                participants.append(
+                    {
+                        "id": str(u["_id"]),
+                        "username": u["username"],
+                        "display_name": u["display_name"],
+                        "profile_photo": u.get("profile_photo"),
+                    }
+                )
+
+        last_message = None
+        if conv.get("last_message_id") and ObjectId.is_valid(conv["last_message_id"]):
+            m = await db.messages.find_one({"_id": ObjectId(conv["last_message_id"])})
+            if m and not m.get("deleted_at"):
+                last_message = {
+                    "id": str(m["_id"]),
+                    "content": m.get("content"),
+                    "message_type": m.get("message_type"),
+                    "sender_id": m.get("sender_id"),
+                    "created_at": m["created_at"].isoformat() if m.get("created_at") else None,
+                }
+
+        # Unread count
+        unread = await db.message_receipts.count_documents(
+            {
+                "conversation_id": str(conv["_id"]),
+                "user_id": viewer_id,
+                "read_at": None,
+            }
+        )
+
+        settings = conv.get("conversation_settings") or {}
+        user_settings = settings.get(viewer_id, {})
+
+        return {
+            "id": str(conv["_id"]),
+            "conversation_type": conv["conversation_type"],
+            "participant_ids": conv.get("participant_ids", []),
+            "participants": participants,
+            "group_id": conv.get("group_id"),
+            "last_message": last_message,
+            "last_message_at": conv["last_message_at"].isoformat()
+            if conv.get("last_message_at")
+            else None,
+            "unread_count": unread,
+            "created_at": conv["created_at"].isoformat() if conv.get("created_at") else None,
+            "settings": user_settings,
+        }

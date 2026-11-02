@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+
 type ContactLike = {
   id: string
   name: string
@@ -11,7 +13,9 @@ const API_ORIGIN = import.meta.env.VITE_API_URL || ''
 function mediaUrl(path?: string | null) {
   if (!path) return ''
   if (path.startsWith('http') || path.startsWith('data:') || path.startsWith('blob:')) return path
-  return `${API_ORIGIN}${path}`
+  // relative /uploads/... → same origin (vite proxies) or absolute API
+  if (path.startsWith('/')) return `${API_ORIGIN}${path}`
+  return `${API_ORIGIN}/${path}`
 }
 
 export function Avatar({
@@ -24,6 +28,8 @@ export function Avatar({
   ring?: boolean
 }) {
   const [a, b] = contact.hue || ['#7B2CBF', '#6389EB']
+  const [broken, setBroken] = useState(false)
+  useEffect(() => { setBroken(false) }, [contact.photo])
   const initials = (contact.name || '?')
     .split(' ')
     .map((w) => w[0])
@@ -32,15 +38,15 @@ export function Avatar({
     .toUpperCase()
 
   const src = mediaUrl(contact.photo)
-  const body = src ? (
+  const showImg = Boolean(src) && !broken
+
+  const body = showImg ? (
     <img
       src={src}
       alt=""
       className="h-full w-full rounded-full object-cover"
       style={{ width: size, height: size }}
-      onError={(e) => {
-        ;(e.target as HTMLImageElement).style.display = 'none'
-      }}
+      onError={() => setBroken(true)}
     />
   ) : (
     <span

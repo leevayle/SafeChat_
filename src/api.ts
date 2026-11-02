@@ -13,6 +13,26 @@ export type ApiUser = {
   createdAt?: string
 }
 
+/** Private contact entry as returned for the logged-in user */
+export type ApiContact = {
+  id: string
+  entryId: string
+  peerId: string | null
+  phone: string
+  username: string
+  name: string
+  savedName: string
+  bio: string
+  note: string
+  photo: string | null
+  online: boolean
+  hue: [string, string]
+  pinned?: boolean
+  favourite?: boolean
+  blocked?: boolean
+  createdAt?: string
+}
+
 export type ApiMsg = {
   id: string
   from: string
@@ -27,6 +47,9 @@ export type ApiMsg = {
 
 export type ChatPreview = {
   contactId: string
+  name?: string
+  photo?: string | null
+  hue?: [string, string]
   last: string
   time: string
   unread: number
@@ -91,7 +114,28 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }),
-  users: () => req<{ users: ApiUser[] }>('/api/users'),
+  contacts: () => req<{ contacts: ApiContact[] }>('/api/contacts'),
+  searchUsers: (q: string) =>
+    req<{ users: ApiUser[] }>(`/api/users/search?q=${encodeURIComponent(q)}`),
+  addContact: (body: {
+    peerId?: string
+    username?: string
+    phone?: string
+    savedName?: string
+    note?: string
+  }) =>
+    req<{ contact: ApiContact }>('/api/contacts', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateContact: (entryId: string, body: Record<string, unknown>) =>
+    req<{ contact: ApiContact }>(`/api/contacts/${entryId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteContact: (entryId: string) =>
+    req<{ ok: boolean }>(`/api/contacts/${entryId}`, { method: 'DELETE' }),
+
   chats: () => req<{ chats: ChatPreview[] }>('/api/chats'),
   messages: (contactId: string) => req<{ messages: ApiMsg[] }>(`/api/messages/${contactId}`),
   send: (contactId: string, text: string, image?: string | null) =>

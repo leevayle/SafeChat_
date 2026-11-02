@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { api, clearSession, getStoredUser, setSession, type ApiUser, type ChatPreview } from './api'
+import { api, clearSession, getStoredUser, setSession, type ApiUser, type ApiContact, type ChatPreview } from './api'
 
 export type Settings = {
   name: string
@@ -91,13 +91,16 @@ type Store = {
   me: ApiUser | null
   settings: Settings
   setSetting: <K extends keyof Settings>(k: K, v: Settings[K]) => void
-  contacts: ApiUser[]
+  contacts: ApiContact[]
   chats: ChatPreview[]
   groups: any[]
   statusList: any[]
   calls: any[]
   refreshChats: () => Promise<void>
   refreshContacts: () => Promise<void>
+  toast: string | null
+  showToast: (msg: string) => void
+  clearToast: () => void
   refreshGroups: () => Promise<void>
   refreshStatus: () => Promise<void>
   refreshCalls: () => Promise<void>
@@ -129,11 +132,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false)
   const [me, setMe] = useState<ApiUser | null>(getStoredUser())
   const [settings, setSettings] = useState<Settings>(defaultSettings)
-  const [contacts, setContacts] = useState<ApiUser[]>([])
+  const [contacts, setContacts] = useState<ApiContact[]>([])
   const [chats, setChats] = useState<ChatPreview[]>([])
   const [groups, setGroups] = useState<any[]>([])
   const [statusList, setStatusList] = useState<any[]>([])
   const [calls, setCalls] = useState<any[]>([])
+  const [toast, setToast] = useState<string | null>(null)
+  const showToast = useCallback((msg: string) => {
+    setToast(msg)
+  }, [])
+  const clearToast = useCallback(() => setToast(null), [])
 
   const applyUser = useCallback((user: ApiUser, s?: Record<string, unknown>) => {
     setMe(user)
@@ -159,8 +167,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const refreshContacts = useCallback(async () => {
     try {
-      const { users } = await api.users()
-      setContacts((prev) => (JSON.stringify(prev) === JSON.stringify(users) ? prev : users))
+      const { contacts: c } = await api.contacts()
+      setContacts((prev) => (JSON.stringify(prev) === JSON.stringify(c) ? prev : c))
     } catch {
       /* */
     }
@@ -335,6 +343,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       calls,
       refreshChats,
       refreshContacts,
+      toast,
+      showToast,
       refreshGroups,
       refreshStatus,
       refreshCalls,
@@ -359,6 +369,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setSetting,
       refreshChats,
       refreshContacts,
+      toast,
+      showToast,
+      clearToast,
       refreshGroups,
       refreshStatus,
       refreshCalls,

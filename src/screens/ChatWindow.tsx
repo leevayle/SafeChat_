@@ -38,11 +38,11 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 function ChatWindowInner({ contactId, onBack, onCall }: Props) {
-  const { settings, contacts, me, refreshChats } = useStore()
-  const c = contacts.find((x) => x.id === contactId) || {
+  const { settings, contacts, me, refreshChats, showToast } = useStore()
+  const c = contacts.find((x) => x.id === contactId || x.peerId === contactId) || {
     id: contactId,
     name: contactId,
-    username: contactId,
+    username: '',
     phone: '',
     bio: '',
     photo: null,

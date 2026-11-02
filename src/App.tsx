@@ -1,3 +1,4 @@
+import { Toast } from './components/ui'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Splash } from './screens/Splash'
@@ -36,7 +37,7 @@ export default function App() {
 }
 
 function Shell() {
-  const { ready, me, logout, contacts } = useStore()
+  const { ready, me, logout, contacts, toast, clearToast } = useStore()
   const [stage, setStage] = useState<Stage>('splash')
   const [submitting, setSubmitting] = useState(false)
   const [username, setUsername] = useState('')
@@ -209,7 +210,8 @@ function Shell() {
           </div>
         )}
 
-        {overlay === 'newChat' && (
+        <Toast msg={toast} clear={clearToast} />
+      {overlay === 'newChat' && (
           <div className="absolute inset-0 z-[25] bg-white">
             <NewChat
               onClose={() => setOverlay(null)}
