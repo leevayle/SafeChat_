@@ -6,7 +6,7 @@ import { Avatar } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
 import { useStore } from '../store'
 
-const FILTERS = ['All', 'Unread', 'Online'] as const
+const FILTERS = ['All chats', 'Unread', 'Online',] as const
 type Filter = (typeof FILTERS)[number]
 
 type Props = {
@@ -27,7 +27,7 @@ export function ChatsHome({
   onOpenStatus,
 }: Props) {
   const { chats, contacts, statusList, me } = useStore()
-  const [filter, setFilter] = useState<Filter>('All')
+  const [filter, setFilter] = useState<Filter>('All chats')
   const [searching, setSearching] = useState(false)
   const [q, setQ] = useState('')
   const [menu, setMenu] = useState(false)
@@ -188,7 +188,7 @@ export function ChatsHome({
         </div>
         )}
 
-        <div className="no-scrollbar flex gap-2 overflow-x-auto px-5 pb-3 pt-3">
+        <div className="no-scrollbar flex gap-5 overflow-x-auto px-5 pb-3 pt-3">
           {FILTERS.map((f) => (
             <button
               key={f}
@@ -206,7 +206,7 @@ export function ChatsHome({
         <ul className="px-2">
           {list.length === 0 && (
             <p className="px-4 py-12 text-center font-bold text-gray-400">
-              No chats yet. Tap + to start one.
+              No chats yet. Tap + to start one now!
             </p>
           )}
           {list.map((c, i) => {

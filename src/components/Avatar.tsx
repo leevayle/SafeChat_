@@ -51,12 +51,16 @@ export function Avatar({
       ) : (
         body
       )}
+
+      {/* //online status indicator
+
       {contact.online && (
         <span
           className="absolute bottom-0 right-0 rounded-full bg-green-500 ring-2 ring-white"
           style={{ width: size * 0.22, height: size * 0.22 }}
         />
-      )}
+      )} */}
+
     </span>
   )
 }

@@ -238,7 +238,7 @@
     "phone": "+256748673538",
     "countryCode": "+256",
     "username": "lee_vayle",
-    "name": "Lee_vayle",
+    "name": "Lee",
     "bio": "Hey there! I am using SafeChat.",
     "photo": null,
     "online": true,
@@ -256,7 +256,8 @@
       "callNotif": true,
       "wallpaper": "Cloud",
       "fontSize": "Medium",
-      "enterIsSend": true
+      "enterIsSend": true,
+      "twoStep": true
     }
   }
 ]
