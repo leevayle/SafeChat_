@@ -104,12 +104,13 @@ type Store = {
   refreshGroups: () => Promise<void>
   refreshStatus: () => Promise<void>
   refreshCalls: () => Promise<void>
-  login: (phone?: string, username?: string) => Promise<ApiUser>
+  login: (username: string, password: string) => Promise<ApiUser>
   register: (data: {
     phone: string
     countryCode: string
     username: string
     name?: string
+    password: string
     bio?: string
     photo?: string | null
   }) => Promise<ApiUser>
@@ -210,7 +211,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       try {
         const { user, settings: s } = await api.me()
-        setSession(localStorage.getItem('sc_token') || '', user)
+        const access = localStorage.getItem('sc_access') || localStorage.getItem('sc_token') || ''
+        const refresh = localStorage.getItem('sc_refresh') || ''
+        setSession(access, refresh, user)
         applyUser(user, s as Record<string, unknown>)
         await Promise.all([
           refreshChats(),
@@ -239,9 +242,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(id)
   }, [me, refreshChats, refreshStatus])
 
-  const login = async (phone?: string, username?: string) => {
-    const { token, user } = await api.login({ phone, username })
-    setSession(token, user)
+  const login = async (username: string, password: string) => {
+    const { access_token, refresh_token, user } = await api.login({ username, password })
+    setSession(access_token, refresh_token, user)
     applyUser(user)
     await Promise.all([
       refreshChats(),
@@ -258,12 +261,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     countryCode: string
     username: string
     name?: string
+    password: string
     bio?: string
     photo?: string | null
   }) => {
-    const { token, user } = await api.register(data)
-    setSession(token, user)
+    await api.register({
+      username: data.username,
+      display_name: data.name || data.username,
+      password: data.password,
+      phone_number: data.phone ? `${data.countryCode || ''}${data.phone}` : undefined,
+    })
+    // Auto-login after register
+    const { access_token, refresh_token, user } = await api.login({
+      username: data.username,
+      password: data.password,
+    })
+    setSession(access_token, refresh_token, user)
     applyUser(user)
+    if (data.bio) {
+      try {
+        await api.updateMe({ bio: data.bio })
+      } catch { /* */ }
+    }
     await Promise.all([refreshChats(), refreshContacts(), refreshGroups()])
     return user
   }

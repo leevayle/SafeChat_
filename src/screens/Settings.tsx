@@ -46,7 +46,7 @@ export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: (
   return (
     <div className="relative flex h-full flex-col bg-gray-100">
       <ScreenHeader title="Settings" onBack={onBack} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-5">
         <motion.button initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} whileTap={{ scale: 0.98 }} onClick={() => { setDraft({ name: s.name, username: s.username, bio: s.bio }); setEdit(true) }} className="flex w-full items-center gap-4 rounded-3xl bg-white p-4 text-left shadow-sm">
           {s.photo ? <img src={s.photo} alt="" className="h-16 w-16 rounded-full object-cover" /> : <Avatar contact={{ name: s.name, hue: ['#FF8C00', '#7B2CBF'], online: false }} size={64} />}
           <div className="min-w-0 flex-1">

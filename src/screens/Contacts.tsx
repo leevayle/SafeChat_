@@ -106,14 +106,14 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const addContact = async (peer?: { id: string; username: string; phone: string; name: string }) => {
     setBusy(true)
     try {
-      await api.addContact({
+      const res = await api.addContact({
         peerId: peer?.id,
         username: peer?.username || addForm.username || undefined,
         phone: peer?.phone || addForm.phone || undefined,
         savedName: addForm.savedName || peer?.name || peer?.username || addForm.username,
       })
       await refreshContacts()
-      showToast('Contact added')
+      showToast(res.pending ? 'Save request sent' : 'Contact saved')
       setAdding(false)
       setAddForm({ username: '', phone: '', savedName: '' })
       setSearchHits([])
@@ -141,7 +141,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
         }
       />
 
-      <div className="px-4 pb-3">
+      <div className="px-4 pb-3 pt-3">
         <div className="flex items-center gap-2 rounded-2xl bg-gray-100 px-3 py-2.5">
           <Search size={18} className="text-gray-400" />
           <input

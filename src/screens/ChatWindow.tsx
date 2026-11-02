@@ -38,7 +38,7 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 function ChatWindowInner({ contactId, onBack, onCall }: Props) {
-  const { settings, contacts, me, refreshChats, showToast } = useStore()
+  const { settings, contacts, chats, me, refreshChats, showToast } = useStore()
   const c = contacts.find((x) => x.id === contactId || x.peerId === contactId) || {
     id: contactId,
     name: contactId,
@@ -49,24 +49,63 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
     online: false,
     hue: ['#7B2CBF', '#6389EB'] as [string, string],
   }
+  const knownConv =
+    chats.find((ch) => ch.contactId === contactId || ch.contactId === (c as any).peerId)
+      ?.conversationId || null
+  const [conversationId, setConversationId] = useState<string | null>(knownConv)
   const [msgs, setMsgs] = useState<ApiMsg[]>([])
   const [text, setText] = useState('')
   const [typing, setTyping] = useState(false)
   const [emoji, setEmoji] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [sending, setSending] = useState(false)
   const [pendingImage, setPendingImage] = useState<string | null>(null)
   const end = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const convRef = useRef<string | null>(knownConv)
+  const ensurePromise = useRef<Promise<string | null> | null>(null)
+  convRef.current = conversationId
+
+  const ensureConversation = async (): Promise<string | null> => {
+    if (convRef.current) return convRef.current
+    if (ensurePromise.current) return ensurePromise.current
+    const username = (c as any).username
+    if (!username) {
+      showToast('Contact has no username — cannot open chat')
+      return null
+    }
+    ensurePromise.current = (async () => {
+      try {
+        const preview = await api.openPrivateChat(username)
+        const cid = preview.conversationId || null
+        if (cid) {
+          setConversationId(cid)
+          convRef.current = cid
+        }
+        return cid
+      } finally {
+        ensurePromise.current = null
+      }
+    })()
+    return ensurePromise.current
+  }
 
   const load = async (silent = false) => {
     try {
-      const { messages } = await api.messages(contactId)
+      const cid = await ensureConversation()
+      if (!cid) return
+      const { messages } = await api.messages(cid)
       setMsgs((prev) => {
-        if (JSON.stringify(prev) === JSON.stringify(messages)) return prev
-        return messages
+        // Keep optimistic local-only messages until server echoes them
+        const serverIds = new Set(messages.map((m) => m.id))
+        const pending = prev.filter((m) => m.id.startsWith('local-') && !serverIds.has(m.id))
+        const merged = [...messages, ...pending]
+        if (JSON.stringify(prev) === JSON.stringify(merged)) return prev
+        return merged
       })
-    } catch {
-      /* */
+      api.markRead(cid).catch(() => {})
+    } catch (e: any) {
+      if (!silent) showToast(e?.message || 'Could not load messages')
     } finally {
       if (!silent) setLoading(false)
     }
@@ -74,9 +113,13 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
 
   useEffect(() => {
     setLoading(true)
+    setMsgs([])
+    setConversationId(knownConv)
+    convRef.current = knownConv
     load(false)
-    const t = setInterval(() => load(true), 4000)
+    const t = setInterval(() => load(true), 3000)
     return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId])
 
 
@@ -112,18 +155,42 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
 
   const send = async () => {
     const t = text.trim()
-    if (!t && !pendingImage) return
-    setText('')
+    if ((!t && !pendingImage) || sending) return
+    setSending(true)
+    const body = t
     const img = pendingImage
+    setText('')
     setPendingImage(null)
     setEmoji(false)
+
+    const localId = `local-${Date.now()}`
+    const optimistic: ApiMsg = {
+      id: localId,
+      from: me?.id || '',
+      to: contactId,
+      text: body || (img ? '📷 Photo' : ''),
+      image: img,
+      time: new Date().toISOString(),
+      timeLabel: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
+      state: 'sent',
+      mine: true,
+    }
+    setMsgs((m) => [...m, optimistic])
+
     try {
-      const { message } = await api.send(contactId, t, img)
-      setMsgs((m) => [...m, message])
-      // background only — do not disrupt this window
-      setTimeout(() => { load(true); refreshChats() }, 3000)
-    } catch {
-      /* */
+      const cid = await ensureConversation()
+      if (!cid) {
+        setMsgs((m) => m.filter((x) => x.id !== localId))
+        return
+      }
+      const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img)
+      setMsgs((m) => m.map((x) => (x.id === localId ? { ...message, mine: true } : x)))
+      refreshChats().catch(() => {})
+    } catch (e: any) {
+      setMsgs((m) => m.filter((x) => x.id !== localId))
+      showToast(e?.message || 'Message failed to send')
+    } finally {
+      setSending(false)
     }
   }
 
@@ -138,7 +205,7 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
 
   return (
     <div className="flex h-full flex-col" style={{ background: WALLPAPERS[settings.wallpaper] || '#F3F4F6' }}>
-      <header className="z-10 flex shrink-0 items-center gap-1 bg-white px-2 pb-3 pt-5 shadow-sm">
+      <header className="z-10 flex shrink-0 items-center gap-1 border-b border-gray-100 bg-white px-2 pb-3.5 pt-[max(1.5rem,calc(env(safe-area-inset-top)+0.75rem))] shadow-sm">
         <button
           type="button"
           aria-label="Back"

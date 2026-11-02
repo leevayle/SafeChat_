@@ -19,6 +19,7 @@ import { CreateGroup } from './screens/CreateGroup'
 import { NewChat } from './screens/NewChat'
 import { Settings } from './screens/Settings'
 import { Contacts } from './screens/Contacts'
+import { SaveRequests } from './screens/SaveRequests'
 import { StatusViewer } from './screens/StatusViewer'
 import { StoreProvider, useStore } from './store'
 import { IncomingCall } from './components/IncomingCall'
@@ -26,7 +27,7 @@ import { BottomNav, type Tab } from './components/BottomNav'
 
 type Stage = 'splash' | 'welcome' | 'signup' | 'login' | 'loading' | 'profile' | 'done' | 'app'
 type Call = { id: string; kind: 'audio' | 'video'; ringId?: string }
-type Overlay = 'newChat' | 'newGroup' | 'settings' | 'contacts' | null
+type Overlay = 'newChat' | 'newGroup' | 'settings' | 'contacts' | 'saveRequests' | null
 
 export default function App() {
   return (
@@ -170,6 +171,7 @@ function Shell() {
               onNewGroup={() => setOverlay('newGroup')}
               onSettings={() => setOverlay('settings')}
               onContacts={() => setOverlay('contacts')}
+              onSaveRequests={() => setOverlay('saveRequests')}
               onOpenStatus={(id) => id && setStatusUser(id)}
             />
           </div>
@@ -215,16 +217,12 @@ function Shell() {
           <div className="absolute inset-0 z-[25] bg-white">
             <NewChat
               onClose={() => setOverlay(null)}
-              onStart={(id) => {
+              onPick={(id) => {
                 setOverlay(null)
                 setTab('chats')
                 setChat(id)
               }}
-              onNewGroup={() => setOverlay('newGroup')}
-              onCall={(id) => {
-                setOverlay(null)
-                placeCall(id, 'audio')
-              }}
+              onOpenContacts={() => setOverlay('contacts')}
             />
           </div>
         )}
@@ -272,6 +270,19 @@ function Shell() {
               onCall={(id, kind) => {
                 setOverlay(null)
                 placeCall(id, kind)
+              }}
+            />
+          </div>
+        )}
+
+        {overlay === 'saveRequests' && (
+          <div className="absolute inset-0 z-[25] bg-white">
+            <SaveRequests
+              onClose={() => setOverlay(null)}
+              onChat={(id) => {
+                setOverlay(null)
+                setTab('chats')
+                setChat(id)
               }}
             />
           </div>

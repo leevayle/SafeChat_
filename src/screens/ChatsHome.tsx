@@ -1,10 +1,21 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Search, MoreVertical, Plus, X } from 'lucide-react'
+import {
+  Search,
+  MoreVertical,
+  Plus,
+  X,
+  MessageCirclePlus,
+  UsersRound,
+  Contact,
+  Settings,
+  UserPlus,
+} from 'lucide-react'
 import { BrandMark } from '../components/AppHeaderLogo'
 import { Avatar } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
 import { useStore } from '../store'
+import { api } from '../api'
 
 const FILTERS = ['All chats', 'Unread', 'Online',] as const
 type Filter = (typeof FILTERS)[number]
@@ -15,6 +26,7 @@ type Props = {
   onNewGroup: () => void
   onSettings: () => void
   onContacts: () => void
+  onSaveRequests: () => void
   onOpenStatus: (userId: string) => void
 }
 
@@ -24,6 +36,7 @@ export function ChatsHome({
   onNewGroup,
   onSettings,
   onContacts,
+  onSaveRequests,
   onOpenStatus,
 }: Props) {
   const { chats, contacts, statusList, me } = useStore()
@@ -31,6 +44,25 @@ export function ChatsHome({
   const [searching, setSearching] = useState(false)
   const [q, setQ] = useState('')
   const [menu, setMenu] = useState(false)
+  const [pendingCount, setPendingCount] = useState(0)
+
+  useEffect(() => {
+    let alive = true
+    const tick = async () => {
+      try {
+        const { requests } = await api.incomingContactRequests()
+        if (alive) setPendingCount((requests || []).filter((r) => r.status === 'pending').length)
+      } catch {
+        /* offline / not authed */
+      }
+    }
+    tick()
+    const id = setInterval(tick, 15000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [])
 
   const contactById = (id: string, fallback?: { name?: string; photo?: string | null; hue?: [string, string] }) => {
     const hit = contacts.find((c) => c.id === id || c.peerId === id)
@@ -59,29 +91,52 @@ export function ChatsHome({
     return map
   }, [statusList, me])
 
-  const list = useMemo(
-    () =>
-      chats.filter((c) => {
-        const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
-        if (
-          q &&
-          !ct.name.toLowerCase().includes(q.toLowerCase()) &&
-          !ct.username?.includes(q.toLowerCase())
-        )
-          return false
-        if (filter === 'Unread') return c.unread > 0
-        if (filter === 'Online') return ct.online
-        return true
-      }),
-    [filter, q, chats, contacts],
-  )
+  const list = useMemo(() => {
+    // Dedupe by peer so one person never appears twice
+    const byPeer = new Map<string, (typeof chats)[0]>()
+    for (const c of chats) {
+      const key = c.contactId
+      const prev = byPeer.get(key)
+      if (!prev) {
+        byPeer.set(key, c)
+        continue
+      }
+      const prevT = prev.iso ? Date.parse(prev.iso) : 0
+      const nextT = c.iso ? Date.parse(c.iso) : 0
+      if (nextT >= prevT) byPeer.set(key, c)
+    }
+    return Array.from(byPeer.values()).filter((c) => {
+      const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
+      if (
+        q &&
+        !ct.name.toLowerCase().includes(q.toLowerCase()) &&
+        !ct.username?.toLowerCase().includes(q.toLowerCase())
+      )
+        return false
+      if (filter === 'Unread') return c.unread > 0
+      if (filter === 'Online') return ct.online
+      return true
+    })
+  }, [filter, q, chats, contacts])
 
-  const statusUsers = statusList
-    .map((s) => s.user)
-    .filter(Boolean)
-    .filter((u: any, i: number, arr: any[]) => arr.findIndex((x) => x.id === u.id) === i)
-    .filter((u: any) => u.id !== me?.id)
-    .slice(0, 10)
+  const statusUsers = useMemo(() => {
+    const byUser = new Map<string, any>()
+    for (const s of statusList) {
+      if (!s.userId || s.userId === me?.id) continue
+      const contact = contacts.find((c) => c.id === s.userId || c.peerId === s.userId)
+      const existing = byUser.get(s.userId)
+      if (existing) continue
+      byUser.set(s.userId, {
+        id: s.userId,
+        name: contact?.name || s.user?.name || 'Contact',
+        username: contact?.username || s.user?.username || '',
+        photo: contact?.photo ?? s.user?.photo ?? null,
+        hue: contact?.hue || s.user?.hue || (['#7B2CBF', '#6389EB'] as [string, string]),
+        online: false,
+      })
+    }
+    return Array.from(byUser.values()).slice(0, 12)
+  }, [statusList, contacts, me])
 
   return (
     <div className="relative flex h-full flex-col bg-white">
@@ -136,29 +191,44 @@ export function ChatsHome({
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.85 }}
                 style={{ transformOrigin: 'top right' }}
-                className="absolute right-4 top-14 z-30 w-52 rounded-2xl bg-white p-1.5 shadow-xl ring-1 ring-black/5"
+                className="absolute right-4 top-14 z-30 w-56 rounded-2xl bg-white p-1.5 shadow-xl ring-1 ring-black/5"
               >
                 {(
                   [
-                    ['New chat', onNewChat],
-                    ['New group', onNewGroup],
-                    ['Contacts', onContacts],
-                    ['Settings', onSettings],
+                    { label: 'New chat', fn: onNewChat, Icon: MessageCirclePlus },
+                    { label: 'New group', fn: onNewGroup, Icon: UsersRound },
+                    { label: 'Contacts', fn: onContacts, Icon: Contact },
+                    { label: 'Settings', fn: onSettings, Icon: Settings },
+                    {
+                      label: 'Save requests',
+                      fn: onSaveRequests,
+                      Icon: UserPlus,
+                      badge: pendingCount,
+                    },
                   ] as const
-                ).map(([label, fn]) => (
-                  <li key={label}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMenu(false)
-                        fn()
-                      }}
-                      className="w-full rounded-xl px-3 py-2.5 text-left font-bold hover:bg-gray-100"
-                    >
-                      {label}
-                    </button>
-                  </li>
-                ))}
+                ).map(({ label, fn, Icon, ...rest }) => {
+                  const badge = 'badge' in rest ? (rest as { badge?: number }).badge : 0
+                  return (
+                    <li key={label}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMenu(false)
+                          fn()
+                        }}
+                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left font-bold hover:bg-gray-100"
+                      >
+                        <span className="min-w-0 flex-1">{label}</span>
+                        {badge && badge > 0 ? (
+                          <span className="mr-1 min-w-5 rounded-full bg-brand-red px-1.5 text-center text-[11px] font-black text-white">
+                            {badge > 9 ? '9+' : badge}
+                          </span>
+                        ) : null}
+                        <Icon size={18} className="shrink-0 text-brand-purple" strokeWidth={2.2} />
+                      </button>
+                    </li>
+                  )
+                })}
               </motion.ul>
             </>
           )}
@@ -217,7 +287,7 @@ export function ChatsHome({
             const meta = statusMeta[c.contactId]
             return (
               <motion.li
-                key={c.contactId}
+                key={c.conversationId || c.contactId}
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.03 }}

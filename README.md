@@ -1,50 +1,40 @@
-# SafeChat
+# SafeChat Frontend (React + Vite)
 
-Modern React chat app UI + JSON-file backend.
-
-## Features
-
-- Phone onboarding + profile setup (matches design)
-- Login / register with session tokens
-- 1:1 messaging (persisted in `server/db/messages.json`)
-- Groups create / join / chat
-- Status updates (24h)
-- Calls log + simulated call UI
-- Settings, wallpapers, read receipts
-- Responsive centered column (WhatsApp Web style)
+Works with the SafeChat **FastAPI** backend (`/api/v1`).
 
 ## Quick start
+
+1. Start the backend on port **8000** (MongoDB + uvicorn).
+2. In this folder:
 
 ```bash
 npm install
 npm run dev
 ```
 
-- Web: http://localhost:5173  
-- API: http://localhost:3001  
+Open http://localhost:5173
 
-### Demo accounts
+Vite proxies `/api` and `/health` to `http://localhost:8000`.
 
-Log in with username: `amina`, `brian`, `daisy`, `chen`, `emeka`, `fatma`, `joel`, `liam`
+Optional: copy `.env.example` → `.env` and set `VITE_API_URL` if the API is on another host.
 
-Or register a new phone number.
+## Auth
 
-## Data
+- Register: username + display name + password (min 8)
+- Login: username + password
+- Tokens: access + refresh stored in `localStorage` (`sc_access`, `sc_refresh`)
 
-JSON files under `server/db/`:
+## Features wired to backend
 
-| File | Purpose |
-|------|---------|
-| users.json | Accounts |
-| messages.json | DM threads |
-| groups.json | Groups + messages |
-| status.json | Status updates |
-| calls.json | Call history |
-| sessions.json | Auth tokens |
+- Auth (register / login / logout / me)
+- Profile update
+- Contacts (list, request, remove, nickname)
+- Private conversations + messages (send, history, read)
+- Groups (list, create, basic ops)
+- Status feed + create
 
-## Scripts
+Calls / typing / rings are soft-stubbed until backend WebSocket & signaling land.
 
-- `npm run dev` — API + Vite together
-- `npm run server` — API only
-- `npm run client` — Vite only
-- `npm run build` — production build
+## Theme
+
+Brand colors and UI match the original SafeChat design (purple / orange / Nunito).

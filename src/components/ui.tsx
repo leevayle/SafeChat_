@@ -56,7 +56,7 @@ export function Toast({ msg, clear }: { msg: string | null; clear: () => void })
 
 export function ScreenHeader({ title, onBack, right }: { title: string; onBack: () => void; right?: ReactNode }) {
   return (
-    <header className="flex shrink-0 items-center gap-1 bg-white px-2 pb-3 pt-5 shadow-sm">
+    <header className="flex shrink-0 items-center gap-1 border-b border-gray-100 bg-white px-2 pb-3.5 pt-[max(1.5rem,calc(env(safe-area-inset-top)+0.75rem))] shadow-sm">
       <motion.button whileTap={{ scale: 0.88 }} onClick={onBack} aria-label="Back" className="flex h-10 w-10 items-center justify-center rounded-full text-brand-purple hover:bg-gray-100"><ArrowLeft size={22} /></motion.button>
       <h2 className="flex-1 text-xl font-black">{title}</h2>
       {right}

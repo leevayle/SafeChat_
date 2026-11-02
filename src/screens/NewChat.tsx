@@ -30,7 +30,7 @@ export function NewChat({ onClose, onPick, onOpenContacts }: Props) {
   return (
     <div className="flex h-full flex-col bg-white">
       <ScreenHeader title="New chat" onBack={onClose} />
-      <div className="px-4 pb-3">
+      <div className="px-4 pb-3 pt-3">
         <div className="flex items-center gap-2 rounded-2xl bg-gray-100 px-3 py-2.5">
           <Search size={18} className="text-gray-400" />
           <input

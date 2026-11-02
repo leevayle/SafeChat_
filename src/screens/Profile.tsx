@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Camera, Image as ImageIcon, User } from 'lucide-react'
+import { Camera, User } from 'lucide-react'
 import { ProgressDots } from '../components/ProgressDots'
 import { PillButton } from '../components/PillButton'
 import { useStore } from '../store'
@@ -15,7 +15,9 @@ export function Profile({ phone, countryCode, onDone }: Props) {
   const { register } = useStore()
   const [photo, setPhoto] = useState<string | null>(null)
   const [sheet, setSheet] = useState(false)
-  const [name, setName] = useState('')
+  const [username, setUsername] = useState('')
+  const [displayName, setDisplayName] = useState('')
+  const [password, setPassword] = useState('')
   const [bio, setBio] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -27,7 +29,10 @@ export function Profile({ phone, countryCode, onDone }: Props) {
     if (f) setPhoto(URL.createObjectURL(f))
     setSheet(false)
   }
-  const valid = name.trim().length >= 2
+  const valid =
+    username.trim().length >= 3 &&
+    displayName.trim().length >= 1 &&
+    password.length >= 8
 
   const save = async () => {
     if (!valid || busy) return
@@ -37,8 +42,9 @@ export function Profile({ phone, countryCode, onDone }: Props) {
       const user = await register({
         phone,
         countryCode,
-        username: name.trim().replace(/^@/, ''),
-        name: name.trim().replace(/^@/, ''),
+        username: username.trim().toLowerCase().replace(/^@/, ''),
+        name: displayName.trim(),
+        password,
         bio: bio.trim() || 'Hey there! I am using SafeChat.',
         photo,
       })
@@ -65,110 +71,120 @@ export function Profile({ phone, countryCode, onDone }: Props) {
       </div>
 
       <motion.h2
-        className="mt-8 text-[1.65rem] font-black leading-snug text-ink"
+        className="mt-6 text-[1.65rem] font-black leading-snug text-ink"
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
       >
         Tell us more<br /><span className="text-brand-purple">About</span> <span className="text-brand-red">yourself!</span>
       </motion.h2>
       <p className="mt-1.5 text-sm font-semibold text-gray-500">
-        NOTE: Your username and profile pic are public!
+        Choose a username and password to secure your account.
       </p>
 
-      <div className="mt-10 flex justify-center">
+      <div className="mt-6 flex justify-center">
         <motion.button
           type="button"
           whileTap={{ scale: 0.96 }}
           onClick={() => setSheet(true)}
           aria-label="Choose profile photo"
-          className="relative h-[112px] w-[112px] rounded-full bg-gray-100 shadow-md"
+          className="relative h-[96px] w-[96px] rounded-full bg-gray-100 shadow-md"
         >
           {photo ? (
             <img src={photo} alt="" className="h-full w-full rounded-full object-cover" />
           ) : (
-            <User className="mx-auto text-gray-300" size={52} strokeWidth={1.5} />
+            <User className="mx-auto text-gray-300" size={44} strokeWidth={1.5} />
           )}
-          <span className="absolute bottom-0 right-0 flex h-9 w-9 items-center justify-center rounded-full bg-brand-orange-2 text-white shadow-md ring-[3px] ring-white">
-            <Camera size={16} />
+          <span className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-brand-orange-2 text-white shadow-md ring-[3px] ring-white">
+            <Camera size={14} />
           </span>
         </motion.button>
       </div>
 
-      <div className="mt-10 space-y-4">
+      <div className="mt-6 space-y-3 overflow-y-auto no-scrollbar pb-2">
         <div>
-          <label className="mb-1.5 block text-xs font-bold text-gray-500">Username</label>
-          <div className="flex h-12 items-center rounded-full bg-gray-100 px-4">
+          <label className="mb-1 block text-xs font-bold text-gray-500">Username</label>
+          <div className="flex h-11 items-center rounded-full bg-gray-100 px-4">
             <span className="mr-1 font-bold text-brand-purple">@</span>
             <input
-              value={name}
-              onChange={(e) => setName(e.target.value.replace(/\s/g, ''))}
-              placeholder="your_name"
-              maxLength={24}
-              className="h-full flex-1 bg-transparent text-[15px] font-semibold outline-none placeholder:text-gray-400"
+              value={username}
+              onChange={(e) => setUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase())}
+              placeholder="yourname"
+              maxLength={32}
+              className="h-full flex-1 bg-transparent text-[15px] font-semibold outline-none"
             />
           </div>
         </div>
         <div>
-          <div className="mb-1.5 flex items-center justify-between">
-            <label className="text-xs font-bold text-gray-500">
-              Bio <span className="font-semibold text-gray-400">(optional)</span>
-            </label>
-            <span className="text-[11px] font-semibold text-gray-400">{bio.length}/80</span>
-          </div>
+          <label className="mb-1 block text-xs font-bold text-gray-500">Display name</label>
+          <input
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder="How you appear to others"
+            maxLength={64}
+            className="h-11 w-full rounded-full bg-gray-100 px-5 text-[15px] font-semibold outline-none focus:ring-4 focus:ring-brand-purple/15"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-bold text-gray-500">Password (min 8)</label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
+            autoComplete="new-password"
+            className="h-11 w-full rounded-full bg-gray-100 px-5 text-[15px] font-semibold outline-none focus:ring-4 focus:ring-brand-purple/15"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-bold text-gray-500">Bio</label>
           <input
             value={bio}
-            onChange={(e) => setBio(e.target.value.slice(0, 80))}
-            placeholder="Say something about yourself"
-            className="h-12 w-full rounded-full bg-gray-100 px-5 text-[15px] font-semibold outline-none placeholder:text-gray-400"
+            onChange={(e) => setBio(e.target.value)}
+            placeholder="Hey there! I am using SafeChat."
+            maxLength={256}
+            className="h-11 w-full rounded-full bg-gray-100 px-5 text-[15px] font-semibold outline-none focus:ring-4 focus:ring-brand-purple/15"
           />
         </div>
         {error && <p className="text-sm font-bold text-brand-red">{error}</p>}
       </div>
 
-      <div className="flex-1" />
-
-      <div className="pb-2">
+      <div className="mt-auto pb-4 pt-3">
         <PillButton variant="orange" loading={busy} disabled={!valid} onClick={save}>
-          Save & continue
+          Create account
         </PillButton>
       </div>
 
+      <input ref={gallery} type="file" accept="image/*" className="hidden" onChange={pick} />
+      <input ref={camera} type="file" accept="image/*" capture="user" className="hidden" onChange={pick} />
+
       <AnimatePresence>
         {sheet && (
-          <>
+          <motion.div
+            className="absolute inset-0 z-20 flex items-end bg-black/30"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSheet(false)}
+          >
             <motion.div
-              className="absolute inset-0 z-30 bg-black/30"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setSheet(false)}
-            />
-            <motion.div
-              className="absolute inset-x-4 bottom-8 z-40 overflow-hidden rounded-3xl bg-white shadow-2xl"
-              initial={{ y: 40, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 40, opacity: 0 }}
-              transition={{ type: 'spring', stiffness: 360, damping: 30 }}
+              className="w-full rounded-t-3xl bg-white p-5 safe-pb"
+              initial={{ y: 80 }}
+              animate={{ y: 0 }}
+              exit={{ y: 80 }}
+              onClick={(e) => e.stopPropagation()}
             >
-              <button
-                type="button"
-                onClick={() => camera.current?.click()}
-                className="flex w-full items-center gap-3 px-5 py-4 text-left font-bold hover:bg-gray-50"
-              >
-                <Camera size={20} className="text-brand-purple" /> Take photo
+              <p className="mb-3 text-center text-sm font-bold text-gray-500">Profile photo</p>
+              <button type="button" className="mb-2 w-full rounded-2xl bg-gray-100 py-3 font-bold" onClick={() => camera.current?.click()}>
+                Camera
               </button>
-              <div className="mx-5 h-px bg-gray-100" />
-              <button
-                type="button"
-                onClick={() => gallery.current?.click()}
-                className="flex w-full items-center gap-3 px-5 py-4 text-left font-bold hover:bg-gray-50"
-              >
-                <ImageIcon size={20} className="text-brand-purple" /> Choose from gallery
+              <button type="button" className="mb-2 w-full rounded-2xl bg-gray-100 py-3 font-bold" onClick={() => gallery.current?.click()}>
+                Gallery
+              </button>
+              <button type="button" className="w-full rounded-2xl py-3 font-bold text-brand-red" onClick={() => setSheet(false)}>
+                Cancel
               </button>
             </motion.div>
-            <input ref={camera} type="file" accept="image/*" capture="user" hidden onChange={pick} />
-            <input ref={gallery} type="file" accept="image/*" hidden onChange={pick} />
-          </>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

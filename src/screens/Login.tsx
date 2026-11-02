@@ -6,20 +6,20 @@ import { useStore } from '../store'
 
 export function Login({ onBack, onSuccess }: { onBack: () => void; onSuccess: () => void }) {
   const { login } = useStore()
-  const [phone, setPhone] = useState('')
   const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   const submit = async () => {
-    if (!phone && !username) {
-      setError('Enter phone or username')
+    if (!username.trim() || !password) {
+      setError('Enter username and password')
       return
     }
     setLoading(true)
     setError('')
     try {
-      await login(phone || undefined, username || undefined)
+      await login(username.trim(), password)
       onSuccess()
     } catch (e: any) {
       setError(e.message || 'Login failed')
@@ -48,36 +48,35 @@ export function Login({ onBack, onSuccess }: { onBack: () => void; onSuccess: ()
           Welcome <span className="text-brand-purple">back</span>
         </h2>
         <p className="mt-2 text-sm font-semibold text-gray-500">
-          Log in with your phone or username. Demo users: amina, brian, daisy…
+          Log in with your SafeChat username and password.
         </p>
       </motion.div>
 
       <div className="mt-10 space-y-4">
-        <div>
-          <label className="mb-1.5 block text-xs font-bold text-gray-500">Phone</label>
-          <input
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="+254712345678"
-            className="h-12 w-full rounded-full bg-gray-100 px-5 text-[15px] font-semibold outline-none focus:ring-4 focus:ring-brand-purple/15"
-          />
-        </div>
-        <div className="flex items-center gap-3 text-xs font-bold text-gray-400">
-          <span className="h-px flex-1 bg-gray-200" />
-          OR
-          <span className="h-px flex-1 bg-gray-200" />
-        </div>
         <div>
           <label className="mb-1.5 block text-xs font-bold text-gray-500">Username</label>
           <div className="flex h-12 items-center rounded-full bg-gray-100 px-4">
             <span className="mr-1 font-bold text-brand-purple">@</span>
             <input
               value={username}
-              onChange={(e) => setUsername(e.target.value.replace(/\s/g, ''))}
-              placeholder="amina"
+              onChange={(e) => setUsername(e.target.value.replace(/\s/g, '').toLowerCase())}
+              placeholder="yourname"
+              autoComplete="username"
               className="h-full flex-1 bg-transparent text-[15px] font-semibold outline-none"
             />
           </div>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-bold text-gray-500">Password</label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
+            autoComplete="current-password"
+            className="h-12 w-full rounded-full bg-gray-100 px-5 text-[15px] font-semibold outline-none focus:ring-4 focus:ring-brand-purple/15"
+            onKeyDown={(e) => e.key === 'Enter' && submit()}
+          />
         </div>
         {error && <p className="text-sm font-bold text-brand-red">{error}</p>}
       </div>
