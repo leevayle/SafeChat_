@@ -119,5 +119,35 @@
       "time": "2026-11-02T10:37:48.314Z",
       "state": "read"
     }
+  ],
+  "umvye0jcitf3d1c:umvz6djcx8oww2y": [
+    {
+      "id": "mmvz6f49hcjddkl",
+      "from": "umvz6djcx8oww2y",
+      "to": "umvye0jcitf3d1c",
+      "text": "📷 Photo",
+      "image": "/uploads/users/2b31373438363733353338/chats/756d767a36646a6378386f77773279756d767965306a6369_mvz6f49a.png",
+      "time": "2026-11-02T11:29:21.749Z",
+      "state": "read"
+    }
+  ],
+  "daisy:umvz6djcx8oww2y": [
+    {
+      "id": "mmvz6hf0cenh1jx",
+      "from": "umvz6djcx8oww2y",
+      "to": "daisy",
+      "text": "😚",
+      "image": null,
+      "time": "2026-11-02T11:31:08.988Z",
+      "state": "read"
+    },
+    {
+      "id": "mmvz6hhhz9jprsf",
+      "from": "daisy",
+      "to": "umvz6djcx8oww2y",
+      "text": "Sounds great!",
+      "time": "2026-11-02T11:31:12.215Z",
+      "state": "read"
+    }
   ]
 }

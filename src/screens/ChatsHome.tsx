@@ -244,7 +244,21 @@ export function ChatsHome({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <p className="truncate font-extrabold">{ct.name}</p>
-                      <span className="shrink-0 text-xs font-bold text-gray-400">{c.time}</span>
+                      <div className="flex shrink-0 flex-col items-end gap-0.5">
+                        <span className="text-xs font-bold text-gray-400">{c.time}</span>
+                        {c.mine && (
+                          <span
+                            className={`text-[11px] font-black leading-none ${
+                              c.state === 'read'
+                                ? 'text-brand-blue'
+                                : 'text-gray-400'
+                            }`}
+                            title={c.state || 'sent'}
+                          >
+                            {c.state === 'sent' || !c.state ? '✓' : '✓✓'}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center justify-between gap-2">
                       <p className="truncate text-sm font-semibold text-gray-500">

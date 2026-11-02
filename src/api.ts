@@ -31,6 +31,7 @@ export type ChatPreview = {
   time: string
   unread: number
   mine?: boolean
+  state?: 'sent' | 'delivered' | 'read'
   iso?: string
 }
 

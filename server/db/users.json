@@ -230,7 +230,8 @@
       "callNotif": true,
       "wallpaper": "Cloud",
       "fontSize": "Medium",
-      "enterIsSend": true
+      "enterIsSend": true,
+      "statusPrivacy": "Everyone"
     }
   },
   {
@@ -258,6 +259,33 @@
       "fontSize": "Medium",
       "enterIsSend": true,
       "twoStep": true
+    }
+  },
+  {
+    "id": "umvz6djcx8oww2y",
+    "phone": "+1748673538",
+    "countryCode": "+1",
+    "username": "lee_kinanga",
+    "name": "Lee_kinanga",
+    "bio": "Hey there! I am using SafeChat.",
+    "photo": "blob:http://localhost:5173/6e9c99cb-19af-4911-97be-ca52dd955a9e",
+    "online": true,
+    "hue": [
+      "#E3404C",
+      "#9C31A1"
+    ],
+    "createdAt": "2026-11-02T11:28:08.001Z",
+    "settings": {
+      "lastSeen": "My contacts",
+      "readReceipts": true,
+      "typingIndicator": true,
+      "msgNotif": true,
+      "groupNotif": true,
+      "callNotif": true,
+      "wallpaper": "Cloud",
+      "fontSize": "Medium",
+      "enterIsSend": true,
+      "statusPrivacy": "Everyone"
     }
   }
 ]

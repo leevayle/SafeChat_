@@ -69,10 +69,10 @@ export function Profile({ phone, countryCode, onDone }: Props) {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
       >
-        Set up your <span className="text-brand-purple">profile</span>
+        Tell us more<br /><span className="text-brand-purple">About</span> <span className="text-brand-red">yourself!</span>
       </motion.h2>
       <p className="mt-1.5 text-sm font-semibold text-gray-500">
-        Add a photo and pick a name friends will see.
+        NOTE: Your username and profile pic are public!
       </p>
 
       <div className="mt-10 flex justify-center">

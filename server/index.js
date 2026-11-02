@@ -216,10 +216,11 @@ app.get('/api/chats', auth, (req, res) => {
     const unread = msgs.filter((m) => m.to === me && m.state !== 'read').length
     previews.push({
       contactId: otherId,
-      last: last.text,
+      last: last.text || (last.image ? 'Photo' : ''),
       time: timeLabel(last.time),
       unread,
       mine: last.from === me,
+      state: last.state || 'sent',
       iso: last.time,
     })
   }

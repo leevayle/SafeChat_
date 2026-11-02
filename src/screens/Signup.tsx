@@ -8,9 +8,10 @@ type Props = {
   loading: boolean
   onSubmit: (phone: string, countryCode: string) => void
   onLogin: () => void
+  onBack?: () => void
 }
 
-export function Signup({ loading, onSubmit, onLogin }: Props) {
+export function Signup({ loading, onSubmit, onLogin, onBack }: Props) {
   const [country, setCountry] = useState<Country>(COUNTRIES[0])
   const [open, setOpen] = useState(false)
   const [phone, setPhone] = useState('')
@@ -18,13 +19,23 @@ export function Signup({ loading, onSubmit, onLogin }: Props) {
 
   return (
     <div className="relative flex h-full flex-col items-center px-8 safe-pt safe-pb">
+      {onBack && (
+        <button
+          type="button"
+          onClick={onBack}
+          className="absolute left-5 top-[max(1rem,env(safe-area-inset-top))] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 text-ink"
+          aria-label="Back"
+        >
+          ←
+        </button>
+      )}
       <div className="mt-[18%] flex flex-col items-center text-center">
         <motion.h2
           className="font-ui text-[1.85rem] font-black leading-tight text-ink sm:text-[2rem]"
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
         >
-          Let&apos;s get your
+          Let&apos;s get you
           <br />
           <span className="text-brand-red">On</span>{' '}
           <span className="text-brand-purple">board!</span>

@@ -23,6 +23,8 @@ export type Settings = {
   readReceipts: boolean
   typingIndicator: boolean
   disappearing: string
+  statusValidity: string
+  statusPrivacy: string
   appLock: boolean
   twoStep: boolean
   msgNotif: boolean
@@ -65,6 +67,8 @@ const defaultSettings: Settings = {
   readReceipts: true,
   typingIndicator: true,
   disappearing: 'Off',
+  statusValidity: '24 hours',
+  statusPrivacy: 'My contacts',
   appLock: false,
   twoStep: false,
   msgNotif: true,

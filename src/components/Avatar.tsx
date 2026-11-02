@@ -6,6 +6,14 @@ type ContactLike = {
   hue?: [string, string]
 }
 
+const API_ORIGIN = import.meta.env.VITE_API_URL || ''
+
+function mediaUrl(path?: string | null) {
+  if (!path) return ''
+  if (path.startsWith('http') || path.startsWith('data:') || path.startsWith('blob:')) return path
+  return `${API_ORIGIN}${path}`
+}
+
 export function Avatar({
   contact,
   size = 48,
@@ -16,19 +24,23 @@ export function Avatar({
   ring?: boolean
 }) {
   const [a, b] = contact.hue || ['#7B2CBF', '#6389EB']
-  const initials = contact.name
+  const initials = (contact.name || '?')
     .split(' ')
     .map((w) => w[0])
     .join('')
     .slice(0, 2)
     .toUpperCase()
 
-  const body = contact.photo ? (
+  const src = mediaUrl(contact.photo)
+  const body = src ? (
     <img
-      src={contact.photo}
+      src={src}
       alt=""
       className="h-full w-full rounded-full object-cover"
       style={{ width: size, height: size }}
+      onError={(e) => {
+        ;(e.target as HTMLImageElement).style.display = 'none'
+      }}
     />
   ) : (
     <span
@@ -45,7 +57,7 @@ export function Avatar({
   )
 
   return (
-    <span className="relative inline-flex shrink-0" style={{ width: size, height: size }}>
+    <span className="relative inline-flex shrink-0 overflow-hidden rounded-full" style={{ width: size, height: size }}>
       {ring ? (
         <span className="rounded-full p-[2px] ring-[2.5px] ring-brand-purple">{body}</span>
       ) : (

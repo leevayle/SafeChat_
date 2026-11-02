@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Splash } from './screens/Splash'
+import { Welcome } from './screens/Welcome'
 import { Signup } from './screens/Signup'
 import { Login } from './screens/Login'
 import { Loading } from './screens/Loading'
@@ -22,7 +23,7 @@ import { StoreProvider, useStore } from './store'
 import { IncomingCall } from './components/IncomingCall'
 import { BottomNav, type Tab } from './components/BottomNav'
 
-type Stage = 'splash' | 'signup' | 'login' | 'loading' | 'profile' | 'done' | 'app'
+type Stage = 'splash' | 'welcome' | 'signup' | 'login' | 'loading' | 'profile' | 'done' | 'app'
 type Call = { id: string; kind: 'audio' | 'video'; ringId?: string }
 type Overlay = 'newChat' | 'newGroup' | 'settings' | 'contacts' | null
 
@@ -127,13 +128,16 @@ function Shell() {
       <div className="flex min-h-dvh justify-center bg-[#f0f2f5]">
         <main className="relative h-dvh w-full min-h-[568px] max-w-[430px] overflow-hidden bg-white">
           {stage === 'splash' && (
-            <Splash onContinue={() => setStage('signup')} onLogin={() => setStage('login')} />
+            <Splash onDone={() => setStage('welcome')} />
+          )}
+          {stage === 'welcome' && (
+            <Welcome onContinue={() => setStage('signup')} onLogin={() => setStage('login')} />
           )}
           {stage === 'login' && (
-            <Login onBack={() => setStage('splash')} onSuccess={goApp} />
+            <Login onBack={() => setStage('welcome')} onSuccess={goApp} />
           )}
           {stage === 'signup' && (
-            <Signup loading={submitting} onSubmit={afterPhone} onLogin={() => setStage('login')} />
+            <Signup loading={submitting} onSubmit={afterPhone} onLogin={() => setStage('login')} onBack={() => setStage('welcome')} />
           )}
           {stage === 'loading' && <Loading />}
           {stage === 'profile' && pendingReg && (
