@@ -1,0 +1,303 @@
+import { useMemo, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Search, MoreVertical, Plus, X } from 'lucide-react'
+import { BrandMark } from '../components/AppHeaderLogo'
+import { Avatar } from '../components/Avatar'
+import { StatusRing } from '../components/StatusRing'
+import { useStore } from '../store'
+
+const FILTERS = ['All', 'Unread', 'Online'] as const
+type Filter = (typeof FILTERS)[number]
+
+type Props = {
+  onOpenChat: (id: string) => void
+  onNewChat: () => void
+  onNewGroup: () => void
+  onSettings: () => void
+  onContacts: () => void
+  onOpenStatus: (userId: string) => void
+}
+
+export function ChatsHome({
+  onOpenChat,
+  onNewChat,
+  onNewGroup,
+  onSettings,
+  onContacts,
+  onOpenStatus,
+}: Props) {
+  const { chats, contacts, statusList, me } = useStore()
+  const [filter, setFilter] = useState<Filter>('All')
+  const [searching, setSearching] = useState(false)
+  const [q, setQ] = useState('')
+  const [menu, setMenu] = useState(false)
+
+  const contactById = (id: string) =>
+    contacts.find((c) => c.id === id) || {
+      id,
+      name: id,
+      username: id,
+      phone: '',
+      bio: '',
+      photo: null,
+      online: false,
+      hue: ['#7B2CBF', '#6389EB'] as [string, string],
+    }
+
+  /** status counts per user: total + how many I've viewed */
+  const statusMeta = useMemo(() => {
+    const map: Record<string, { total: number; viewed: number }> = {}
+    for (const s of statusList) {
+      if (s.userId === me?.id) continue
+      if (!map[s.userId]) map[s.userId] = { total: 0, viewed: 0 }
+      map[s.userId].total++
+      if (Array.isArray(s.views) && me && s.views.includes(me.id)) map[s.userId].viewed++
+    }
+    return map
+  }, [statusList, me])
+
+  const list = useMemo(
+    () =>
+      chats.filter((c) => {
+        const ct = contactById(c.contactId)
+        if (
+          q &&
+          !ct.name.toLowerCase().includes(q.toLowerCase()) &&
+          !ct.username?.includes(q.toLowerCase())
+        )
+          return false
+        if (filter === 'Unread') return c.unread > 0
+        if (filter === 'Online') return ct.online
+        return true
+      }),
+    [filter, q, chats, contacts],
+  )
+
+  const statusUsers = statusList
+    .map((s) => s.user)
+    .filter(Boolean)
+    .filter((u: any, i: number, arr: any[]) => arr.findIndex((x) => x.id === u.id) === i)
+    .filter((u: any) => u.id !== me?.id)
+    .slice(0, 10)
+
+  return (
+    <div className="relative flex h-full flex-col bg-white">
+      <header className="relative flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 px-5 pt-[10px]">
+        <div
+          className={`flex w-full items-center transition-all duration-200 ease-out  ${
+            searching ? 'opacity-100 ' : 'opacity-100 '
+          }`}
+        >
+          {searching ? (
+            <div className="flex h-11 w-full items-center gap-2 rounded-full bg-gray-100 px-4 transition-all duration-200">
+              <Search size={18} className="shrink-0 text-brand-purple" />
+              <input
+                autoFocus
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search chats"
+                className="w-full bg-transparent font-semibold outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setSearching(false)
+                  setQ('')
+                }}
+                aria-label="Close search"
+                className="shrink-0"
+              >
+                <X size={18} className="text-gray-500" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex w-full items-center justify-between">
+              <BrandMark />
+              <div className="flex gap-1">
+                <IconBtn label="Search" onClick={() => setSearching(true)}>
+                  <Search size={22} />
+                </IconBtn>
+                <IconBtn label="Menu" onClick={() => setMenu((m) => !m)}>
+                  <MoreVertical size={22} />
+                </IconBtn>
+              </div>
+            </div>
+          )}
+        </div>
+        <AnimatePresence>
+          {menu && (
+            <>
+              <div className="fixed inset-0 z-20" onClick={() => setMenu(false)} />
+              <motion.ul
+                initial={{ opacity: 0, scale: 0.85 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.85 }}
+                style={{ transformOrigin: 'top right' }}
+                className="absolute right-4 top-14 z-30 w-52 rounded-2xl bg-white p-1.5 shadow-xl ring-1 ring-black/5"
+              >
+                {(
+                  [
+                    ['New chat', onNewChat],
+                    ['New group', onNewGroup],
+                    ['Contacts', onContacts],
+                    ['Settings', onSettings],
+                  ] as const
+                ).map(([label, fn]) => (
+                  <li key={label}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenu(false)
+                        fn()
+                      }}
+                      className="w-full rounded-xl px-3 py-2.5 text-left font-bold hover:bg-gray-100"
+                    >
+                      {label}
+                    </button>
+                  </li>
+                ))}
+              </motion.ul>
+            </>
+          )}
+        </AnimatePresence>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto pb-24 ">
+        {statusUsers.length > 0 && (
+        <div className="no-scrollbar flex gap-4 overflow-x-auto px-5 pb-3 pt-3 border-b border-gray-200">
+          {statusUsers.map((c: any, i: number) => {
+            const meta = statusMeta[c.id] || { total: 1, viewed: 0 }
+            return (
+              <motion.button
+                key={c.id}
+                type="button"
+                initial={{ opacity: 0, scale: 0.85 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ delay: 0.04 * i, type: 'spring' }}
+                whileTap={{ scale: 0.92 }}
+                className="flex shrink-0 flex-col items-center gap-1.5 p-[2px]"
+                onClick={() => onOpenStatus(c.id)}
+              >
+                <StatusRing total={meta.total} viewed={meta.viewed} size={60}>
+                  <Avatar contact={{ ...c, online: false }} size={50} />
+                </StatusRing>
+                <span className="w-16 truncate text-center text-xs font-bold">{c.name.split(' ')[0]}</span>
+              </motion.button>
+            )
+          })}
+        </div>
+        )}
+
+        <div className="no-scrollbar flex gap-2 overflow-x-auto px-5 pb-3 pt-3">
+          {FILTERS.map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => setFilter(f)}
+              className={`shrink-0 rounded-xl px-2.5 py-0.2 text-sm transition font-ui ${
+                filter === f ? 'bg-gray-200 font-bold' : 'bg-gray-200 text-gray-600'
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+
+        <ul className="px-2">
+          {list.length === 0 && (
+            <p className="px-4 py-12 text-center font-bold text-gray-400">
+              No chats yet. Tap + to start one.
+            </p>
+          )}
+          {list.map((c, i) => {
+            const ct = contactById(c.contactId)
+            const meta = statusMeta[c.contactId]
+            return (
+              <motion.li
+                key={c.contactId}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.03 }}
+              >
+                <button
+                  type="button"
+                  onClick={() => onOpenChat(c.contactId)}
+                  className="flex w-full items-center gap-3 border-b border-gray-100/80 px-3 py-3.5 text-left last:border-0 hover:bg-gray-50/80"
+                >
+                  {meta && meta.total > 0 ? (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onOpenStatus(c.contactId)
+                      }}
+                      className="shrink-0"
+                      aria-label="View status"
+                    >
+                      <StatusRing total={meta.total} viewed={meta.viewed} size={56}>
+                        <Avatar contact={ct} size={46} />
+                      </StatusRing>
+                    </button>
+                  ) : (
+                    <Avatar contact={ct} size={52} />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate font-extrabold">{ct.name}</p>
+                      <span className="shrink-0 text-xs font-bold text-gray-400">{c.time}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-semibold text-gray-500">
+                        {c.mine ? 'You: ' : ''}
+                        {c.last}
+                      </p>
+                      {c.unread > 0 && (
+                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-orange px-1.5 text-[11px] font-black text-white">
+                          {c.unread}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              </motion.li>
+            )
+          })}
+        </ul>
+      </div>
+
+      <motion.button
+        type="button"
+        aria-label="New chat"
+        whileHover={{ scale: 1.06 }}
+        whileTap={{ scale: 0.94 }}
+        onClick={onNewChat}
+        className="absolute bottom-24 right-5 z-10 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white shadow-[0_10px_28px_-6px_rgba(123,44,191,0.55)]"
+      >
+        <Plus size={26} strokeWidth={2.4} />
+      </motion.button>
+    </div>
+  )
+}
+
+export function IconBtn({
+  children,
+  onClick,
+  label,
+  className = '',
+}: {
+  children: React.ReactNode
+  onClick?: () => void
+  label: string
+  className?: string
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      className={`flex h-10 w-10 items-center justify-center rounded-full text-ink hover:bg-gray-100 ${className}`}
+    >
+      {children}
+    </button>
+  )
+}

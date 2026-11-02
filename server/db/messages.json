@@ -1,0 +1,114 @@
+{
+  "amina:brian": [
+    {
+      "id": "m1",
+      "from": "amina",
+      "to": "brian",
+      "text": "Hey! Are we still on for the weekend plan?",
+      "time": "2026-10-30T07:30:00.000Z",
+      "state": "read"
+    },
+    {
+      "id": "m2",
+      "from": "brian",
+      "to": "amina",
+      "text": "Absolutely. I booked the table for 8.",
+      "time": "2026-10-30T07:36:00.000Z",
+      "state": "read"
+    },
+    {
+      "id": "m3",
+      "from": "amina",
+      "to": "brian",
+      "text": "Perfect. Can't wait!",
+      "time": "2026-10-30T07:42:00.000Z",
+      "state": "read"
+    }
+  ],
+  "amina:daisy": [
+    {
+      "id": "m4",
+      "from": "daisy",
+      "to": "amina",
+      "text": "Haha that was hilarious",
+      "time": "2026-10-29T18:20:00.000Z",
+      "state": "delivered"
+    }
+  ],
+  "brian:emeka": [
+    {
+      "id": "m5",
+      "from": "brian",
+      "to": "emeka",
+      "text": "Sent the files over",
+      "time": "2026-10-30T06:58:00.000Z",
+      "state": "read"
+    },
+    {
+      "id": "m6",
+      "from": "emeka",
+      "to": "brian",
+      "text": "Got them, thanks!",
+      "time": "2026-10-30T07:05:00.000Z",
+      "state": "read"
+    }
+  ],
+  "emeka:umvyxgr5gb0n9au": [
+    {
+      "id": "mmvyyo4cvkrw4lb",
+      "from": "umvyxgr5gb0n9au",
+      "to": "emeka",
+      "text": "d",
+      "image": null,
+      "time": "2026-11-02T07:52:24.848Z",
+      "state": "read"
+    },
+    {
+      "id": "mmvyyo6395fyp1k",
+      "from": "emeka",
+      "to": "umvyxgr5gb0n9au",
+      "text": "Thanks for the update.",
+      "time": "2026-11-02T07:52:27.093Z",
+      "state": "read"
+    }
+  ],
+  "joel:umvyxgr5gb0n9au": [
+    {
+      "id": "mmvyyowun8ksnym",
+      "from": "umvyxgr5gb0n9au",
+      "to": "joel",
+      "text": "w",
+      "image": null,
+      "time": "2026-11-02T07:53:01.776Z",
+      "state": "read"
+    },
+    {
+      "id": "mmvyyoyb4dqfpzz",
+      "from": "joel",
+      "to": "umvyxgr5gb0n9au",
+      "text": "Sounds great!",
+      "time": "2026-11-02T07:53:03.664Z",
+      "state": "delivered"
+    }
+  ],
+  "umvye0jcitf3d1c:umvyxgr5gb0n9au": [
+    {
+      "id": "mmvyyqjpdlw9fel",
+      "from": "umvyxgr5gb0n9au",
+      "to": "umvye0jcitf3d1c",
+      "text": "A",
+      "image": null,
+      "time": "2026-11-02T07:54:18.049Z",
+      "state": "read"
+    },
+    {
+      "id": "mmvyytn9yhe1rif",
+      "from": "umvye0jcitf3d1c",
+      "to": "umvyxgr5gb0n9au",
+      "text": "B",
+      "image": null,
+      "time": "2026-11-02T07:56:42.646Z",
+      "state": "read"
+    }
+  ]
+}

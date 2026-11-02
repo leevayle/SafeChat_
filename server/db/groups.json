@@ -1,0 +1,71 @@
+[
+  {
+    "id": "team",
+    "name": "Weekend Crew",
+    "desc": "Plans, photos and bad jokes. Keep it fun.",
+    "hue": ["#F97316", "#9C31A1"],
+    "muted": false,
+    "pinned": true,
+    "adminOnly": false,
+    "disappearing": "Off",
+    "invite": "wk3nd9",
+    "members": [
+      { "id": "amina", "admin": true },
+      { "id": "brian", "admin": false },
+      { "id": "daisy", "admin": false },
+      { "id": "joel", "admin": false }
+    ],
+    "messages": [
+      {
+        "id": "g1",
+        "from": "amina",
+        "text": "created this group",
+        "time": "2026-10-20T10:00:00.000Z",
+        "system": true
+      },
+      {
+        "id": "g2",
+        "from": "brian",
+        "text": "Who's free Saturday?",
+        "time": "2026-10-28T14:00:00.000Z"
+      },
+      {
+        "id": "g3",
+        "from": "daisy",
+        "text": "I'm in! Let's do brunch.",
+        "time": "2026-10-28T14:12:00.000Z"
+      }
+    ]
+  },
+  {
+    "id": "devs",
+    "name": "SafeChat Devs",
+    "desc": "Ship it.",
+    "hue": ["#6389EB", "#7B2CBF"],
+    "muted": false,
+    "pinned": false,
+    "adminOnly": false,
+    "disappearing": "Off",
+    "invite": "scdev1",
+    "members": [
+      { "id": "brian", "admin": true },
+      { "id": "chen", "admin": false },
+      { "id": "liam", "admin": false }
+    ],
+    "messages": [
+      {
+        "id": "gd1",
+        "from": "brian",
+        "text": "created this group",
+        "time": "2026-10-15T09:00:00.000Z",
+        "system": true
+      },
+      {
+        "id": "gd2",
+        "from": "chen",
+        "text": "PR is ready for review",
+        "time": "2026-10-29T16:40:00.000Z"
+      }
+    ]
+  }
+]

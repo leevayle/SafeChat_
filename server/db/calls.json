@@ -1,0 +1,107 @@
+[
+  {
+    "id": "cmvz1bbjcevg6pm",
+    "contactId": "umvye0jcitf3d1c",
+    "name": "",
+    "kind": "audio",
+    "status": "answered",
+    "direction": "in",
+    "time": "12:06",
+    "at": "2026-11-02T09:06:26.472Z",
+    "userId": "umvyxgr5gb0n9au"
+  },
+  {
+    "id": "cmvz1b9y3li4uts",
+    "contactId": "umvye0jcitf3d1c",
+    "name": "",
+    "kind": "audio",
+    "status": "answered",
+    "direction": "in",
+    "time": "12:06",
+    "at": "2026-11-02T09:06:24.412Z",
+    "userId": "umvyxgr5gb0n9au"
+  },
+  {
+    "id": "cmvz1b5ektxfrnj",
+    "from": "umvye0jcitf3d1c",
+    "to": "umvyxgr5gb0n9au",
+    "dir": "out",
+    "direction": "out",
+    "kind": "audio",
+    "when": "2026-11-02T09:06:18.524Z",
+    "duration": "0:00",
+    "status": "outgoing"
+  },
+  {
+    "id": "cmvz1b0yng47fvb",
+    "from": "umvye0jcitf3d1c",
+    "to": "umvyxgr5gb0n9au",
+    "dir": "out",
+    "direction": "out",
+    "kind": "audio",
+    "when": "2026-11-02T09:06:12.767Z",
+    "duration": "0:00",
+    "status": "outgoing"
+  },
+  {
+    "id": "cmvz18x4r5y8gec",
+    "contactId": "umvye0jcitf3d1c",
+    "name": "",
+    "kind": "audio",
+    "status": "answered",
+    "direction": "in",
+    "time": "12:04",
+    "at": "2026-11-02T09:04:34.491Z",
+    "userId": "umvyxgr5gb0n9au"
+  },
+  {
+    "id": "cmvz18oo6xn8hky",
+    "from": "umvye0jcitf3d1c",
+    "to": "umvyxgr5gb0n9au",
+    "dir": "out",
+    "direction": "out",
+    "kind": "audio",
+    "when": "2026-11-02T09:04:23.526Z",
+    "duration": "0:00",
+    "status": "outgoing"
+  },
+  {
+    "id": "c1",
+    "from": "amina",
+    "to": "brian",
+    "dir": "in",
+    "kind": "video",
+    "when": "2026-10-30T06:12:00.000Z",
+    "duration": "12:08",
+    "status": "ended"
+  },
+  {
+    "id": "c2",
+    "from": "brian",
+    "to": "emeka",
+    "dir": "out",
+    "kind": "audio",
+    "when": "2026-10-30T05:30:00.000Z",
+    "duration": "3:45",
+    "status": "ended"
+  },
+  {
+    "id": "c3",
+    "from": "daisy",
+    "to": "amina",
+    "dir": "missed",
+    "kind": "audio",
+    "when": "2026-10-29T18:04:00.000Z",
+    "status": "missed"
+  },
+  {
+    "id": "c4",
+    "from": "brian",
+    "to": "chen",
+    "dir": "out",
+    "kind": "video",
+    "when": "2026-10-29T15:20:00.000Z",
+    "duration": "28:51",
+    "status": "ended"
+  }
+]
