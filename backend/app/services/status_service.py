@@ -95,7 +95,7 @@ class StatusService:
         results = []
         async for s in cursor:
             if await StatusService._can_view(s, viewer_id, contact_ids):
-                results.append(StatusService._serialize(s))
+                results.append(await StatusService._with_viewers(s))
         return results
 
     @staticmethod
@@ -117,7 +117,7 @@ class StatusService:
         results = []
         async for s in cursor:
             if await StatusService._can_view(s, viewer_id, contact_ids):
-                results.append(StatusService._serialize(s))
+                results.append(await StatusService._with_viewers(s))
         return results
 
     @staticmethod
@@ -157,7 +157,13 @@ class StatusService:
                 },
                 upsert=True,
             )
-        return StatusService._serialize(s)
+        data = StatusService._serialize(s)
+        viewer_ids = []
+        async for v in db.status_views.find({"status_id": status_id}):
+            viewer_ids.append(v["viewer_id"])
+        data["viewer_ids"] = viewer_ids
+        data["view_count"] = len(viewer_ids)
+        return data
 
     @staticmethod
     async def delete_status(status_id: str, user_id: str) -> None:
@@ -198,6 +204,29 @@ class StatusService:
                     }
                 )
         return results
+
+
+    @staticmethod
+    async def _with_viewers(s: dict) -> dict:
+        db = get_database()
+        data = StatusService._serialize(s)
+        sid = str(s["_id"])
+        viewer_ids = []
+        async for v in db.status_views.find({"status_id": sid}):
+            viewer_ids.append(v["viewer_id"])
+        data["viewer_ids"] = viewer_ids
+        data["view_count"] = len(viewer_ids)
+        u = None
+        if ObjectId.is_valid(s.get("owner_user_id", "")):
+            u = await db.users.find_one({"_id": ObjectId(s["owner_user_id"])})
+        if u:
+            data["owner"] = {
+                "id": s["owner_user_id"],
+                "username": u.get("username"),
+                "display_name": u.get("display_name"),
+                "profile_photo": u.get("profile_photo"),
+            }
+        return data
 
     @staticmethod
     async def _can_view(

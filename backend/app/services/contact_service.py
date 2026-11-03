@@ -241,7 +241,15 @@ class ContactService:
     async def list_outgoing_requests(user_id: str) -> List[dict]:
         db = get_database()
         cursor = db.contact_requests.find(
-            {"from_user_id": user_id, "status": ContactRequestStatus.PENDING.value}
+            {
+                "from_user_id": user_id,
+                "status": {
+                    "$in": [
+                        ContactRequestStatus.PENDING.value,
+                        ContactRequestStatus.ACCEPTED.value,
+                    ]
+                },
+            }
         ).sort("created_at", -1)
         results = []
         async for r in cursor:
