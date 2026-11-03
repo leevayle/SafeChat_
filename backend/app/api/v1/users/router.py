@@ -1,20 +1,32 @@
 """User profile endpoints."""
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+import re
 from typing import Optional, Dict, Any
 from bson import ObjectId
 from datetime import datetime, timezone
 from app.api.deps import get_current_user
 from app.core.database import get_database
-from app.core.exceptions import success_response, NotFoundError, ValidationError
+from app.core.exceptions import success_response, NotFoundError, ValidationError, ConflictError
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
 
 class ProfileUpdate(BaseModel):
     display_name: Optional[str] = Field(None, min_length=1, max_length=64)
+    username: Optional[str] = Field(None, min_length=3, max_length=32)
     bio: Optional[str] = Field(None, max_length=256)
     profile_photo: Optional[str] = None
+
+    @field_validator('username')
+    @classmethod
+    def validate_username(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        value = value.strip().lower()
+        if not re.fullmatch(r'[a-z0-9_]{3,32}', value):
+            raise ValueError('Username must be 3-32 chars, lowercase letters, numbers, underscores only')
+        return value
 
 
 class PrivacySettingsUpdate(BaseModel):
@@ -68,8 +80,15 @@ async def update_my_profile(
     }
     if not updates:
         return success_response("Nothing to update")
-    updates["updated_at"] = datetime.now(timezone.utc)
     db = get_database()
+    if 'username' in updates:
+        existing = await db.users.find_one({
+            'username': updates['username'],
+            '_id': {'$ne': ObjectId(user['id'])},
+        })
+        if existing:
+            raise ConflictError('That username is already taken')
+    updates["updated_at"] = datetime.now(timezone.utc)
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": updates})
     await db.user_activity_logs.insert_one(
         {

@@ -31,7 +31,7 @@ function Row({ label, hint, value, onClick, right, danger }: { label: string; hi
 }
 
 export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: () => void }) {
-  const { settings: s, setSetting, contacts } = useStore()
+  const { settings: s, setSetting, saveProfile, contacts } = useStore()
   const [picker, setPicker] = useState<{ title: string; options: string[]; key: keyof S } | null>(null)
   const [edit, setEdit] = useState(false)
   const [confirm, setConfirm] = useState<'logout' | 'delete' | null>(null)
@@ -147,7 +147,7 @@ export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: (
             {s.photo ? <img src={s.photo} alt="" className="h-24 w-24 rounded-full object-cover" /> : <Avatar contact={{ name: draft.name || '?', hue: ['#FF8C00', '#7B2CBF'], online: false }} size={96} />}
             <span className="absolute bottom-0 right-0 flex h-9 w-9 items-center justify-center rounded-full bg-brand-orange-2 text-white ring-4 ring-white"><Camera size={16} /></span>
           </button>
-          <input ref={file} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) setSetting('photo', URL.createObjectURL(f)) }} />
+          <input ref={file} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) { const reader = new FileReader(); reader.onload = () => { if (typeof reader.result === 'string') setSetting('photo', reader.result) }; reader.readAsDataURL(f) } }} />
         </div>
         {[['Name', 'name', 30], ['Username', 'username', 20]].map(([l, k, m]) => (
           <label key={k as string} className="mb-3 block text-sm font-extrabold text-gray-500">{l}
@@ -157,7 +157,15 @@ export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: (
         <label className="mb-5 block text-sm font-extrabold text-gray-500">Bio
           <textarea value={draft.bio} maxLength={80} rows={2} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} className="mt-1.5 w-full resize-none rounded-3xl bg-gray-100 px-5 py-3 text-base font-semibold text-ink outline-none focus:ring-4 focus:ring-brand-purple/25" />
         </label>
-        <PrimaryButton disabled={draft.name.trim().length < 2 || draft.username.length < 3} onClick={() => { setSetting('name', draft.name.trim()); setSetting('username', draft.username); setSetting('bio', draft.bio); setEdit(false); setToast('Profile updated') }}>Save changes</PrimaryButton>
+        <PrimaryButton disabled={draft.name.trim().length < 2 || draft.username.length < 3} onClick={async () => {
+          try {
+            await saveProfile({ name: draft.name.trim(), username: draft.username.trim().toLowerCase(), bio: draft.bio, photo: s.photo })
+            setEdit(false)
+            setToast('Profile updated')
+          } catch (error) {
+            setToast(error instanceof Error ? error.message : 'Could not update profile')
+          }
+        }}>Save changes</PrimaryButton>
       </Sheet>
 
       <Sheet open={blockedOpen} onClose={() => setBlockedOpen(false)} title="Blocked contacts">

@@ -98,6 +98,10 @@ export function setSession(access: string, refresh: string, user: ApiUser) {
   localStorage.setItem('sc_user', JSON.stringify(user))
 }
 
+export function saveStoredUser(user: ApiUser) {
+  localStorage.setItem('sc_user', JSON.stringify(user))
+}
+
 export function clearSession() {
   localStorage.removeItem('sc_access')
   localStorage.removeItem('sc_refresh')
@@ -377,12 +381,15 @@ export const api = {
     const payload: Record<string, unknown> = {}
     if (body.name !== undefined) payload.display_name = body.name
     if (body.display_name !== undefined) payload.display_name = body.display_name
+    if (body.username !== undefined) payload.username = body.username
     if (body.bio !== undefined) payload.bio = body.bio
-    await req<any>('/api/v1/users/me', {
+    if (body.photo !== undefined) payload.profile_photo = body.photo
+    if (body.profile_photo !== undefined) payload.profile_photo = body.profile_photo
+    if (Object.keys(payload).length === 0) return
+    return req<any>('/api/v1/users/me', {
       method: 'PATCH',
       body: JSON.stringify(payload),
     })
-    return api.me()
   },
 
   contacts: async () => {

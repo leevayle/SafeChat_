@@ -8,7 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { api, clearSession, getStoredUser, setSession, type ApiUser, type ApiContact, type ChatPreview } from './api'
+import { api, clearSession, getStoredUser, setSession, type ApiUser, type ApiContact, type ChatPreview, saveStoredUser } from './api'
 
 export type Settings = {
   name: string
@@ -93,6 +93,7 @@ type Store = {
   me: ApiUser | null
   settings: Settings
   setSetting: <K extends keyof Settings>(k: K, v: Settings[K]) => void
+  saveProfile: (profile: { name: string; username: string; bio: string; photo: string | null }) => Promise<void>
   contacts: ApiContact[]
   chats: ChatPreview[]
   groups: any[]
@@ -314,7 +315,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const bootStarted = useRef(false)
   useEffect(() => {
+    if (bootStarted.current) return
+    bootStarted.current = true
     const boot = async () => {
       const stored = getStoredUser()
       if (!stored) {
@@ -401,7 +405,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     applyUser(user)
     setListsReady(false)
     if (data.bio) {
-      void api.updateMe({ bio: data.bio }).catch(() => {})
+      try {
+        await api.updateMe({ bio: data.bio })
+        const updatedUser = { ...user, bio: data.bio }
+        setSession(access_token, refresh_token, updatedUser)
+        applyUser(updatedUser)
+      } catch {
+        // Account creation/login succeeded; keep the entered bio locally if the
+        // optional profile update cannot be saved yet.
+        setSettings((prev) => ({ ...prev, bio: data.bio! }))
+      }
     }
     void Promise.all([refreshChats(), refreshContacts(), refreshGroups(), refreshStatus(), refreshCalls()])
       .catch(() => {})
@@ -453,24 +466,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const meRef = useRef(me)
   meRef.current = me
 
+  // Device preferences are local-only. Never send them to the profile endpoint.
   const setSetting = useCallback(<K extends keyof Settings>(k: K, v: Settings[K]) => {
-    setSettings((s) => {
-      const next = { ...s, [k]: v }
-      try {
-        localStorage.setItem('sc_settings', JSON.stringify(next))
-      } catch {
-        /* ignore */
-      }
-      const m = meRef.current
-      if (m) {
-        const payload: Record<string, unknown> = {}
-        if (k === 'name' || k === 'username' || k === 'bio' || k === 'photo') payload[k] = v
-        else payload.settings = { [k]: v }
-        api.updateMe(payload).catch(() => {})
-      }
-      return next
-    })
-  }, [])
+    const next = { ...settings, [k]: v }
+    setSettings(next)
+    try {
+      localStorage.setItem('sc_settings', JSON.stringify(next))
+    } catch {
+      /* ignore storage quota / private browsing errors */
+    }
+  }, [settings])
+
+  // Persist profile fields with one PATCH and update the local session cache;
+  // profile saves must not call /auth/me again.
+  const saveProfile = useCallback(async (profile: { name: string; username: string; bio: string; photo: string | null }) => {
+    const current = meRef.current
+    if (!current) throw new Error('You must be signed in to update your profile')
+    await api.updateMe(profile)
+    const updated: ApiUser = {
+      ...current,
+      name: profile.name,
+      username: profile.username,
+      bio: profile.bio,
+      photo: profile.photo,
+    }
+    meRef.current = updated
+    setMe(updated)
+    saveStoredUser(updated)
+    const nextSettings = { ...settings, ...profile }
+    setSettings(nextSettings)
+    try { localStorage.setItem('sc_settings', JSON.stringify(nextSettings)) } catch { /* ignore */ }
+  }, [settings])
 
   const createGroup = async (name: string, desc: string, memberIds: string[]) => {
     const { group } = await api.createGroup({ name, desc, memberIds })
@@ -508,6 +534,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       me,
       settings,
       setSetting,
+      saveProfile,
       contacts,
       chats,
       groups,
@@ -543,6 +570,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       statusList,
       calls,
       setSetting,
+      saveProfile,
       refreshChats,
       refreshContacts,
       toast,
