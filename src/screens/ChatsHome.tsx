@@ -140,7 +140,7 @@ export function ChatsHome({
 
   return (
     <div className="relative flex h-full flex-col bg-white">
-      <header className="relative flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 px-5 pt-[10px]">
+      <header className="relative flex min-h-16 shrink-0 items-center justify-between border-b pb-3 border-gray-200 px-5 pt-[20px]">
         <div
           className={`flex w-full items-center transition-all duration-200 ease-out  ${
             searching ? 'opacity-100 ' : 'opacity-100 '

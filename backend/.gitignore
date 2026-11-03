@@ -1,75 +1,9 @@
-# Environment
-.env
-.env.local
-.env.*.local
-*.pem
-*.key
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
+node_modules/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-.venv/
-venv/
-ENV/
-env/
-
-# Testing / coverage
-.coverage
-.coverage.*
-htmlcov/
-.tox/
-.nox/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-coverage.xml
-*.cover
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Project runtime
-storage/*
-!storage/.gitkeep
-archives/*
-!archives/.gitkeep
-logs/
+build/
+.cache/
+.env*
+.vite/
+*.tsbuildinfo
 *.log
-*.jsonl
-*.zip
-*.gz
-
-# Docker
-docker-compose.override.yml
-
-# Secrets
-secrets/
-credentials.json
-service-account*.json
+.DS_Store

@@ -229,8 +229,26 @@ class MessagingService:
             .limit(min(limit, 100))
         )
         messages = []
+        now = datetime.now(timezone.utc)
         async for m in cursor:
-            messages.append(await MessagingService._serialize_message(m))
+            mid = str(m["_id"])
+            # Opening the thread = delivered for the other party's messages
+            if m.get("sender_id") != user_id:
+                await db.message_receipts.update_one(
+                    {"message_id": mid, "user_id": user_id},
+                    {
+                        "$set": {"delivered_at": now},
+                        "$setOnInsert": {
+                            "message_id": mid,
+                            "user_id": user_id,
+                            "conversation_id": conversation_id,
+                            "read_at": None,
+                            "created_at": now,
+                        },
+                    },
+                    upsert=True,
+                )
+            messages.append(await MessagingService._serialize_message(m, viewer_id=user_id))
         messages.reverse()  # chronological
         next_cursor = messages[0]["id"] if messages and len(messages) == limit else None
         return {"messages": messages, "next_cursor": next_cursor}
@@ -307,6 +325,20 @@ class MessagingService:
         result = await db.message_receipts.update_many(
             query, {"$set": {"read_at": now, "delivered_at": now}}
         )
+        # Flip message.delivery_status so sender ticks update on poll
+        if result.modified_count or result.matched_count:
+            msg_ids = []
+            async for r in db.message_receipts.find(
+                {"conversation_id": conversation_id, "user_id": user_id, "read_at": {"$ne": None}}
+            ):
+                msg_ids.append(r["message_id"])
+            if msg_ids:
+                oids = [ObjectId(i) for i in msg_ids if ObjectId.is_valid(i)]
+                if oids:
+                    await db.messages.update_many(
+                        {"_id": {"$in": oids}, "sender_id": {"$ne": user_id}},
+                        {"$set": {"delivery_status": DeliveryStatus.READ.value}},
+                    )
         return result.modified_count
 
     @staticmethod
@@ -344,11 +376,33 @@ class MessagingService:
         )
 
     @staticmethod
-    async def _serialize_message(msg: dict) -> dict:
+    async def _serialize_message(msg: dict, viewer_id: Optional[str] = None) -> dict:
         db = get_database()
         sender = await db.users.find_one({"_id": ObjectId(msg["sender_id"])})
+        msg_id = str(msg["_id"])
+        status = msg.get("delivery_status", DeliveryStatus.SENT.value)
+
+        # Derive status from receipts so the sender sees delivered/read ticks
+        if viewer_id and msg.get("sender_id") == viewer_id:
+            receipts = []
+            async for r in db.message_receipts.find({"message_id": msg_id}):
+                receipts.append(r)
+            if receipts:
+                if any(r.get("read_at") for r in receipts):
+                    status = DeliveryStatus.READ.value
+                elif any(r.get("delivered_at") for r in receipts):
+                    status = DeliveryStatus.DELIVERED.value
+                else:
+                    status = DeliveryStatus.SENT.value
+            # Keep message document roughly in sync for list previews
+            if status != msg.get("delivery_status"):
+                await db.messages.update_one(
+                    {"_id": msg["_id"]},
+                    {"$set": {"delivery_status": status}},
+                )
+
         return {
-            "id": str(msg["_id"]),
+            "id": msg_id,
             "conversation_id": msg["conversation_id"],
             "sender_id": msg["sender_id"],
             "sender_username": sender["username"] if sender else None,
@@ -361,7 +415,7 @@ class MessagingService:
             "created_at": msg["created_at"].isoformat() if msg.get("created_at") else None,
             "updated_at": msg["updated_at"].isoformat() if msg.get("updated_at") else None,
             "deleted_at": msg["deleted_at"].isoformat() if msg.get("deleted_at") else None,
-            "delivery_status": msg.get("delivery_status", "sent"),
+            "delivery_status": status,
             "edited": msg.get("edited", False),
         }
 
@@ -385,12 +439,21 @@ class MessagingService:
         if conv.get("last_message_id") and ObjectId.is_valid(conv["last_message_id"]):
             m = await db.messages.find_one({"_id": ObjectId(conv["last_message_id"])})
             if m and not m.get("deleted_at"):
+                lm_status = m.get("delivery_status", DeliveryStatus.SENT.value)
+                if m.get("sender_id") == viewer_id:
+                    mid = str(m["_id"])
+                    receipts = [r async for r in db.message_receipts.find({"message_id": mid})]
+                    if any(r.get("read_at") for r in receipts):
+                        lm_status = DeliveryStatus.READ.value
+                    elif any(r.get("delivered_at") for r in receipts):
+                        lm_status = DeliveryStatus.DELIVERED.value
                 last_message = {
                     "id": str(m["_id"]),
                     "content": m.get("content"),
                     "message_type": m.get("message_type"),
                     "sender_id": m.get("sender_id"),
                     "created_at": m["created_at"].isoformat() if m.get("created_at") else None,
+                    "delivery_status": lm_status,
                 }
 
         # Unread count

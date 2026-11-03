@@ -14,6 +14,7 @@ router = APIRouter(prefix="/users", tags=["Users"])
 class ProfileUpdate(BaseModel):
     display_name: Optional[str] = Field(None, min_length=1, max_length=64)
     bio: Optional[str] = Field(None, max_length=256)
+    profile_photo: Optional[str] = None
 
 
 class PrivacySettingsUpdate(BaseModel):

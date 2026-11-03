@@ -233,7 +233,7 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
           type="button"
           aria-label="Video call"
           onClick={() => onCall('video')}
-          className="flex h-10 w-10 items-center justify-center rounded-full text-brand-purple hover:bg-brand-purple/10"
+          className="flex h-10 w-10 m-r-2 items-center justify-center rounded-full text-brand-purple hover:bg-brand-purple/10"
         >
           <Video size={22} />
         </button>
