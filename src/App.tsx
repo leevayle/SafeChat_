@@ -204,7 +204,7 @@ function Shell() {
             <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
           </div>
           <div className={tab === 'status' ? 'h-full' : 'hidden'}>
-            <StatusTab />
+            <StatusTab onOpenStatus={(id) => id && setStatusUser(id)} />
           </div>
           <div className={tab === 'calls' ? 'h-full' : 'hidden'}>
             <CallsTab

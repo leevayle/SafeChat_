@@ -61,7 +61,12 @@ export function SaveRequests({ onClose, onChat }: Props) {
         api.outgoingContactRequests(),
       ])
       setIncoming((inRes.requests || []).filter((r) => r.status === 'pending'))
-      setOutgoing((outRes.requests || []).filter((r) => r.status === 'pending'))
+      // Sent: show pending + accepted (Message only when accepted)
+      setOutgoing(
+        (outRes.requests || []).filter(
+          (r) => r.status === 'pending' || r.status === 'accepted',
+        ),
+      )
     } catch {
       showToast('Could not load save requests')
     } finally {
@@ -156,12 +161,12 @@ export function SaveRequests({ onClose, onChat }: Props) {
               {tab === 'incoming' ? <Inbox size={28} /> : <Clock size={28} />}
             </div>
             <p className="text-base font-extrabold text-gray-700">
-              {tab === 'incoming' ? 'No save requests' : 'No pending requests'}
+              {tab === 'incoming' ? 'No save requests' : 'No sent requests'}
             </p>
             <p className="text-sm font-semibold text-gray-400">
               {tab === 'incoming'
                 ? 'When someone wants to save you as a contact, their request will show up here.'
-                : 'Requests you send will appear here until they accept or decline.'}
+                : 'Requests you send appear here. Message is available after they accept.'}
             </p>
           </div>
         ) : (
@@ -201,9 +206,14 @@ export function SaveRequests({ onClose, onChat }: Props) {
                           “{r.message}”
                         </p>
                       )}
-                      {tab === 'outgoing' && (
+                      {tab === 'outgoing' && r.status === 'pending' && (
                         <p className="mt-1.5 flex items-center gap-1 text-xs font-bold text-amber-600">
                           <Clock size={12} /> Waiting for response
+                        </p>
+                      )}
+                      {tab === 'outgoing' && r.status === 'accepted' && (
+                        <p className="mt-1.5 flex items-center gap-1 text-xs font-bold text-green-600">
+                          <Check size={12} strokeWidth={2.5} /> Accepted
                         </p>
                       )}
                     </div>
@@ -232,7 +242,7 @@ export function SaveRequests({ onClose, onChat }: Props) {
                     </div>
                   )}
 
-                  {tab === 'outgoing' && onChat && (
+                  {tab === 'outgoing' && onChat && r.status === 'accepted' && (
                     <div className="border-t border-gray-100 px-3 py-2">
                       <button
                         type="button"

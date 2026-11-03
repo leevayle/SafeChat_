@@ -18,7 +18,11 @@ function mediaUrl(path?: string | null) {
 const VALIDITY = ['1 hour', '6 hours', '12 hours', '24 hours'] as const
 const PRIVACY = ['Everyone', 'My contacts', 'Contacts except…', 'Only share with…'] as const
 
-export function StatusTab() {
+type Props = {
+  onOpenStatus?: (userId: string) => void
+}
+
+export function StatusTab({ onOpenStatus }: Props) {
   const { statusList, me, refreshStatus, settings, setSetting } = useStore()
   const [text, setText] = useState('')
   const [image, setImage] = useState<string | null>(null)
@@ -102,7 +106,12 @@ export function StatusTab() {
         <p className="mb-2 text-sm font-extrabold text-gray-500">My status</p>
         <div className="no-scrollbar -mx-1 flex gap-3 overflow-x-auto pb-2 pt-1">
           {mine.map((s) => (
-            <div key={s.id} className="flex w-[88px] shrink-0 flex-col items-center gap-1.5">
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => me?.id && onOpenStatus?.(me.id)}
+              className="flex w-[88px] shrink-0 flex-col items-center gap-1.5 text-left"
+            >
               <div className="relative h-[112px] w-[88px] overflow-hidden rounded-2xl bg-gradient-to-br from-brand-purple/80 to-brand-blue/70 shadow-sm ring-1 ring-black/5">
                 {s.image ? (
                   <img src={mediaUrl(s.image)} alt="" className="h-full w-full object-cover" />
@@ -122,7 +131,7 @@ export function StatusTab() {
               <span className="flex items-center gap-0.5 text-[11px] font-bold text-gray-500">
                 <Eye size={12} /> {s.views?.length || 0}
               </span>
-            </div>
+            </button>
           ))}
 
           {/* Add status — always last; sole item when empty */}
@@ -149,12 +158,14 @@ export function StatusTab() {
           const s = g.latest
           const contact = g.user || { id: g.userId, name: '?', hue: ['#7B2CBF', '#6389EB'] as [string, string] }
           return (
-            <motion.div
+            <motion.button
               key={g.userId}
+              type="button"
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.04 }}
-              className="flex items-center gap-3 rounded-3xl p-2.5 hover:bg-gray-100"
+              onClick={() => onOpenStatus?.(g.userId)}
+              className="flex w-full items-center gap-3 rounded-3xl p-2.5 text-left hover:bg-gray-100"
             >
               <StatusRing total={g.total} viewed={g.viewed} size={56}>
                 <Avatar contact={contact} size={46} />
@@ -170,7 +181,7 @@ export function StatusTab() {
               {s.image && (
                 <img src={mediaUrl(s.image)} alt="" className="h-12 w-12 rounded-xl object-cover" />
               )}
-            </motion.div>
+            </motion.button>
           )
         })}
       </div>

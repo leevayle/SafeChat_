@@ -133,7 +133,15 @@ export function stamp() {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false)
   const [me, setMe] = useState<ApiUser | null>(getStoredUser())
-  const [settings, setSettings] = useState<Settings>(defaultSettings)
+  const [settings, setSettings] = useState<Settings>(() => {
+    try {
+      const raw = localStorage.getItem('sc_settings')
+      if (raw) return { ...defaultSettings, ...JSON.parse(raw) }
+    } catch {
+      /* ignore */
+    }
+    return defaultSettings
+  })
   const [contacts, setContacts] = useState<ApiContact[]>([])
   const [chats, setChats] = useState<ChatPreview[]>([])
   const [groups, setGroups] = useState<any[]>([])
@@ -327,6 +335,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const setSetting = useCallback(<K extends keyof Settings>(k: K, v: Settings[K]) => {
     setSettings((s) => {
       const next = { ...s, [k]: v }
+      try {
+        localStorage.setItem('sc_settings', JSON.stringify(next))
+      } catch {
+        /* ignore */
+      }
       const m = meRef.current
       if (m) {
         const payload: Record<string, unknown> = {}

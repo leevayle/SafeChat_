@@ -11,7 +11,7 @@ import {
   Settings,
   UserPlus,
 } from 'lucide-react'
-import { BrandMark } from '../components/AppHeaderLogo'
+import { Wordmark } from '../components/Logo'
 import { Avatar } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
 import { useStore } from '../store'
@@ -170,7 +170,7 @@ export function ChatsHome({
             </div>
           ) : (
             <div className="flex w-full items-center justify-between">
-              <BrandMark />
+              <Wordmark className="text-2xl leading-none" />
               <div className="flex gap-1">
                 <IconBtn label="Search" onClick={() => setSearching(true)}>
                   <Search size={22} />
