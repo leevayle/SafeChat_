@@ -46,3 +46,34 @@
 @utility font-ui {
   font-family: var(--font-ui);
 }
+
+/* Soft diagonal shimmer used by list skeletons (Chats home wireframe) */
+@keyframes sk-shimmer-sweep {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.sk-shimmer {
+  background: linear-gradient(
+    105deg,
+    #ebecef 0%,
+    #ebecef 38%,
+    #f7f8fa 50%,
+    #ebecef 62%,
+    #ebecef 100%
+  );
+  background-size: 200% 100%;
+  animation: sk-shimmer-sweep 1.55s ease-in-out infinite;
+  border-radius: 9999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sk-shimmer {
+    animation: none;
+    background: #ebecef;
+  }
+}

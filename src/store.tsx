@@ -88,6 +88,8 @@ const defaultSettings: Settings = {
 
 type Store = {
   ready: boolean
+  /** True after first chats/contacts/status hydrate completes (or fails) */
+  listsReady: boolean
   me: ApiUser | null
   settings: Settings
   setSetting: <K extends keyof Settings>(k: K, v: Settings[K]) => void
@@ -136,6 +138,7 @@ export function stamp() {
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false)
+  const [listsReady, setListsReady] = useState(false)
   const [me, setMe] = useState<ApiUser | null>(getStoredUser())
   const [settings, setSettings] = useState<Settings>(() => {
     try {
@@ -316,6 +319,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const stored = getStoredUser()
       if (!stored) {
         setReady(true)
+        setListsReady(true)
         return
       }
       try {
@@ -336,6 +340,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setMe(null)
       } finally {
         setReady(true)
+        setListsReady(true)
       }
     }
     boot()
@@ -356,6 +361,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // UI-first: session + user immediately so the app can navigate
     setSession(access_token, refresh_token, user)
     applyUser(user)
+    setListsReady(false)
     // Background: hydrate lists without blocking the login screen
     void Promise.all([
       refreshChats(),
@@ -363,7 +369,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshGroups(),
       refreshStatus(),
       refreshCalls(),
-    ]).catch(() => {})
+    ])
+      .catch(() => {})
+      .finally(() => setListsReady(true))
     return user
   }
 
@@ -391,10 +399,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     })
     setSession(access_token, refresh_token, user)
     applyUser(user)
+    setListsReady(false)
     if (data.bio) {
       void api.updateMe({ bio: data.bio }).catch(() => {})
     }
-    void Promise.all([refreshChats(), refreshContacts(), refreshGroups()]).catch(() => {})
+    void Promise.all([refreshChats(), refreshContacts(), refreshGroups(), refreshStatus(), refreshCalls()])
+      .catch(() => {})
+      .finally(() => setListsReady(true))
     return user
   }
 
@@ -413,6 +424,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setContacts([])
     setStatusList([])
     setCalls([])
+    setListsReady(true)
     // Reset profile fields in memory; re-load device prefs from localStorage if present
     try {
       const raw = localStorage.getItem('sc_settings')
@@ -492,6 +504,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       ready,
+      listsReady,
       me,
       settings,
       setSetting,
@@ -521,6 +534,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }),
     [
       ready,
+      listsReady,
       me,
       settings,
       contacts,

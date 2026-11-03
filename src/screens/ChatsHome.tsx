@@ -16,6 +16,7 @@ import {
 import { Wordmark } from '../components/Logo'
 import { Avatar } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
+import { ChatsHomeSkeleton } from '../components/ChatsHomeSkeleton'
 import { useStore } from '../store'
 import { api } from '../api'
 
@@ -45,12 +46,13 @@ export function ChatsHome({
   onNotifications,
   onSupport,
 }: Props) {
-  const { chats, contacts, statusList, me } = useStore()
+  const { chats, contacts, statusList, me, listsReady } = useStore()
   const [filter, setFilter] = useState<Filter>('All chats')
   const [searching, setSearching] = useState(false)
   const [q, setQ] = useState('')
   const [menu, setMenu] = useState(false)
   const [pendingCount, setPendingCount] = useState(0)
+  const showSkeleton = !listsReady
 
   useEffect(() => {
     let alive = true
@@ -258,126 +260,132 @@ export function ChatsHome({
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-24 ">
-        {statusUsers.length > 0 && (
-        <div className="no-scrollbar flex gap-4 overflow-x-auto px-5 pb-3 pt-3 border-b border-gray-200">
-          {statusUsers.map((c: any, i: number) => {
-            const meta = statusMeta[c.id] || { total: 1, viewed: 0 }
-            return (
-              <motion.button
-                key={c.id}
-                type="button"
-                initial={{ opacity: 0, scale: 0.85 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.04 * i, type: 'spring' }}
-                whileTap={{ scale: 0.92 }}
-                className="flex shrink-0 flex-col items-center gap-1.5 p-[2px]"
-                onClick={() => onOpenStatus(c.id)}
-              >
-                <StatusRing total={meta.total} viewed={meta.viewed} size={60}>
-                  <Avatar contact={{ ...c, online: false }} size={50} />
-                </StatusRing>
-                <span className="w-16 truncate text-center text-xs font-bold">{c.name.split(' ')[0]}</span>
-              </motion.button>
-            )
-          })}
-        </div>
-        )}
-
-        <div className="no-scrollbar flex gap-5 overflow-x-auto px-5 pb-3 pt-3">
-          {FILTERS.map((f) => (
-            <button
-              key={f}
-              type="button"
-              onClick={() => setFilter(f)}
-              className={`shrink-0 rounded-xl px-2.5 py-0.2 text-sm transition font-ui ${
-                filter === f ? 'bg-gray-200 font-bold' : 'bg-gray-200 text-gray-600'
-              }`}
-            >
-              {f}
-            </button>
-          ))}
-        </div>
-
-        <ul className="px-2">
-          {list.length === 0 && (
-            <p className="px-4 py-12 text-center font-bold text-gray-400">
-              No chats yet. Tap + to start one now!
-            </p>
-          )}
-          {list.map((c, i) => {
-            const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
-            const meta = statusMeta[c.contactId]
-            return (
-              <motion.li
-                key={c.conversationId || c.contactId}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.03 }}
-              >
-                <button
-                  type="button"
-                  onClick={() => onOpenChat(c.contactId)}
-                  className="flex w-full items-center gap-3 border-b border-gray-100/80 px-3 py-3.5 text-left last:border-0 hover:bg-gray-50/80"
-                >
-                  {meta && meta.total > 0 ? (
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onOpenStatus(c.contactId)
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          onOpenStatus(c.contactId)
-                        }
-                      }}
-                      className="shrink-0 cursor-pointer"
-                      aria-label="View status"
+        {showSkeleton ? (
+          <ChatsHomeSkeleton />
+        ) : (
+          <>
+            {statusUsers.length > 0 && (
+              <div className="no-scrollbar flex gap-4 overflow-x-auto border-b border-gray-200 px-5 pb-3 pt-3">
+                {statusUsers.map((c: any, i: number) => {
+                  const meta = statusMeta[c.id] || { total: 1, viewed: 0 }
+                  return (
+                    <motion.button
+                      key={c.id}
+                      type="button"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.04 * i, type: 'spring' }}
+                      whileTap={{ scale: 0.92 }}
+                      className="flex shrink-0 flex-col items-center gap-1.5 p-[2px]"
+                      onClick={() => onOpenStatus(c.id)}
                     >
-                      <StatusRing total={meta.total} viewed={meta.viewed} size={56}>
-                        <Avatar contact={ct} size={46} />
+                      <StatusRing total={meta.total} viewed={meta.viewed} size={60}>
+                        <Avatar contact={{ ...c, online: false }} size={50} />
                       </StatusRing>
-                    </span>
-                  ) : (
-                    <Avatar contact={ct} size={52} />
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="truncate font-extrabold">{ct.name}</p>
-                      <div className="flex shrink-0 flex-col items-end gap-0.5">
-                        <span className="text-xs font-bold text-gray-400">{c.time}</span>
-                        {c.mine && (
-                          <span
-                            className={`text-[11px] font-black leading-none ${
-                              c.state === 'read' ? 'text-brand-blue' : 'text-gray-400'
-                            }`}
-                            title={c.state || 'sent'}
-                          >
-                            {c.state === 'sent' || !c.state ? '✓' : '✓✓'}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="truncate text-sm font-semibold text-gray-500">
-                        {c.mine ? 'You: ' : ''}
-                        {c.last}
-                      </p>
-                      {c.unread > 0 && (
-                        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-orange px-1.5 text-[11px] font-black text-white">
-                          {c.unread}
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                      <span className="w-16 truncate text-center text-xs font-bold">{c.name.split(' ')[0]}</span>
+                    </motion.button>
+                  )
+                })}
+              </div>
+            )}
+
+            <div className="no-scrollbar flex gap-5 overflow-x-auto px-5 pb-3 pt-3">
+              {FILTERS.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setFilter(f)}
+                  className={`shrink-0 rounded-xl px-2.5 py-0.2 font-ui text-sm transition ${
+                    filter === f ? 'bg-gray-200 font-bold' : 'bg-gray-200 text-gray-600'
+                  }`}
+                >
+                  {f}
                 </button>
-              </motion.li>
-            )
-          })}
-        </ul>
+              ))}
+            </div>
+
+            <ul className="px-2">
+              {list.length === 0 && (
+                <p className="px-4 py-12 text-center font-bold text-gray-400">
+                  No chats yet. Tap + to start one now!
+                </p>
+              )}
+              {list.map((c, i) => {
+                const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
+                const meta = statusMeta[c.contactId]
+                return (
+                  <motion.li
+                    key={c.conversationId || c.contactId}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.03 }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onOpenChat(c.contactId)}
+                      className="flex w-full items-center gap-3 border-b border-gray-100/80 px-3 py-3.5 text-left last:border-0 hover:bg-gray-50/80"
+                    >
+                      {meta && meta.total > 0 ? (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onOpenStatus(c.contactId)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              onOpenStatus(c.contactId)
+                            }
+                          }}
+                          className="shrink-0 cursor-pointer"
+                          aria-label="View status"
+                        >
+                          <StatusRing total={meta.total} viewed={meta.viewed} size={56}>
+                            <Avatar contact={ct} size={46} />
+                          </StatusRing>
+                        </span>
+                      ) : (
+                        <Avatar contact={ct} size={52} />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="truncate font-extrabold">{ct.name}</p>
+                          <div className="flex shrink-0 flex-col items-end gap-0.5">
+                            <span className="text-xs font-bold text-gray-400">{c.time}</span>
+                            {c.mine && (
+                              <span
+                                className={`text-[11px] font-black leading-none ${
+                                  c.state === 'read' ? 'text-brand-blue' : 'text-gray-400'
+                                }`}
+                                title={c.state || 'sent'}
+                              >
+                                {c.state === 'sent' || !c.state ? '✓' : '✓✓'}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="truncate text-sm font-semibold text-gray-500">
+                            {c.mine ? 'You: ' : ''}
+                            {c.last}
+                          </p>
+                          {c.unread > 0 && (
+                            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-orange px-1.5 text-[11px] font-black text-white">
+                              {c.unread}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  </motion.li>
+                )
+              })}
+            </ul>
+          </>
+        )}
       </div>
 
       <motion.button
