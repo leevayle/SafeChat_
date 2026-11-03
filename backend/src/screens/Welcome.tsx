@@ -39,13 +39,7 @@ export function Welcome({
         <PillButton onClick={go} loading={loading}>
           Continue
         </PillButton>
-        <button
-          type="button"
-          onClick={onLogin}
-          className="text-sm font-bold text-brand-purple"
-        >
-          Already have an account? Log in
-        </button>
+        
         <button
           type="button"
           onClick={() => setReferralOpen(true)}

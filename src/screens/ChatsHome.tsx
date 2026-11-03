@@ -10,6 +10,8 @@ import {
   Contact,
   Settings,
   UserPlus,
+  Bell,
+  LifeBuoy,
 } from 'lucide-react'
 import { Wordmark } from '../components/Logo'
 import { Avatar } from '../components/Avatar'
@@ -28,6 +30,8 @@ type Props = {
   onContacts: () => void
   onSaveRequests: () => void
   onOpenStatus: (userId: string) => void
+  onNotifications: () => void
+  onSupport: () => void
 }
 
 export function ChatsHome({
@@ -38,6 +42,8 @@ export function ChatsHome({
   onContacts,
   onSaveRequests,
   onOpenStatus,
+  onNotifications,
+  onSupport,
 }: Props) {
   const { chats, contacts, statusList, me } = useStore()
   const [filter, setFilter] = useState<Filter>('All chats')
@@ -191,20 +197,17 @@ export function ChatsHome({
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.85 }}
                 style={{ transformOrigin: 'top right' }}
-                className="absolute right-4 top-14 z-30 w-56 rounded-2xl bg-white p-1.5 shadow-xl ring-1 ring-black/5"
+                className="absolute right-4 top-14 z-30 max-h-[min(70vh,420px)] w-56 overflow-y-auto rounded-2xl bg-white p-1.5 shadow-xl ring-1 ring-black/5"
               >
                 {(
                   [
                     { label: 'New chat', fn: onNewChat, Icon: MessageCirclePlus },
                     { label: 'New group', fn: onNewGroup, Icon: UsersRound },
                     { label: 'Contacts', fn: onContacts, Icon: Contact },
+                    { label: 'Save requests', fn: onSaveRequests, Icon: UserPlus, badge: pendingCount },
+                    { label: 'Notifications', fn: onNotifications, Icon: Bell },
+                    { label: 'Support', fn: onSupport, Icon: LifeBuoy },
                     { label: 'Settings', fn: onSettings, Icon: Settings },
-                    {
-                      label: 'Save requests',
-                      fn: onSaveRequests,
-                      Icon: UserPlus,
-                      badge: pendingCount,
-                    },
                   ] as const
                 ).map(({ label, fn, Icon, ...rest }) => {
                   const badge = 'badge' in rest ? (rest as { badge?: number }).badge : 0

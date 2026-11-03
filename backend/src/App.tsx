@@ -20,6 +20,8 @@ import { NewChat } from './screens/NewChat'
 import { Settings } from './screens/Settings'
 import { Contacts } from './screens/Contacts'
 import { SaveRequests } from './screens/SaveRequests'
+import { Notifications } from './screens/Notifications'
+import { Support } from './screens/Support'
 import { StatusViewer } from './screens/StatusViewer'
 import { StoreProvider, useStore } from './store'
 import { IncomingCall } from './components/IncomingCall'
@@ -27,7 +29,7 @@ import { BottomNav, type Tab } from './components/BottomNav'
 
 type Stage = 'splash' | 'welcome' | 'signup' | 'login' | 'loading' | 'profile' | 'done' | 'app'
 type Call = { id: string; kind: 'audio' | 'video'; ringId?: string }
-type Overlay = 'newChat' | 'newGroup' | 'settings' | 'contacts' | 'saveRequests' | null
+type Overlay = 'newChat' | 'newGroup' | 'settings' | 'contacts' | 'saveRequests' | 'notifications' | 'support' | null
 
 export default function App() {
   return (
@@ -38,7 +40,7 @@ export default function App() {
 }
 
 function Shell() {
-  const { ready, me, logout, contacts, toast, clearToast } = useStore()
+  const { ready, me, logout, contacts, toast, clearToast, settings } = useStore()
   const [stage, setStage] = useState<Stage>('splash')
   const [submitting, setSubmitting] = useState(false)
   const [username, setUsername] = useState('')
@@ -102,14 +104,53 @@ function Shell() {
     }
   }, [stage, call])
 
-  // Session restore once only
+  /** Device session helpers — localStorage is the source of truth for "has logged in on this device" */
+  const readDeviceSession = () => {
+    const hasTokens =
+      !!localStorage.getItem('sc_access') ||
+      !!localStorage.getItem('sc_token') ||
+      !!localStorage.getItem('sc_user')
+    const hasLoggedIn = localStorage.getItem('sc_has_logged_in') === '1' || hasTokens
+    let appLock = settings.appLock
+    try {
+      const raw = localStorage.getItem('sc_settings')
+      if (raw) {
+        const parsed = JSON.parse(raw) as { appLock?: boolean }
+        if (typeof parsed.appLock === 'boolean') appLock = parsed.appLock
+      }
+    } catch {
+      /* ignore */
+    }
+    return { hasTokens, hasLoggedIn, appLock }
+  }
+
+  // After splash may land on loading while store finishes hydrating a saved session
   useEffect(() => {
-    if (!ready || restored.current) return
+    if (stage !== 'loading' || !ready) return
+    const { hasTokens, hasLoggedIn, appLock } = readDeviceSession()
+
+    // App lock always requires re-auth for returning users
+    if (appLock && (me || hasTokens || hasLoggedIn)) {
+      setStage('login')
+      return
+    }
+
+    // Valid session, no lock → inbox
     if (me) {
       restored.current = true
       setStage('app')
+      return
     }
-  }, [ready, me])
+
+    // Tokens existed but hydration failed (cleared session) — treat as new if no flag
+    if (hasLoggedIn || hasTokens) {
+      // Prefer login over Welcome so returning users don't see privacy/continue again
+      setStage('login')
+      return
+    }
+
+    setStage('welcome')
+  }, [stage, ready, me, settings.appLock])
 
   const afterPhone = (phone: string, countryCode: string) => {
     setPendingReg({ phone, countryCode })
@@ -122,6 +163,12 @@ function Shell() {
   }
 
   const goApp = () => {
+    // Mark this device as having completed a login so splash can skip Welcome
+    try {
+      localStorage.setItem('sc_has_logged_in', '1')
+    } catch {
+      /* ignore */
+    }
     restored.current = true
     setStage('app')
   }
@@ -132,13 +179,48 @@ function Shell() {
       <div className="flex min-h-dvh justify-center bg-[#f0f2f5]">
         <main className="relative h-dvh w-full min-h-[568px] max-w-[430px] overflow-hidden bg-white">
           {stage === 'splash' && (
-            <Splash onDone={() => setStage('welcome')} />
+            <Splash
+              onDone={() => {
+                const { hasTokens, hasLoggedIn, appLock } = readDeviceSession()
+                const returning = hasTokens || hasLoggedIn || !!me
+
+                // First-time device → Welcome (Continue + privacy)
+                if (!returning) {
+                  setStage('welcome')
+                  return
+                }
+
+                // Returning user with app lock → login (re-auth), skip Welcome entirely
+                if (appLock) {
+                  setStage('login')
+                  return
+                }
+
+                // Returning, app lock off
+                if (me || (hasTokens && ready)) {
+                  restored.current = true
+                  setStage('app')
+                  return
+                }
+
+                // Tokens / flag present but store still hydrating → loading, then auto-route
+                setStage('loading')
+              }}
+            />
           )}
           {stage === 'welcome' && (
             <Welcome onContinue={() => setStage('signup')} onLogin={() => setStage('login')} />
           )}
           {stage === 'login' && (
-            <Login onBack={() => setStage('welcome')} onSuccess={goApp} />
+            <Login
+              onBack={() => {
+                // Returning users (app lock or existing session) stay on login — no Welcome
+                const { hasLoggedIn, hasTokens, appLock } = readDeviceSession()
+                if (hasLoggedIn || hasTokens || me || appLock) return
+                setStage('welcome')
+              }}
+              onSuccess={goApp}
+            />
           )}
           {stage === 'signup' && (
             <Signup loading={submitting} onSubmit={afterPhone} onLogin={() => setStage('login')} onBack={() => setStage('welcome')} />
@@ -198,6 +280,8 @@ function Shell() {
               onContacts={() => setOverlay('contacts')}
               onSaveRequests={() => setOverlay('saveRequests')}
               onOpenStatus={(id) => id && setStatusUser(id)}
+              onNotifications={() => setOverlay('notifications')}
+              onSupport={() => setOverlay('support')}
             />
           </div>
           <div className={tab === 'groups' ? 'h-full' : 'hidden'}>
@@ -310,6 +394,26 @@ function Shell() {
                 setChat(id)
               }}
             />
+          </div>
+        )}
+
+        {overlay === 'notifications' && (
+          <div className="absolute inset-0 z-[25] bg-white">
+            <Notifications
+              onClose={() => setOverlay(null)}
+              onOpenSaveRequests={() => setOverlay('saveRequests')}
+              onOpenChat={(id) => {
+                setOverlay(null)
+                setTab('chats')
+                setChat(id)
+              }}
+            />
+          </div>
+        )}
+
+        {overlay === 'support' && (
+          <div className="absolute inset-0 z-[25] bg-white">
+            <Support onClose={() => setOverlay(null)} />
           </div>
         )}
 

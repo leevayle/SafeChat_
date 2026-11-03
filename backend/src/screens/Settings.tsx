@@ -147,24 +147,7 @@ export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: (
             {s.photo ? <img src={s.photo} alt="" className="h-24 w-24 rounded-full object-cover" /> : <Avatar contact={{ name: draft.name || '?', hue: ['#FF8C00', '#7B2CBF'], online: false }} size={96} />}
             <span className="absolute bottom-0 right-0 flex h-9 w-9 items-center justify-center rounded-full bg-brand-orange-2 text-white ring-4 ring-white"><Camera size={16} /></span>
           </button>
-          <input
-            ref={file}
-            type="file"
-            accept="image/*"
-            hidden
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              e.target.value = ''
-              if (!f || !f.type.startsWith('image/')) return
-              if (f.size > 2 * 1024 * 1024) {
-                setToast('Photo must be under 2MB')
-                return
-              }
-              const reader = new FileReader()
-              reader.onload = () => setSetting('photo', String(reader.result) as never)
-              reader.readAsDataURL(f)
-            }}
-          />
+          <input ref={file} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) setSetting('photo', URL.createObjectURL(f)) }} />
         </div>
         {[['Name', 'name', 30], ['Username', 'username', 20]].map(([l, k, m]) => (
           <label key={k as string} className="mb-3 block text-sm font-extrabold text-gray-500">{l}

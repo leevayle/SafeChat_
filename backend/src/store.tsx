@@ -179,10 +179,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         phone: user.phone,
         photo: user.photo,
         ...(s || {}),
-      }
+      } as Settings
       try {
         localStorage.setItem('sc_settings', JSON.stringify(next))
-      } catch { /* */ }
+        localStorage.setItem('sc_has_logged_in', '1')
+      } catch {
+        /* ignore */
+      }
       return next
     })
   }, [])
@@ -325,6 +328,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       /* */
     }
+    // Clear auth tokens/user but keep device preferences (appLock etc.) in sc_settings
+    // so a later login on this device still knows the user's lock preference.
     clearSession()
     setMe(null)
     setChats([])
@@ -332,7 +337,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setContacts([])
     setStatusList([])
     setCalls([])
-    setSettings(defaultSettings)
+    // Reset profile fields in memory; re-load device prefs from localStorage if present
+    try {
+      const raw = localStorage.getItem('sc_settings')
+      if (raw) {
+        const saved = JSON.parse(raw) as Partial<Settings>
+        setSettings({
+          ...defaultSettings,
+          appLock: !!saved.appLock,
+          twoStep: !!saved.twoStep,
+          msgNotif: saved.msgNotif ?? defaultSettings.msgNotif,
+          groupNotif: saved.groupNotif ?? defaultSettings.groupNotif,
+          callNotif: saved.callNotif ?? defaultSettings.callNotif,
+          sound: saved.sound || defaultSettings.sound,
+          language: saved.language || defaultSettings.language,
+          wallpaper: saved.wallpaper || defaultSettings.wallpaper,
+          fontSize: saved.fontSize || defaultSettings.fontSize,
+        })
+      } else {
+        setSettings(defaultSettings)
+      }
+    } catch {
+      setSettings(defaultSettings)
+    }
   }
 
   const meRef = useRef(me)

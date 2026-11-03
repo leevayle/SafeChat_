@@ -10,8 +10,10 @@ import {
   Contact,
   Settings,
   UserPlus,
+  Bell,
+  LifeBuoy,
 } from 'lucide-react'
-import { BrandMark } from '../components/AppHeaderLogo'
+import { Wordmark } from '../components/Logo'
 import { Avatar } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
 import { useStore } from '../store'
@@ -28,6 +30,8 @@ type Props = {
   onContacts: () => void
   onSaveRequests: () => void
   onOpenStatus: (userId: string) => void
+  onNotifications: () => void
+  onSupport: () => void
 }
 
 export function ChatsHome({
@@ -38,6 +42,8 @@ export function ChatsHome({
   onContacts,
   onSaveRequests,
   onOpenStatus,
+  onNotifications,
+  onSupport,
 }: Props) {
   const { chats, contacts, statusList, me } = useStore()
   const [filter, setFilter] = useState<Filter>('All chats')
@@ -140,17 +146,21 @@ export function ChatsHome({
 
   return (
     <div className="relative flex h-full flex-col bg-white">
-      <header className="relative flex min-h-16 shrink-0 items-center border-b border-gray-200 px-5 pt-[10px] pb-0">
-        <div className="flex h-11 w-full items-center">
+      <header className="relative flex min-h-16 shrink-0 items-center justify-between border-b pb-3 border-gray-200 px-5 pt-[20px]">
+        <div
+          className={`flex w-full items-center transition-all duration-200 ease-out  ${
+            searching ? 'opacity-100 ' : 'opacity-100 '
+          }`}
+        >
           {searching ? (
-            <div className="flex h-11 w-full items-center gap-2 rounded-full bg-gray-100 px-4">
+            <div className="flex h-11 w-full items-center gap-2 rounded-full bg-gray-100 px-4 transition-all duration-200">
               <Search size={18} className="shrink-0 text-brand-purple" />
               <input
                 autoFocus
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Search chats"
-                className="h-full w-full bg-transparent font-semibold outline-none"
+                className="w-full bg-transparent font-semibold outline-none"
               />
               <button
                 type="button"
@@ -165,8 +175,8 @@ export function ChatsHome({
               </button>
             </div>
           ) : (
-            <div className="flex h-11 w-full items-center justify-between">
-              <BrandMark />
+            <div className="flex w-full items-center justify-between">
+              <Wordmark className="text-2xl leading-none" />
               <div className="flex gap-1">
                 <IconBtn label="Search" onClick={() => setSearching(true)}>
                   <Search size={22} />
@@ -187,20 +197,17 @@ export function ChatsHome({
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.85 }}
                 style={{ transformOrigin: 'top right' }}
-                className="absolute right-4 top-14 z-30 w-56 rounded-2xl bg-white p-1.5 shadow-xl ring-1 ring-black/5"
+                className="absolute right-4 top-14 z-30 max-h-[min(70vh,420px)] w-56 overflow-y-auto rounded-2xl bg-white p-1.5 shadow-xl ring-1 ring-black/5"
               >
                 {(
                   [
                     { label: 'New chat', fn: onNewChat, Icon: MessageCirclePlus },
                     { label: 'New group', fn: onNewGroup, Icon: UsersRound },
                     { label: 'Contacts', fn: onContacts, Icon: Contact },
+                    { label: 'Save requests', fn: onSaveRequests, Icon: UserPlus, badge: pendingCount },
+                    { label: 'Notifications', fn: onNotifications, Icon: Bell },
+                    { label: 'Support', fn: onSupport, Icon: LifeBuoy },
                     { label: 'Settings', fn: onSettings, Icon: Settings },
-                    {
-                      label: 'Save requests',
-                      fn: onSaveRequests,
-                      Icon: UserPlus,
-                      badge: pendingCount,
-                    },
                   ] as const
                 ).map(({ label, fn, Icon, ...rest }) => {
                   const badge = 'badge' in rest ? (rest as { badge?: number }).badge : 0

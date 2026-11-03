@@ -369,98 +369,19 @@ export const api = {
   },
 
   me: async () => {
-    // Prefer /users/me for full privacy + notification settings
-    let data: any
-    try {
-      data = await req<any>('/api/v1/users/me')
-    } catch {
-      data = await req<any>('/api/v1/auth/me')
-    }
-    const privacy = data.privacy_settings || {}
-    const notif = data.notification_settings || {}
-    const whoMap: Record<string, string> = {
-      everyone: 'Everyone',
-      contacts: 'My contacts',
-      nobody: 'Nobody',
-    }
-    const settings: Record<string, unknown> = {
-      name: data.display_name || data.name,
-      username: data.username,
-      bio: data.bio || '',
-      phone: data.phone_number || data.phone || '',
-      photo: data.profile_photo ?? data.photo ?? null,
-      lastSeen: whoMap[privacy.last_seen] || privacy.last_seen || 'Everyone',
-      profilePhoto: whoMap[privacy.profile_photo] || privacy.profile_photo || 'Everyone',
-      about: whoMap[privacy.status] || privacy.status || 'Everyone',
-      readReceipts: privacy.read_receipts !== false,
-      notifMessage: notif.messages !== false,
-      notifGroup: notif.groups !== false,
-      notifCall: notif.calls !== false,
-      notifStatus: notif.statuses !== false,
-      notifSecurity: notif.security !== false,
-    }
-    return { user: mapUser(data), settings }
+    const data = await req<any>('/api/v1/auth/me')
+    return { user: mapUser(data), settings: {} as Record<string, unknown> }
   },
 
   updateMe: async (body: Record<string, unknown>) => {
-    const profile: Record<string, unknown> = {}
-    if (body.name !== undefined) profile.display_name = body.name
-    if (body.display_name !== undefined) profile.display_name = body.display_name
-    if (body.bio !== undefined) profile.bio = body.bio
-    if (body.photo !== undefined) profile.profile_photo = body.photo
-    if (body.profile_photo !== undefined) profile.profile_photo = body.profile_photo
-    if (Object.keys(profile).length) {
-      await req<any>('/api/v1/users/me', {
-        method: 'PATCH',
-        body: JSON.stringify(profile),
-      })
-    }
-
-    const privacy: Record<string, unknown> = {}
-    const toApiWho = (v: unknown) => {
-      const s = String(v || '').toLowerCase()
-      if (s.includes('nobody')) return 'nobody'
-      if (s.includes('contact')) return 'contacts'
-      return 'everyone'
-    }
-    if (body.lastSeen !== undefined) privacy.last_seen = toApiWho(body.lastSeen)
-    if (body.profilePhoto !== undefined && typeof body.profilePhoto === 'string' && ['Everyone', 'My contacts', 'Nobody'].includes(body.profilePhoto)) {
-      privacy.profile_photo = toApiWho(body.profilePhoto)
-    }
-    if (body.about !== undefined) privacy.status = toApiWho(body.about)
-    if (body.readReceipts !== undefined) privacy.read_receipts = !!body.readReceipts
-    // Nested settings bag from setSetting
-    if (body.settings && typeof body.settings === 'object') {
-      const s = body.settings as Record<string, unknown>
-      if (s.lastSeen !== undefined) privacy.last_seen = toApiWho(s.lastSeen)
-      if (s.profilePhoto !== undefined) privacy.profile_photo = toApiWho(s.profilePhoto)
-      if (s.about !== undefined) privacy.status = toApiWho(s.about)
-      if (s.readReceipts !== undefined) privacy.read_receipts = !!s.readReceipts
-    }
-    if (Object.keys(privacy).length) {
-      await req<any>('/api/v1/users/me/privacy', {
-        method: 'PATCH',
-        body: JSON.stringify(privacy),
-      })
-    }
-
-    const notif: Record<string, unknown> = {}
-    const mapNotif = (src: Record<string, unknown>) => {
-      if (src.notifMessage !== undefined) notif.messages = !!src.notifMessage
-      if (src.notifGroup !== undefined) notif.groups = !!src.notifGroup
-      if (src.notifCall !== undefined) notif.calls = !!src.notifCall
-      if (src.notifStatus !== undefined) notif.statuses = !!src.notifStatus
-      if (src.notifSecurity !== undefined) notif.security = !!src.notifSecurity
-    }
-    mapNotif(body)
-    if (body.settings && typeof body.settings === 'object') mapNotif(body.settings as Record<string, unknown>)
-    if (Object.keys(notif).length) {
-      await req<any>('/api/v1/users/me/notifications', {
-        method: 'PATCH',
-        body: JSON.stringify(notif),
-      })
-    }
-
+    const payload: Record<string, unknown> = {}
+    if (body.name !== undefined) payload.display_name = body.name
+    if (body.display_name !== undefined) payload.display_name = body.display_name
+    if (body.bio !== undefined) payload.bio = body.bio
+    await req<any>('/api/v1/users/me', {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    })
     return api.me()
   },
 

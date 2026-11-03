@@ -233,7 +233,7 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
           type="button"
           aria-label="Video call"
           onClick={() => onCall('video')}
-          className="flex h-10 w-10 items-center justify-center rounded-full text-brand-purple hover:bg-brand-purple/10"
+          className="flex h-10 w-10 m-r-2 items-center justify-center rounded-full text-brand-purple hover:bg-brand-purple/10"
         >
           <Video size={22} />
         </button>
@@ -293,17 +293,21 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
                         minute: '2-digit',
                         hour12: false,
                       })}
-                    {mine && (
-                      <span className="inline-flex items-center" title={m.state || 'sent'}>
-                        {m.state === 'read' && settings.readReceipts !== false ? (
-                          <CheckCheck size={15} strokeWidth={2.6} className="text-sky-300" aria-label="Read" />
-                        ) : m.state === 'delivered' || m.state === 'read' ? (
-                          <CheckCheck size={15} strokeWidth={2.6} className="text-white/80" aria-label="Delivered" />
-                        ) : (
-                          <Check size={15} strokeWidth={2.6} className="text-white/70" aria-label="Sent" />
-                        )}
-                      </span>
-                    )}
+                    {mine &&
+                      (m.state === 'sent' ? (
+                        <Check size={14} strokeWidth={2.5} aria-label="Sent" />
+                      ) : m.state === 'delivered' ? (
+                        <CheckCheck size={14} strokeWidth={2.5} className="opacity-90" aria-label="Delivered" />
+                      ) : (
+                        <CheckCheck
+                          size={14}
+                          strokeWidth={2.5}
+                          className={
+                            settings.readReceipts !== false ? 'text-sky-300' : 'opacity-90'
+                          }
+                          aria-label="Read"
+                        />
+                      ))}
                   </p>
                 </div>
               </motion.div>
