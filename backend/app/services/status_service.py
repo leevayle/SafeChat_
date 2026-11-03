@@ -85,12 +85,13 @@ class StatusService:
 
         # Own statuses + contacts
         owner_filter = {"$in": contact_ids + [viewer_id]}
+        # Oldest first so viewers play statuses chronologically (like WhatsApp)
         cursor = db.statuses.find(
             {
                 "owner_user_id": owner_filter,
                 "expires_at": {"$gt": now},
             }
-        ).sort("created_at", -1)
+        ).sort("created_at", 1)
 
         results = []
         async for s in cursor:
@@ -113,7 +114,7 @@ class StatusService:
 
         cursor = db.statuses.find(
             {"owner_user_id": owner_id, "expires_at": {"$gt": now}}
-        ).sort("created_at", -1)
+        ).sort("created_at", 1)
         results = []
         async for s in cursor:
             if await StatusService._can_view(s, viewer_id, contact_ids):

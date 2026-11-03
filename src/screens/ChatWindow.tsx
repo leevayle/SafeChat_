@@ -39,19 +39,42 @@ function fileToDataUrl(file: File): Promise<string> {
 
 function ChatWindowInner({ contactId, onBack, onCall }: Props) {
   const { settings, contacts, chats, me, refreshChats, showToast, upsertChatPreview } = useStore()
-  const c = contacts.find((x) => x.id === contactId || x.peerId === contactId) || {
-    id: contactId,
-    name: contactId,
-    username: '',
-    phone: '',
-    bio: '',
-    photo: null,
-    online: false,
-    hue: ['#7B2CBF', '#6389EB'] as [string, string],
-  }
+  // Resolve peer from contacts, or from an existing chat preview (notifications may pass contactId)
+  const chatPreview =
+    chats.find(
+      (ch) =>
+        ch.contactId === contactId ||
+        ch.conversationId === contactId,
+    ) || null
+  const peerId = chatPreview?.contactId || contactId
+  const c =
+    contacts.find((x) => x.id === peerId || x.peerId === peerId) ||
+    (chatPreview
+      ? {
+          id: peerId,
+          name: chatPreview.name || peerId,
+          username: '',
+          phone: '',
+          bio: '',
+          photo: null,
+          online: false,
+          hue: (chatPreview.hue as [string, string]) || (['#7B2CBF', '#6389EB'] as [string, string]),
+        }
+      : {
+          id: peerId,
+          name: peerId,
+          username: '',
+          phone: '',
+          bio: '',
+          photo: null,
+          online: false,
+          hue: ['#7B2CBF', '#6389EB'] as [string, string],
+        })
   const knownConv =
-    chats.find((ch) => ch.contactId === contactId || ch.contactId === (c as any).peerId)
-      ?.conversationId || null
+    chatPreview?.conversationId ||
+    chats.find((ch) => ch.contactId === peerId || ch.contactId === (c as any).peerId)
+      ?.conversationId ||
+    null
   const [conversationId, setConversationId] = useState<string | null>(knownConv)
   const [msgs, setMsgs] = useState<ApiMsg[]>([])
   const [text, setText] = useState('')
@@ -68,9 +91,24 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
   const ensureConversation = async (): Promise<string | null> => {
     if (convRef.current) return convRef.current
     if (ensurePromise.current) return ensurePromise.current
-    const username = (c as any).username
+
+    // Prefer existing conversation from chat list (works even without username)
+    const fromList =
+      chats.find(
+        (ch) =>
+          ch.contactId === peerId ||
+          ch.contactId === (c as any).peerId ||
+          ch.conversationId === contactId,
+      )?.conversationId || null
+    if (fromList) {
+      setConversationId(fromList)
+      convRef.current = fromList
+      return fromList
+    }
+
+    const username = ((c as any).username || '').replace(/^@/, '').trim()
     if (!username) {
-      showToast('Contact has no username — cannot open chat')
+      showToast('Could not open chat — contact is missing')
       return null
     }
     ensurePromise.current = (async () => {
@@ -80,8 +118,19 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
         if (cid) {
           setConversationId(cid)
           convRef.current = cid
+          upsertChatPreview({
+            contactId: peerId,
+            conversationId: cid,
+            name: preview.name || (c as any).name,
+            last: preview.last,
+            iso: preview.iso,
+            unread: 0,
+          })
         }
         return cid
+      } catch (e: any) {
+        showToast(e?.message || 'Could not open chat')
+        return null
       } finally {
         ensurePromise.current = null
       }

@@ -85,11 +85,16 @@ export function ChatsHome({
     }
   }
 
-  /** status counts per user: total + how many I've viewed */
+  /** status counts per user: total + how many I've viewed (active only) */
   const statusMeta = useMemo(() => {
     const map: Record<string, { total: number; viewed: number }> = {}
+    const now = Date.now()
     for (const s of statusList) {
       if (s.userId === me?.id) continue
+      if (s.expiresAt) {
+        const t = Date.parse(s.expiresAt)
+        if (!Number.isNaN(t) && t <= now) continue
+      }
       if (!map[s.userId]) map[s.userId] = { total: 0, viewed: 0 }
       map[s.userId].total++
       if (Array.isArray(s.views) && me && s.views.includes(me.id)) map[s.userId].viewed++
@@ -127,8 +132,13 @@ export function ChatsHome({
 
   const statusUsers = useMemo(() => {
     const byUser = new Map<string, any>()
+    const now = Date.now()
     for (const s of statusList) {
       if (!s.userId || s.userId === me?.id) continue
+      if (s.expiresAt) {
+        const t = Date.parse(s.expiresAt)
+        if (!Number.isNaN(t) && t <= now) continue
+      }
       const contact = contacts.find((c) => c.id === s.userId || c.peerId === s.userId)
       const existing = byUser.get(s.userId)
       if (existing) continue
@@ -146,7 +156,7 @@ export function ChatsHome({
 
   return (
     <div className="relative flex h-full flex-col bg-white">
-      <header className="relative flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 px-5 pt-[10px]">
+      <header className="relative flex min-h-16 shrink-0 items-center justify-between border-b pb-3 border-gray-200 px-5 pt-[20px]">
         <div
           className={`flex w-full items-center transition-all duration-200 ease-out  ${
             searching ? 'opacity-100 ' : 'opacity-100 '

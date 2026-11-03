@@ -224,7 +224,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshStatus = useCallback(async () => {
     try {
       const { status } = await api.status()
-      setStatusList((prev) => (JSON.stringify(prev) === JSON.stringify(status) ? prev : status))
+      const now = Date.now()
+      // Drop expired; keep chronological order (oldest → newest)
+      const active = (status || [])
+        .filter((s: any) => {
+          if (!s?.expiresAt) return true
+          const t = Date.parse(s.expiresAt)
+          return Number.isNaN(t) || t > now
+        })
+        .slice()
+        .sort((a: any, b: any) => {
+          const ta = a.createdAt ? Date.parse(a.createdAt) : 0
+          const tb = b.createdAt ? Date.parse(b.createdAt) : 0
+          return ta - tb
+        })
+      setStatusList((prev) => (JSON.stringify(prev) === JSON.stringify(active) ? prev : active))
     } catch {
       /* */
     }

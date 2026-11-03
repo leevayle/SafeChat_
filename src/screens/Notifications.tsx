@@ -12,6 +12,9 @@ type Notif = {
   body: string
   time: string
   unread?: boolean
+  /** Peer user id — required to open a chat */
+  contactId?: string
+  conversationId?: string
 }
 
 type Props = {
@@ -48,14 +51,16 @@ export function Notifications({ onClose, onOpenSaveRequests, onOpenChat }: Props
           /* offline */
         }
         for (const c of chats) {
-          if (c.unread > 0) {
+          if (c.unread > 0 && c.contactId) {
             notifs.push({
-              id: `chat-${c.conversationId || c.contactId}`,
+              id: `chat-${c.contactId}`,
               type: 'message',
               title: c.name || 'Chat',
               body: c.last || 'New message',
               time: c.iso || '',
               unread: true,
+              contactId: c.contactId,
+              conversationId: c.conversationId,
             })
           }
         }
@@ -125,11 +130,17 @@ export function Notifications({ onClose, onOpenSaveRequests, onOpenChat }: Props
                 <button
                   type="button"
                   onClick={() => {
-                    if (n.type === 'request') onOpenSaveRequests?.()
-                    else if (n.type === 'message' && n.id.startsWith('chat-')) {
-                      const id = n.id.replace(/^chat-/, '')
-                      onOpenChat?.(id)
+                    if (n.type === 'request') {
+                      onOpenSaveRequests?.()
+                      return
                     }
+                    if (n.type === 'message') {
+                      // Always open by contact/peer id (ChatWindow expects contactId)
+                      const peerId = n.contactId || (n.id.startsWith('chat-') ? n.id.replace(/^chat-/, '') : '')
+                      if (peerId) onOpenChat?.(peerId)
+                      return
+                    }
+                    // system / call: no deep-link yet
                   }}
                   className={`flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left hover:bg-gray-50 ${
                     n.unread ? 'bg-brand-purple/5' : ''

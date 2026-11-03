@@ -56,7 +56,20 @@ type ViewerRow = { id: string; username: string; name: string; photo: string | n
 
 export function StatusViewer({ userId, onClose }: Props) {
   const { statusList, refreshStatus, showToast, patchStatusList, me } = useStore()
-  const items = statusList.filter((s) => s.userId === userId)
+  // Only non-expired statuses for this user, oldest first (play order)
+  const items = statusList
+    .filter((s) => {
+      if (s.userId !== userId) return false
+      if (!s.expiresAt) return true
+      const t = Date.parse(s.expiresAt)
+      return Number.isNaN(t) || t > Date.now()
+    })
+    .slice()
+    .sort((a, b) => {
+      const ta = a.createdAt ? Date.parse(a.createdAt) : 0
+      const tb = b.createdAt ? Date.parse(b.createdAt) : 0
+      return ta - tb
+    })
   const [idx, setIdx] = useState(0)
   const [paused, setPaused] = useState(false)
   const [progress, setProgress] = useState(0)

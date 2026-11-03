@@ -31,8 +31,13 @@ export function StatusTab({ onOpenStatus }: Props) {
   const [statusSettings, setStatusSettings] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  const mine = statusList.filter((s) => s.userId === me?.id)
-  const others = statusList.filter((s) => s.userId !== me?.id)
+  const isActive = (s: any) => {
+    if (!s?.expiresAt) return true
+    const t = Date.parse(s.expiresAt)
+    return Number.isNaN(t) || t > Date.now()
+  }
+  const mine = statusList.filter((s) => s.userId === me?.id && isActive(s))
+  const others = statusList.filter((s) => s.userId !== me?.id && isActive(s))
 
   /** one row per user — segment ring by status count (same as chats home) */
   const recentUsers = useMemo(() => {
@@ -76,12 +81,15 @@ export function StatusTab({ onOpenStatus }: Props) {
     const body = text.trim()
     const img = image
     const localId = `local-status-${Date.now()}`
+    const createdAt = new Date().toISOString()
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
     const optimistic = {
       id: localId,
       userId: me?.id || '',
       text: body,
       image: img,
-      createdAt: new Date().toISOString(),
+      createdAt,
+      expiresAt,
       type: img ? 'image' : 'text',
       views: [] as string[],
       user: me
@@ -97,8 +105,8 @@ export function StatusTab({ onOpenStatus }: Props) {
       pending: true,
     }
 
-    // UI first — show in My status immediately
-    patchStatusList((list) => [optimistic, ...list])
+    // UI first — append at end (oldest → newest)
+    patchStatusList((list) => [...list, optimistic])
     setText('')
     setImage(null)
     setComposing(false)

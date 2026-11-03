@@ -610,7 +610,20 @@ export const api = {
 
   status: async () => {
     const list = await req<any[]>('/api/v1/statuses/feed')
-    return { status: (list || []).map(mapStatus) }
+    const now = Date.now()
+    const mapped = (list || [])
+      .map(mapStatus)
+      .filter((s: any) => {
+        if (!s.expiresAt) return true
+        const t = Date.parse(s.expiresAt)
+        return Number.isNaN(t) || t > now
+      })
+      .sort((a: any, b: any) => {
+        const ta = a.createdAt ? Date.parse(a.createdAt) : 0
+        const tb = b.createdAt ? Date.parse(b.createdAt) : 0
+        return ta - tb // oldest first
+      })
+    return { status: mapped }
   },
 
   postStatus: async (text: string, image?: string | null) => {
