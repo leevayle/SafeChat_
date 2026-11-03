@@ -46,7 +46,7 @@ async def create_indexes() -> None:
 
     # users
     await database.users.create_index("username", unique=True)
-    await database.users.create_index("email", unique=True, sparse=True)
+    await database.users.create_index("email", unique=False, sparse=True)     #THIS IS WHAT I CHANGED INCASE IT DOESN'T WORK IN FUTURE
     await database.users.create_index("phone_number", unique=True, sparse=True)
     await database.users.create_index("account_status")
     await database.users.create_index("last_seen")
