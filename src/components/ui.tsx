@@ -42,25 +42,28 @@ export function OptionList({ options, value, onPick }: { options: string[]; valu
 }
 
 export function Toast({ msg, clear }: { msg: string | null; clear: () => void }) {
+  // Auto-dismiss is owned by the store timer; this is a safety net if clear is delayed
   useEffect(() => {
     if (!msg) return
-    const t = setTimeout(() => clear(), 2200)
+    const t = setTimeout(() => clear(), 2800)
     return () => clearTimeout(t)
   }, [msg, clear])
   return (
     <AnimatePresence mode="wait">
-      {msg && (
+      {msg ? (
         <motion.div
-          key={msg}
-          initial={{ y: 30, opacity: 0 }}
+          key={String(msg)}
+          initial={{ y: 28, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
-          exit={{ y: 30, opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="pointer-events-none absolute inset-x-0 bottom-24 z-[80] flex justify-center"
+          exit={{ y: 20, opacity: 0 }}
+          transition={{ duration: 0.22 }}
+          className="pointer-events-none absolute inset-x-0 bottom-24 z-[80] flex justify-center px-4"
         >
-          <span className="rounded-full bg-ink px-5 py-2.5 text-sm font-bold text-white shadow-xl">{msg}</span>
+          <span className="max-w-[90%] rounded-full bg-ink px-5 py-2.5 text-center text-sm font-bold text-white shadow-xl">
+            {msg}
+          </span>
         </motion.div>
-      )}
+      ) : null}
     </AnimatePresence>
   )
 }

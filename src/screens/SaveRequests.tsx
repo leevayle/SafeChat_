@@ -27,13 +27,19 @@ type Props = {
 function timeAgo(iso: string) {
   if (!iso) return ''
   try {
-    const d = new Date(iso)
+    // Treat naive timestamps from the API as UTC
+    let raw = iso.trim()
+    if (raw && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)) {
+      raw = raw.includes('T') ? `${raw}Z` : `${raw.replace(' ', 'T')}Z`
+    }
+    const d = new Date(raw)
+    if (isNaN(d.getTime())) return ''
     const sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000))
-    if (sec < 60) return 'just now'
+    if (sec < 45) return 'just now'
     if (sec < 3600) return `${Math.floor(sec / 60)}m ago`
     if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`
     if (sec < 604800) return `${Math.floor(sec / 86400)}d ago`
-    return d.toLocaleDateString()
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
   } catch {
     return ''
   }

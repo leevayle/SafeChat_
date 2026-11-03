@@ -20,7 +20,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const [edit, setEdit] = useState<ApiContact | null>(null)
   const [draft, setDraft] = useState({ savedName: '', note: '', phone: '' })
   const [adding, setAdding] = useState(false)
-  const [addForm, setAddForm] = useState({ username: '', phone: '', savedName: '' })
+  const [addForm, setAddForm] = useState({ username: '', phone: '', savedName: '', sharePhone: true })
   const [searchHits, setSearchHits] = useState<any[]>([])
   const [busy, setBusy] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -45,11 +45,13 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
     setDraft({ savedName: c.savedName || c.name, note: c.note || '', phone: c.phone })
   }
 
+  const contactKey = (c: ApiContact) => c.peerId || c.id
+
   const saveEdit = async () => {
     if (!edit) return
     setBusy(true)
     try {
-      await api.updateContact(edit.entryId, {
+      await api.updateContact(contactKey(edit), {
         savedName: draft.savedName,
         note: draft.note,
         phone: draft.phone,
@@ -81,7 +83,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
 
   const toggleFav = async (c: ApiContact) => {
     try {
-      await api.updateContact(c.entryId, { favourite: !c.favourite })
+      await api.updateContact(contactKey(c), { favourite: !c.favourite })
       await refreshContacts()
       showToast(c.favourite ? 'Removed from favourites' : 'Added to favourites')
     } catch {
@@ -106,16 +108,21 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const addContact = async (peer?: { id: string; username: string; phone: string; name: string }) => {
     setBusy(true)
     try {
+      const username = (peer?.username || addForm.username || '').replace(/^@/, '').trim()
+      if (!username) {
+        showToast('Enter a username to send a save request')
+        return
+      }
       const res = await api.addContact({
         peerId: peer?.id,
-        username: peer?.username || addForm.username || undefined,
-        phone: peer?.phone || addForm.phone || undefined,
-        savedName: addForm.savedName || peer?.name || peer?.username || addForm.username,
+        username,
+        savedName: addForm.savedName || peer?.name || username,
+        sharePhone: addForm.sharePhone,
       })
       await refreshContacts()
       showToast(res.pending ? 'Save request sent' : 'Contact saved')
       setAdding(false)
-      setAddForm({ username: '', phone: '', savedName: '' })
+      setAddForm({ username: '', phone: '', savedName: '', sharePhone: true })
       setSearchHits([])
     } catch (e: any) {
       showToast(e?.message || 'Could not add contact')
@@ -193,7 +200,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
             </button>
             <button
               type="button"
-              onClick={() => setDeleteId(c.entryId)}
+              onClick={() => setDeleteId(c.peerId || c.id)}
               className="rounded-full p-2 text-brand-red hover:bg-red-50"
               aria-label="Delete"
             >
@@ -211,7 +218,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
             <label className="block text-xs font-extrabold text-gray-500">Username on SafeChat</label>
             <input
               value={addForm.username}
-              onChange={(e) => runSearch(e.target.value)}
+              onChange={(e) => runSearch(e.target.value.replace(/^@/, ''))}
               placeholder="@username"
               className="w-full rounded-2xl border border-gray-200 px-4 py-3 font-semibold outline-none focus:border-brand-purple"
             />
@@ -235,22 +242,40 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
                 ))}
               </ul>
             )}
-            <label className="block text-xs font-extrabold text-gray-500">Or phone number</label>
-            <input
-              value={addForm.phone}
-              onChange={(e) => setAddForm((f) => ({ ...f, phone: e.target.value }))}
-              placeholder="+254…"
-              className="w-full rounded-2xl border border-gray-200 px-4 py-3 font-semibold outline-none focus:border-brand-purple"
-            />
-            <label className="block text-xs font-extrabold text-gray-500">Save as (your private name)</label>
+            <label className="block text-xs font-extrabold text-gray-500">Save as (only you see this)</label>
             <input
               value={addForm.savedName}
               onChange={(e) => setAddForm((f) => ({ ...f, savedName: e.target.value }))}
               placeholder="How you want to see them"
               className="w-full rounded-2xl border border-gray-200 px-4 py-3 font-semibold outline-none focus:border-brand-purple"
             />
-            <PillButton onClick={() => addContact()} disabled={busy || (!addForm.username && !addForm.phone)}>
-              {busy ? 'Saving…' : 'Save contact'}
+            <button
+              type="button"
+              onClick={() => setAddForm((f) => ({ ...f, sharePhone: !f.sharePhone }))}
+              className="flex w-full items-center justify-between rounded-2xl border border-gray-200 px-4 py-3 text-left"
+            >
+              <div>
+                <p className="text-sm font-extrabold text-ink">Share my phone number</p>
+                <p className="text-xs font-semibold text-gray-500">
+                  {addForm.sharePhone
+                    ? 'They will see your number after accepting'
+                    : 'Only your username is shared'}
+                </p>
+              </div>
+              <span
+                className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+                  addForm.sharePhone ? 'bg-brand-purple' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all ${
+                    addForm.sharePhone ? 'right-0.5' : 'left-0.5'
+                  }`}
+                />
+              </span>
+            </button>
+            <PillButton onClick={() => addContact()} disabled={busy || !addForm.username.trim()}>
+              {busy ? 'Sending…' : 'Send save request'}
             </PillButton>
           </div>
         </div>

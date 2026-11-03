@@ -395,21 +395,29 @@ export const api = {
     return { users: (list || []).map(mapUser) }
   },
 
-  addContact: async (body: { username?: string; peerId?: string; savedName?: string; message?: string }) => {
+  addContact: async (body: {
+    username?: string
+    peerId?: string
+    savedName?: string
+    message?: string
+    sharePhone?: boolean
+  }) => {
     if (!body.username) throw new Error('Username required to add contact')
     const data = await req<any>('/api/v1/contacts/requests', {
       method: 'POST',
       body: JSON.stringify({
-        to_username: body.username,
+        to_username: body.username.replace(/^@/, '').toLowerCase(),
         message: body.message || body.savedName || undefined,
+        share_phone: !!body.sharePhone,
       }),
     })
     // Mutual auto-accept may already create the contact
     const r = await api.contacts()
+    const uname = body.username.replace(/^@/, '').toLowerCase()
     return {
       request: data,
-      contact: r.contacts.find((c) => c.username === body.username) || null,
-      pending: !r.contacts.find((c) => c.username === body.username),
+      contact: r.contacts.find((c) => c.username === uname) || null,
+      pending: !r.contacts.find((c) => c.username === uname),
     }
   },
 
@@ -463,21 +471,24 @@ export const api = {
     return { ok: true, data }
   },
 
-  updateContact: async (entryId: string, body: Record<string, unknown>) => {
+  updateContact: async (contactUserId: string, body: Record<string, unknown>) => {
+    // Backend paths use contact_user_id (peer), not the contact document _id
     if (body.savedName !== undefined || body.nickname !== undefined) {
-      await req(`/api/v1/contacts/${entryId}/nickname`, {
+      await req(`/api/v1/contacts/${contactUserId}/nickname`, {
         method: 'PATCH',
         body: JSON.stringify({ nickname: body.savedName ?? body.nickname }),
       })
     }
     const r = await api.contacts()
     return {
-      contact: r.contacts.find((c) => c.entryId === entryId || c.peerId === entryId)!,
+      contact: r.contacts.find(
+        (c) => c.peerId === contactUserId || c.id === contactUserId || c.entryId === contactUserId,
+      )!,
     }
   },
 
-  deleteContact: async (entryId: string) => {
-    await req(`/api/v1/contacts/${entryId}`, { method: 'DELETE' })
+  deleteContact: async (contactUserId: string) => {
+    await req(`/api/v1/contacts/${contactUserId}`, { method: 'DELETE' })
     return { ok: true }
   },
 

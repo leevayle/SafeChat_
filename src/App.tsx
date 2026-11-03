@@ -42,6 +42,8 @@ function Shell() {
   const [stage, setStage] = useState<Stage>('splash')
   const [submitting, setSubmitting] = useState(false)
   const [username, setUsername] = useState('')
+  const [donePhase, setDonePhase] = useState<'setup' | 'success' | 'error'>('setup')
+  const [doneError, setDoneError] = useState('')
   const [pendingReg, setPendingReg] = useState<{ phone: string; countryCode: string } | null>(null)
   const [tab, setTab] = useState<Tab>('chats')
   const [chat, setChat] = useState<string | null>(null)
@@ -146,13 +148,36 @@ function Shell() {
             <Profile
               phone={pendingReg.phone}
               countryCode={pendingReg.countryCode}
+              onBack={() => setStage('signup')}
+              onSubmitStart={() => {
+                setDonePhase('setup')
+                setDoneError('')
+                setStage('done')
+              }}
               onDone={(n) => {
                 setUsername(n)
+                setDonePhase('success')
+              }}
+              onError={(msg) => {
+                setDoneError(msg)
+                setDonePhase('error')
                 setStage('done')
               }}
             />
           )}
-          {stage === 'done' && <AlmostDone name={username} onEnter={goApp} />}
+          {stage === 'done' && (
+            <AlmostDone
+              name={username}
+              phase={donePhase}
+              errorMessage={doneError}
+              onEnter={goApp}
+              onRetry={() => {
+                setDonePhase('setup')
+                setDoneError('')
+                setStage('profile')
+              }}
+            />
+          )}
         </main>
       </div>
     )

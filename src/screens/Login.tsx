@@ -33,10 +33,10 @@ export function Login({ onBack, onSuccess }: { onBack: () => void; onSuccess: ()
       <button
         type="button"
         onClick={onBack}
-        className="mt-4 flex h-10 w-10 items-center justify-center rounded-full hover:bg-gray-100"
+        className="mt-4 flex h-11 w-11 items-center justify-center rounded-full bg-white text-ink shadow-sm ring-1 ring-gray-200/80 transition hover:bg-gray-50 active:scale-95"
         aria-label="Back"
       >
-        <ArrowLeft size={22} />
+        <ArrowLeft size={22} strokeWidth={2.25} />
       </button>
 
       <motion.div

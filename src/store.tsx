@@ -112,6 +112,7 @@ type Store = {
     name?: string
     password: string
     bio?: string
+    email?: string
     photo?: string | null
   }) => Promise<ApiUser>
   logout: () => Promise<void>
@@ -139,10 +140,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [statusList, setStatusList] = useState<any[]>([])
   const [calls, setCalls] = useState<any[]>([])
   const [toast, setToast] = useState<string | null>(null)
-  const showToast = useCallback((msg: string) => {
-    setToast(msg)
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clearToast = useCallback(() => {
+    if (toastTimer.current) {
+      clearTimeout(toastTimer.current)
+      toastTimer.current = null
+    }
+    setToast(null)
   }, [])
-  const clearToast = useCallback(() => setToast(null), [])
+  const showToast = useCallback((msg: string) => {
+    if (toastTimer.current) {
+      clearTimeout(toastTimer.current)
+      toastTimer.current = null
+    }
+    setToast(msg)
+    toastTimer.current = setTimeout(() => {
+      setToast(null)
+      toastTimer.current = null
+    }, 2500)
+  }, [])
 
   const applyUser = useCallback((user: ApiUser, s?: Record<string, unknown>) => {
     setMe(user)
@@ -263,6 +279,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     name?: string
     password: string
     bio?: string
+    email?: string
     photo?: string | null
   }) => {
     await api.register({
@@ -270,6 +287,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       display_name: data.name || data.username,
       password: data.password,
       phone_number: data.phone ? `${data.countryCode || ''}${data.phone}` : undefined,
+      email: data.email || undefined,
     })
     // Auto-login after register
     const { access_token, refresh_token, user } = await api.login({

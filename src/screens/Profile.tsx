@@ -8,16 +8,23 @@ import { useStore } from '../store'
 type Props = {
   phone: string
   countryCode: string
+  onBack?: () => void
+  /** Called immediately when user submits — parent shows setup screen */
+  onSubmitStart?: () => void
+  /** Success with username/display for welcome */
   onDone: (name: string) => void
+  /** Registration failed with a user-facing message */
+  onError?: (message: string) => void
 }
 
-export function Profile({ phone, countryCode, onDone }: Props) {
+export function Profile({ phone, countryCode, onBack, onSubmitStart, onDone, onError }: Props) {
   const { register } = useStore()
   const [photo, setPhoto] = useState<string | null>(null)
   const [sheet, setSheet] = useState(false)
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [password, setPassword] = useState('')
+  const [email, setEmail] = useState('')
   const [bio, setBio] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -29,6 +36,7 @@ export function Profile({ phone, countryCode, onDone }: Props) {
     if (f) setPhoto(URL.createObjectURL(f))
     setSheet(false)
   }
+
   const valid =
     username.trim().length >= 3 &&
     displayName.trim().length >= 1 &&
@@ -38,6 +46,7 @@ export function Profile({ phone, countryCode, onDone }: Props) {
     if (!valid || busy) return
     setBusy(true)
     setError('')
+    onSubmitStart?.()
     try {
       const user = await register({
         phone,
@@ -45,28 +54,53 @@ export function Profile({ phone, countryCode, onDone }: Props) {
         username: username.trim().toLowerCase().replace(/^@/, ''),
         name: displayName.trim(),
         password,
+        email: email.trim() || undefined,
         bio: bio.trim() || 'Hey there! I am using SafeChat.',
         photo,
       })
-      onDone(user.username)
+      onDone(user.username || displayName.trim())
     } catch (e: any) {
-      setError(e.message || 'Could not create account')
+      const msg =
+        e?.message ||
+        (typeof e === 'string' ? e : '') ||
+        'Could not create account. Check your details and try again.'
+      setError(msg)
       setBusy(false)
+      onError?.(msg)
     }
   }
 
   return (
     <div className="relative flex h-full flex-col px-6 safe-pt safe-pb sm:px-8">
       <div className="flex items-center justify-between pt-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-brand-orange via-brand-magenta to-brand-purple">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M12 3C7 3 3 6.6 3 11c0 2.3 1.1 4.4 2.9 5.9L4.5 21l4.2-1.8c1 .2 2.1.3 3.3.3 5 0 9-3.6 9-8s-4-8-9-8Z"
-              fill="white"
-              opacity="0.95"
-            />
-          </svg>
-        </div>
+        {onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-ink shadow-sm ring-1 ring-gray-200/80 transition hover:bg-gray-50 active:scale-95"
+            aria-label="Back"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
+              <path
+                d="M15 18l-6-6 6-6"
+                stroke="currentColor"
+                strokeWidth="2.25"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        ) : (
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-brand-orange via-brand-magenta to-brand-purple">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <path
+                d="M12 3C7 3 3 6.6 3 11c0 2.3 1.1 4.4 2.9 5.9L4.5 21l4.2-1.8c1 .2 2.1.3 3.3.3 5 0 9-3.6 9-8s-4-8-9-8Z"
+                fill="white"
+                opacity="0.95"
+              />
+            </svg>
+          </div>
+        )}
         <ProgressDots step={3} />
       </div>
 
@@ -75,10 +109,13 @@ export function Profile({ phone, countryCode, onDone }: Props) {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
       >
-        Tell us more<br /><span className="text-brand-purple">About</span> <span className="text-brand-red">yourself!</span>
+        Tell us more
+        <br />
+        <span className="text-brand-purple">About</span>{' '}
+        <span className="text-brand-red">yourself!</span>
       </motion.h2>
       <p className="mt-1.5 text-sm font-semibold text-gray-500">
-        Choose a username and password to secure your account.
+        Username is required — it&apos;s how people find and save you on SafeChat.
       </p>
 
       <div className="mt-6 flex justify-center">
@@ -102,7 +139,7 @@ export function Profile({ phone, countryCode, onDone }: Props) {
 
       <div className="mt-6 space-y-3 overflow-y-auto no-scrollbar pb-2">
         <div>
-          <label className="mb-1 block text-xs font-bold text-gray-500">Username</label>
+          <label className="mb-1 block text-xs font-bold text-gray-500">Username (required)</label>
           <div className="flex h-11 items-center rounded-full bg-gray-100 px-4">
             <span className="mr-1 font-bold text-brand-purple">@</span>
             <input
@@ -132,6 +169,17 @@ export function Profile({ phone, countryCode, onDone }: Props) {
             onChange={(e) => setPassword(e.target.value)}
             placeholder="••••••••"
             autoComplete="new-password"
+            className="h-11 w-full rounded-full bg-gray-100 px-5 text-[15px] font-semibold outline-none focus:ring-4 focus:ring-brand-purple/15"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-bold text-gray-500">Email (optional)</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+            autoComplete="email"
             className="h-11 w-full rounded-full bg-gray-100 px-5 text-[15px] font-semibold outline-none focus:ring-4 focus:ring-brand-purple/15"
           />
         </div>
