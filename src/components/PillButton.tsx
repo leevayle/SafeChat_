@@ -35,7 +35,7 @@ export function PillButton({
         rounded-full text-[15px] font-extrabold text-white outline-none transition
         disabled:cursor-not-allowed disabled:opacity-50
         focus-visible:ring-4 focus-visible:ring-brand-blue/35 font-ui
-        ${loading ? 'bg-transparent shadow-none ring-2 ring-brand-purple/25' : styles[variant]}
+        ${loading ? 'bg-transparent shadow-none ring-0' : styles[variant]}
         ${className}
       `}
     >

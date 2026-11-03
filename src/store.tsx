@@ -106,6 +106,8 @@ type Store = {
   refreshCalls: () => Promise<void>
   /** Optimistic local updates to status feed (UI-first) */
   patchStatusList: (fn: (list: any[]) => any[]) => void
+  /** Optimistic upsert of a chat preview so ChatsHome updates instantly on send */
+  upsertChatPreview: (preview: Partial<ChatPreview> & { contactId: string }) => void
   login: (username: string, password: string) => Promise<ApiUser>
   register: (data: {
     phone: string
@@ -232,6 +234,60 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setStatusList((prev) => fn(prev))
   }, [])
 
+  const upsertChatPreview = useCallback(
+    (preview: Partial<ChatPreview> & { contactId: string }) => {
+      setChats((prev) => {
+        const idx = prev.findIndex(
+          (c) =>
+            c.contactId === preview.contactId ||
+            (preview.conversationId && c.conversationId === preview.conversationId),
+        )
+        const nowIso = preview.iso || new Date().toISOString()
+        const timeLabel =
+          preview.time ||
+          new Date(nowIso).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+          })
+        if (idx >= 0) {
+          const next = [...prev]
+          next[idx] = {
+            ...next[idx],
+            ...preview,
+            last: preview.last ?? next[idx].last,
+            time: timeLabel,
+            iso: nowIso,
+            unread: preview.unread ?? 0,
+            mine: preview.mine ?? true,
+            state: preview.state ?? next[idx].state ?? 'sent',
+          }
+          // Bump to top
+          const [item] = next.splice(idx, 1)
+          return [item, ...next]
+        }
+        // New conversation preview
+        return [
+          {
+            contactId: preview.contactId,
+            conversationId: preview.conversationId,
+            name: preview.name,
+            photo: preview.photo ?? null,
+            hue: preview.hue,
+            last: preview.last || '',
+            time: timeLabel,
+            unread: 0,
+            mine: true,
+            state: preview.state || 'pending',
+            iso: nowIso,
+          },
+          ...prev,
+        ]
+      })
+    },
+    [],
+  )
+
   const refreshCalls = useCallback(async () => {
     try {
       const { calls: c } = await api.calls()
@@ -283,15 +339,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const login = async (username: string, password: string) => {
     const { access_token, refresh_token, user } = await api.login({ username, password })
+    // UI-first: session + user immediately so the app can navigate
     setSession(access_token, refresh_token, user)
     applyUser(user)
-    await Promise.all([
+    // Background: hydrate lists without blocking the login screen
+    void Promise.all([
       refreshChats(),
       refreshContacts(),
       refreshGroups(),
       refreshStatus(),
       refreshCalls(),
-    ])
+    ]).catch(() => {})
     return user
   }
 
@@ -312,7 +370,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       phone_number: data.phone ? `${data.countryCode || ''}${data.phone}` : undefined,
       email: data.email || undefined,
     })
-    // Auto-login after register
+    // Auto-login after register — same UI-first pattern
     const { access_token, refresh_token, user } = await api.login({
       username: data.username,
       password: data.password,
@@ -320,11 +378,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSession(access_token, refresh_token, user)
     applyUser(user)
     if (data.bio) {
-      try {
-        await api.updateMe({ bio: data.bio })
-      } catch { /* */ }
+      void api.updateMe({ bio: data.bio }).catch(() => {})
     }
-    await Promise.all([refreshChats(), refreshContacts(), refreshGroups()])
+    void Promise.all([refreshChats(), refreshContacts(), refreshGroups()]).catch(() => {})
     return user
   }
 
@@ -439,6 +495,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshStatus,
       refreshCalls,
       patchStatusList,
+      upsertChatPreview,
       login,
       register,
       logout,
@@ -467,6 +524,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshStatus,
       refreshCalls,
       patchStatusList,
+      upsertChatPreview,
       login,
       register,
       logout,

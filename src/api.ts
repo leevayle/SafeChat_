@@ -64,7 +64,7 @@ export type ChatPreview = {
   time: string
   unread: number
   mine?: boolean
-  state?: 'sent' | 'delivered' | 'read'
+  state?: 'pending' | 'sent' | 'delivered' | 'read' | 'failed'
   iso?: string
 }
 
@@ -633,6 +633,24 @@ export const api = {
   viewStatus: async (id: string) => {
     await req(`/api/v1/statuses/${id}`)
     return { ok: true }
+  },
+
+  deleteStatus: async (id: string) => {
+    await req(`/api/v1/statuses/${id}`, { method: 'DELETE' })
+    return { ok: true }
+  },
+
+  statusViewers: async (id: string) => {
+    const list = await req<any[]>(`/api/v1/statuses/${id}/viewers`)
+    return {
+      viewers: (list || []).map((v) => ({
+        id: String(v.viewer_id || v.id),
+        username: v.username || '',
+        name: v.display_name || v.username || 'User',
+        photo: v.profile_photo ?? null,
+        viewedAt: v.viewed_at || null,
+      })),
+    }
   },
 
   calls: async () => ({ calls: [] as any[] }),

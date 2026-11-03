@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Volume2, VolumeX, Heart } from 'lucide-react'
+import { X, Volume2, VolumeX, Heart, Trash2, Eye } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { api } from '../api'
 import { useStore } from '../store'
@@ -52,6 +52,8 @@ function saveMuted(ids: string[]) {
   }
 }
 
+type ViewerRow = { id: string; username: string; name: string; photo: string | null; viewedAt: string | null }
+
 export function StatusViewer({ userId, onClose }: Props) {
   const { statusList, refreshStatus, showToast, patchStatusList, me } = useStore()
   const items = statusList.filter((s) => s.userId === userId)
@@ -60,6 +62,10 @@ export function StatusViewer({ userId, onClose }: Props) {
   const [progress, setProgress] = useState(0)
   const [muted, setMuted] = useState(() => loadMuted().includes(userId))
   const [likes, setLikes] = useState<Record<string, boolean>>(() => loadLikes())
+  const [viewersOpen, setViewersOpen] = useState(false)
+  const [viewers, setViewers] = useState<ViewerRow[]>([])
+  const [viewersLoading, setViewersLoading] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const viewedRef = useRef<Set<string>>(new Set())
   const rafRef = useRef<number | null>(null)
@@ -78,6 +84,8 @@ export function StatusViewer({ userId, onClose }: Props) {
 
   const current = items[idx]
   const liked = current ? !!likes[current.id] : false
+  const isOwner = !!(me?.id && me.id === userId)
+  const viewCount = Array.isArray(current?.views) ? current.views.length : 0
 
   const goNext = useCallback(() => {
     if (idxRef.current < itemsLenRef.current - 1) {
@@ -193,6 +201,58 @@ export function StatusViewer({ userId, onClose }: Props) {
     showToast(next ? 'Status muted' : 'Status unmuted')
   }
 
+  const openViewers = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!current || !isOwner) return
+    setPaused(true)
+    setViewersOpen(true)
+    setViewersLoading(true)
+    try {
+      const { viewers: list } = await api.statusViewers(current.id)
+      setViewers(list)
+    } catch {
+      showToast('Could not load viewers')
+      setViewers([])
+    } finally {
+      setViewersLoading(false)
+    }
+  }
+
+  const closeViewers = () => {
+    setViewersOpen(false)
+    setPaused(false)
+  }
+
+  const deleteCurrent = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!current || !isOwner || deleting) return
+    setDeleting(true)
+    setPaused(true)
+    const id = current.id
+    // Optimistic remove
+    const remainingCount = items.filter((s) => s.id !== id).length
+    patchStatusList((list) => list.filter((s) => s.id !== id))
+    try {
+      await api.deleteStatus(id)
+      showToast('Status deleted')
+      if (remainingCount === 0) {
+        onClose()
+      } else {
+        setIdx((i) => Math.min(i, remainingCount - 1))
+        setProgress(0)
+        progressRef.current = 0
+        setPaused(false)
+      }
+      void refreshStatus().catch(() => {})
+    } catch {
+      showToast('Delete failed')
+      void refreshStatus().catch(() => {})
+      setPaused(false)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const toggleLike = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!current) return
@@ -295,30 +355,123 @@ export function StatusViewer({ userId, onClose }: Props) {
       </div>
 
       <div className="relative z-20 flex items-center justify-between px-6 pb-8 safe-pb" data-status-action>
-        <button
-          type="button"
-          data-status-action
-          onClick={toggleMute}
-          className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm"
-          aria-label={muted ? 'Unmute status' : 'Mute status'}
-        >
-          {muted ? <VolumeX size={22} /> : <Volume2 size={22} />}
-        </button>
-        <p className="text-center text-xs font-semibold text-white/40">
-          {idx + 1}/{items.length}
-        </p>
-        <button
-          type="button"
-          data-status-action
-          onClick={toggleLike}
-          className={`flex h-12 w-12 items-center justify-center rounded-full backdrop-blur-sm ${
-            liked ? 'bg-brand-red/90 text-white' : 'bg-white/10'
-          }`}
-          aria-label={liked ? 'Unlike' : 'Like'}
-        >
-          <Heart size={22} fill={liked ? 'currentColor' : 'none'} />
-        </button>
+        {isOwner ? (
+          <>
+            <button
+              type="button"
+              data-status-action
+              onClick={deleteCurrent}
+              disabled={deleting}
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm disabled:opacity-50"
+              aria-label="Delete status"
+            >
+              <Trash2 size={22} className="text-white" />
+            </button>
+            <p className="text-center text-xs font-semibold text-white/40">
+              {idx + 1}/{items.length}
+            </p>
+            <button
+              type="button"
+              data-status-action
+              onClick={openViewers}
+              className="flex min-w-12 items-center justify-center gap-1.5 rounded-full bg-white/10 px-3 py-2.5 backdrop-blur-sm"
+              aria-label="Viewers"
+            >
+              <Eye size={18} className="text-white" />
+              <span className="text-sm font-bold text-white">{viewCount}</span>
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              data-status-action
+              onClick={toggleMute}
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm"
+              aria-label={muted ? 'Unmute status' : 'Mute status'}
+            >
+              {muted ? <VolumeX size={22} /> : <Volume2 size={22} />}
+            </button>
+            <p className="text-center text-xs font-semibold text-white/40">
+              {idx + 1}/{items.length}
+            </p>
+            <button
+              type="button"
+              data-status-action
+              onClick={toggleLike}
+              className={`flex h-12 w-12 items-center justify-center rounded-full backdrop-blur-sm ${
+                liked ? 'bg-brand-red/90 text-white' : 'bg-white/10'
+              }`}
+              aria-label={liked ? 'Unlike' : 'Like'}
+            >
+              <Heart size={22} fill={liked ? 'currentColor' : 'none'} />
+            </button>
+          </>
+        )}
       </div>
+
+      {/* Owner viewers sheet */}
+      <AnimatePresence>
+        {viewersOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 z-40 bg-black/50"
+              onClick={closeViewers}
+              data-status-action
+            />
+            <motion.div
+              initial={{ y: '100%' }}
+              animate={{ y: 0 }}
+              exit={{ y: '100%' }}
+              transition={{ type: 'spring', stiffness: 340, damping: 34 }}
+              className="absolute inset-x-0 bottom-0 z-50 max-h-[70%] overflow-hidden rounded-t-3xl bg-white"
+              data-status-action
+            >
+              <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3.5">
+                <h3 className="text-base font-black text-ink">Viewed by</h3>
+                <button
+                  type="button"
+                  onClick={closeViewers}
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100"
+                  aria-label="Close viewers"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="max-h-[55vh] overflow-y-auto px-3 pb-6 pt-2">
+                {viewersLoading ? (
+                  <p className="py-8 text-center text-sm font-bold text-gray-400">Loading…</p>
+                ) : viewers.length === 0 ? (
+                  <p className="py-8 text-center text-sm font-bold text-gray-400">No views yet</p>
+                ) : (
+                  <ul className="space-y-0.5">
+                    {viewers.map((v) => (
+                      <li
+                        key={v.id}
+                        className="flex items-center gap-3 rounded-2xl px-3 py-2.5"
+                      >
+                        <Avatar
+                          contact={{ id: v.id, name: v.name, photo: v.photo }}
+                          size={40}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[15px] font-bold text-ink">{v.name}</p>
+                          {v.username ? (
+                            <p className="truncate text-xs font-semibold text-gray-400">@{v.username}</p>
+                          ) : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

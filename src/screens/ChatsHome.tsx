@@ -146,7 +146,7 @@ export function ChatsHome({
 
   return (
     <div className="relative flex h-full flex-col bg-white">
-      <header className="relative flex min-h-16 shrink-0 items-center justify-between border-b pb-3 border-gray-200 px-5 pt-[20px]">
+      <header className="relative flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 px-5 pt-[10px]">
         <div
           className={`flex w-full items-center transition-all duration-200 ease-out  ${
             searching ? 'opacity-100 ' : 'opacity-100 '
@@ -191,7 +191,13 @@ export function ChatsHome({
         <AnimatePresence>
           {menu && (
             <>
-              <div className="fixed inset-0 z-20" onClick={() => setMenu(false)} />
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-20 bg-ink/25 backdrop-blur-sm"
+                onClick={() => setMenu(false)}
+              />
               <motion.ul
                 initial={{ opacity: 0, scale: 0.85 }}
                 animate={{ opacity: 1, scale: 1 }}

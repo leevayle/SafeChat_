@@ -38,7 +38,7 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 function ChatWindowInner({ contactId, onBack, onCall }: Props) {
-  const { settings, contacts, chats, me, refreshChats, showToast } = useStore()
+  const { settings, contacts, chats, me, refreshChats, showToast, upsertChatPreview } = useStore()
   const c = contacts.find((x) => x.id === contactId || x.peerId === contactId) || {
     id: contactId,
     name: contactId,
@@ -157,14 +157,53 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
       const cid = await ensureConversation()
       if (!cid) {
         setMsgs((m) => m.map((x) => (x.id === localId ? { ...x, state: 'failed' } : x)))
+        upsertChatPreview({
+          contactId: (c as any).peerId || contactId,
+          conversationId: conversationId || undefined,
+          last: body || (img ? '📷 Photo' : ''),
+          state: 'failed',
+          mine: true,
+          name: c.name,
+          photo: c.photo,
+          hue: c.hue,
+        })
         showToast('Could not open chat — tap message to retry')
         return
       }
+      if (cid && cid !== conversationId) {
+        setConversationId(cid)
+        convRef.current = cid
+      }
       const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img)
-      setMsgs((m) => m.map((x) => (x.id === localId ? { ...message, mine: true, state: message.state || 'sent' } : x)))
+      setMsgs((m) =>
+        m.map((x) => (x.id === localId ? { ...message, mine: true, state: message.state || 'sent' } : x)),
+      )
+      // Keep chats home in sync with delivered state
+      upsertChatPreview({
+        contactId: (c as any).peerId || contactId,
+        conversationId: cid,
+        last: message.text || body || (img ? '📷 Photo' : ''),
+        state: (message.state as any) || 'sent',
+        mine: true,
+        name: c.name,
+        photo: c.photo,
+        hue: c.hue,
+        iso: message.time || new Date().toISOString(),
+        time: message.timeLabel,
+      })
       refreshChats().catch(() => {})
     } catch (e: any) {
       setMsgs((m) => m.map((x) => (x.id === localId ? { ...x, state: 'failed' } : x)))
+      upsertChatPreview({
+        contactId: (c as any).peerId || contactId,
+        conversationId: conversationId || undefined,
+        last: body || (img ? '📷 Photo' : ''),
+        state: 'failed',
+        mine: true,
+        name: c.name,
+        photo: c.photo,
+        hue: c.hue,
+      })
       showToast(e?.message || 'Message failed — tap to retry')
     }
   }
@@ -179,19 +218,39 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
     setEmoji(false)
 
     const localId = `local-${Date.now()}`
+    const nowIso = new Date().toISOString()
+    const timeLabel = new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+    const previewText = body || (img ? '📷 Photo' : '')
     const optimistic: ApiMsg = {
       id: localId,
       from: me?.id || '',
       to: contactId,
-      text: body || (img ? '📷 Photo' : ''),
+      text: previewText,
       image: img,
-      time: new Date().toISOString(),
-      timeLabel: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
+      time: nowIso,
+      timeLabel,
       state: 'pending',
       mine: true,
     }
-    // UI first — show immediately with waiting icon
+    // UI first — message window + chats home at the same time
     setMsgs((m) => [...m, optimistic])
+    upsertChatPreview({
+      contactId: (c as any).peerId || contactId,
+      conversationId: conversationId || knownConv || undefined,
+      last: previewText,
+      time: timeLabel,
+      iso: nowIso,
+      unread: 0,
+      mine: true,
+      state: 'pending',
+      name: c.name,
+      photo: c.photo,
+      hue: c.hue,
+    })
     // Backend later
     void deliverMessage(localId, body, img)
   }

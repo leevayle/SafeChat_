@@ -24,8 +24,8 @@ export function Loading() {
 
       <div className="flex-1" />
 
-      {/* Transparent typing dots — no orange blob */}
-      <div className="mb-8 flex h-[52px] w-full max-w-[280px] items-center justify-center rounded-full ring-2 ring-brand-purple/20">
+      {/* Clean loading dots — no outline / ring */}
+      <div className="mb-8 flex h-[52px] w-full max-w-[280px] items-center justify-center">
         <div className="flex items-center gap-1.5">
           {[0, 1, 2].map((i) => (
             <motion.span
