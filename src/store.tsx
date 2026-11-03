@@ -104,6 +104,8 @@ type Store = {
   refreshGroups: () => Promise<void>
   refreshStatus: () => Promise<void>
   refreshCalls: () => Promise<void>
+  /** Optimistic local updates to status feed (UI-first) */
+  patchStatusList: (fn: (list: any[]) => any[]) => void
   login: (username: string, password: string) => Promise<ApiUser>
   register: (data: {
     phone: string
@@ -224,6 +226,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       /* */
     }
+  }, [])
+
+  const patchStatusList = useCallback((fn: (list: any[]) => any[]) => {
+    setStatusList((prev) => fn(prev))
   }, [])
 
   const refreshCalls = useCallback(async () => {
@@ -428,9 +434,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshContacts,
       toast,
       showToast,
+      clearToast,
       refreshGroups,
       refreshStatus,
       refreshCalls,
+      patchStatusList,
       login,
       register,
       logout,
@@ -458,6 +466,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshGroups,
       refreshStatus,
       refreshCalls,
+      patchStatusList,
       login,
       register,
       logout,

@@ -23,7 +23,7 @@ type Props = {
 }
 
 export function StatusTab({ onOpenStatus }: Props) {
-  const { statusList, me, refreshStatus, settings, setSetting } = useStore()
+  const { statusList, me, refreshStatus, settings, setSetting, showToast, patchStatusList } = useStore()
   const [text, setText] = useState('')
   const [image, setImage] = useState<string | null>(null)
   const [composing, setComposing] = useState(false)
@@ -73,13 +73,46 @@ export function StatusTab({ onOpenStatus }: Props) {
 
   const post = async () => {
     if ((!text.trim() && !image) || busy) return
+    const body = text.trim()
+    const img = image
+    const localId = `local-status-${Date.now()}`
+    const optimistic = {
+      id: localId,
+      userId: me?.id || '',
+      text: body,
+      image: img,
+      createdAt: new Date().toISOString(),
+      type: img ? 'image' : 'text',
+      views: [] as string[],
+      user: me
+        ? {
+            id: me.id,
+            name: me.name,
+            username: me.username,
+            photo: me.photo,
+            hue: (me as any).hue || (['#7B2CBF', '#6389EB'] as [string, string]),
+            online: false,
+          }
+        : undefined,
+      pending: true,
+    }
+
+    // UI first — show in My status immediately
+    patchStatusList((list) => [optimistic, ...list])
+    setText('')
+    setImage(null)
+    setComposing(false)
+    showToast('Posting status…')
     setBusy(true)
+
     try {
-      await api.postStatus(text.trim(), image)
-      setText('')
-      setImage(null)
-      setComposing(false)
-      await refreshStatus()
+      const { status } = await api.postStatus(body, img)
+      patchStatusList((list) => list.map((s) => (s.id === localId ? { ...status, pending: false } : s)))
+      showToast('Status posted')
+      refreshStatus().catch(() => {})
+    } catch (e: any) {
+      patchStatusList((list) => list.filter((s) => s.id !== localId))
+      showToast(e?.message || 'Could not post status — try again')
     } finally {
       setBusy(false)
     }

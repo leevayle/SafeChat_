@@ -53,7 +53,7 @@ function saveMuted(ids: string[]) {
 }
 
 export function StatusViewer({ userId, onClose }: Props) {
-  const { statusList, refreshStatus, showToast } = useStore()
+  const { statusList, refreshStatus, showToast, patchStatusList, me } = useStore()
   const items = statusList.filter((s) => s.userId === userId)
   const [idx, setIdx] = useState(0)
   const [paused, setPaused] = useState(false)
@@ -100,16 +100,40 @@ export function StatusViewer({ userId, onClose }: Props) {
     }
   }, [])
 
-  // Register view once per status
+  // Register view once per status — mark viewed in UI immediately, backend later
   useEffect(() => {
-    if (!current?.id) return
+    if (!current?.id || !me?.id) return
     if (viewedRef.current.has(current.id)) return
     viewedRef.current.add(current.id)
+
+    // UI first: mark this status as viewed so rings update instantly
+    const already =
+      Array.isArray(current.views) && current.views.includes(me.id)
+    if (!already) {
+      patchStatusList((list) =>
+        list.map((s) =>
+          s.id === current.id
+            ? {
+                ...s,
+                views: Array.isArray(s.views)
+                  ? s.views.includes(me.id)
+                    ? s.views
+                    : [...s.views, me.id]
+                  : [me.id],
+              }
+            : s,
+        ),
+      )
+    }
+
+    // Backend later
     api
       .viewStatus(current.id)
       .then(() => refreshStatus().catch(() => {}))
-      .catch(() => {})
-  }, [current?.id, refreshStatus])
+      .catch(() => {
+        /* keep optimistic view; next refresh will reconcile */
+      })
+  }, [current?.id, me?.id, patchStatusList, refreshStatus])
 
   // Single active progress bar
   useEffect(() => {

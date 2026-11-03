@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, memo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Phone, Video, Smile, Send, Check, CheckCheck, ImagePlus, X } from 'lucide-react'
+import { ArrowLeft, Phone, Video, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { api, type ApiMsg } from '../api'
 import { FONT_SIZES, WALLPAPERS, useStore } from '../store'
@@ -58,7 +58,6 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
   const [typing, setTyping] = useState(false)
   const [emoji, setEmoji] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [sending, setSending] = useState(false)
   const [pendingImage, setPendingImage] = useState<string | null>(null)
   const end = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -153,10 +152,26 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
     end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [msgs.length, pendingImage])
 
+  const deliverMessage = async (localId: string, body: string, img: string | null) => {
+    try {
+      const cid = await ensureConversation()
+      if (!cid) {
+        setMsgs((m) => m.map((x) => (x.id === localId ? { ...x, state: 'failed' } : x)))
+        showToast('Could not open chat — tap message to retry')
+        return
+      }
+      const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img)
+      setMsgs((m) => m.map((x) => (x.id === localId ? { ...message, mine: true, state: message.state || 'sent' } : x)))
+      refreshChats().catch(() => {})
+    } catch (e: any) {
+      setMsgs((m) => m.map((x) => (x.id === localId ? { ...x, state: 'failed' } : x)))
+      showToast(e?.message || 'Message failed — tap to retry')
+    }
+  }
+
   const send = async () => {
     const t = text.trim()
-    if ((!t && !pendingImage) || sending) return
-    setSending(true)
+    if (!t && !pendingImage) return
     const body = t
     const img = pendingImage
     setText('')
@@ -172,26 +187,20 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
       image: img,
       time: new Date().toISOString(),
       timeLabel: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
-      state: 'sent',
+      state: 'pending',
       mine: true,
     }
+    // UI first — show immediately with waiting icon
     setMsgs((m) => [...m, optimistic])
+    // Backend later
+    void deliverMessage(localId, body, img)
+  }
 
-    try {
-      const cid = await ensureConversation()
-      if (!cid) {
-        setMsgs((m) => m.filter((x) => x.id !== localId))
-        return
-      }
-      const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img)
-      setMsgs((m) => m.map((x) => (x.id === localId ? { ...message, mine: true } : x)))
-      refreshChats().catch(() => {})
-    } catch (e: any) {
-      setMsgs((m) => m.filter((x) => x.id !== localId))
-      showToast(e?.message || 'Message failed to send')
-    } finally {
-      setSending(false)
-    }
+  const retryFailed = (m: ApiMsg) => {
+    if (m.state !== 'failed') return
+    setMsgs((list) => list.map((x) => (x.id === m.id ? { ...x, state: 'pending' } : x)))
+    showToast('Retrying…')
+    void deliverMessage(m.id, m.text === '📷 Photo' ? '' : m.text, m.image || null)
   }
 
   const onPickImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -265,11 +274,16 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
                 className={`flex ${mine ? 'justify-end' : 'justify-start'}`}
               >
                 <div
+                  role={mine && m.state === 'failed' ? 'button' : undefined}
+                  tabIndex={mine && m.state === 'failed' ? 0 : undefined}
+                  onClick={() => {
+                    if (mine && m.state === 'failed') retryFailed(m)
+                  }}
                   className={`max-w-[78%] overflow-hidden shadow-sm ${
                     mine
                       ? 'rounded-3xl rounded-br-md bg-gradient-to-br from-brand-magenta to-brand-purple text-white'
                       : 'rounded-3xl rounded-bl-md bg-white text-ink'
-                  }`}
+                  } ${mine && m.state === 'failed' ? 'ring-2 ring-red-300/80' : ''}`}
                 >
                   {m.image && (
                     <img
@@ -294,7 +308,11 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
                         hour12: false,
                       })}
                     {mine &&
-                      (m.state === 'sent' ? (
+                      (m.state === 'pending' ? (
+                        <Clock size={13} strokeWidth={2.5} className="opacity-80" aria-label="Sending" />
+                      ) : m.state === 'failed' ? (
+                        <RotateCcw size={13} strokeWidth={2.5} className="text-red-200" aria-label="Failed — tap to retry" />
+                      ) : m.state === 'sent' ? (
                         <Check size={14} strokeWidth={2.5} aria-label="Sent" />
                       ) : m.state === 'delivered' ? (
                         <CheckCheck size={14} strokeWidth={2.5} className="opacity-90" aria-label="Delivered" />

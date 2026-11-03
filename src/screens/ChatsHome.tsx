@@ -209,10 +209,13 @@ export function ChatsHome({
                     { label: 'Support', fn: onSupport, Icon: LifeBuoy },
                     { label: 'Settings', fn: onSettings, Icon: Settings },
                   ] as const
-                ).map(({ label, fn, Icon, ...rest }) => {
+                ).map(({ label, fn, Icon, ...rest }, i, arr) => {
                   const badge = 'badge' in rest ? (rest as { badge?: number }).badge : 0
                   return (
-                    <li key={label}>
+                    <li
+                      key={label}
+                      className={i < arr.length - 1 ? 'border-b border-gray-200' : undefined}
+                    >
                       <button
                         type="button"
                         onClick={() => {

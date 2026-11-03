@@ -46,7 +46,7 @@ export type ApiMsg = {
   text: string
   image?: string | null
   time: string
-  state?: 'sent' | 'delivered' | 'read'
+  state?: 'pending' | 'sent' | 'delivered' | 'read' | 'failed'
   mine?: boolean
   timeLabel?: string
   conversationId?: string

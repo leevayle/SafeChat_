@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Smile, Send } from 'lucide-react'
+import { ArrowLeft, Smile, Send, Clock, Check, RotateCcw } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { api } from '../api'
 import { FONT_SIZES, WALLPAPERS, useStore } from '../store'
@@ -29,7 +29,7 @@ export function GroupChat({
   onClosed: () => void
   onCall: (id: string, kind: 'audio' | 'video') => void
 }) {
-  const { groups, contacts, me, settings, refreshGroups } = useStore()
+  const { groups, contacts, me, settings, refreshGroups, showToast } = useStore()
   const g = groups.find((x) => x.id === groupId)
   const [text, setText] = useState('')
   const [emoji, setEmoji] = useState(false)
@@ -57,17 +57,41 @@ export function GroupChat({
 
   const who = (id: string) => contacts.find((c) => c.id === id) || { id, name: id === me?.id ? 'You' : id }
 
+  const deliverGroup = async (localId: string, body: string) => {
+    try {
+      const { message } = await api.sendGroup(groupId, body)
+      setMsgs((m) => m.map((x) => (x.id === localId ? { ...message, state: message.state || 'sent' } : x)))
+      refreshGroups().catch(() => {})
+    } catch (e: any) {
+      setMsgs((m) => m.map((x) => (x.id === localId ? { ...x, state: 'failed' } : x)))
+      showToast(e?.message || 'Message failed — tap to retry')
+    }
+  }
+
   const send = async () => {
     const t = text.trim()
     if (!t) return
     setText('')
-    try {
-      const { message } = await api.sendGroup(groupId, t)
-      setMsgs((m) => [...m, message])
-      refreshGroups()
-    } catch {
-      /* */
+    setEmoji(false)
+    const localId = `local-g-${Date.now()}`
+    const optimistic = {
+      id: localId,
+      from: me?.id || '',
+      text: t,
+      time: new Date().toISOString(),
+      timeLabel: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
+      state: 'pending' as const,
+      mine: true,
     }
+    setMsgs((m) => [...m, optimistic])
+    void deliverGroup(localId, t)
+  }
+
+  const retryFailed = (m: any) => {
+    if (m.state !== 'failed') return
+    setMsgs((list) => list.map((x) => (x.id === m.id ? { ...x, state: 'pending' } : x)))
+    showToast('Retrying…')
+    void deliverGroup(m.id, m.text)
   }
 
   return (
@@ -102,7 +126,7 @@ export function GroupChat({
                 </p>
               )
             }
-            const mine = m.from === me?.id
+            const mine = m.from === me?.id || m.mine
             return (
               <motion.div
                 key={m.id}
@@ -111,11 +135,15 @@ export function GroupChat({
                 className={`flex ${mine ? 'justify-end' : 'justify-start'}`}
               >
                 <div
+                  role={mine && m.state === 'failed' ? 'button' : undefined}
+                  onClick={() => {
+                    if (mine && m.state === 'failed') retryFailed(m)
+                  }}
                   className={`max-w-[78%] px-4 py-2.5 shadow-sm ${
                     mine
                       ? 'rounded-3xl rounded-br-md bg-gradient-to-br from-brand-magenta to-brand-purple text-white'
                       : 'rounded-3xl rounded-bl-md bg-white text-ink'
-                  }`}
+                  } ${mine && m.state === 'failed' ? 'ring-2 ring-red-300/80' : ''}`}
                 >
                   {!mine && (
                     <p className="mb-0.5 text-[11px] font-extrabold text-brand-purple">
@@ -123,6 +151,18 @@ export function GroupChat({
                     </p>
                   )}
                   <p className="font-semibold leading-snug">{m.text}</p>
+                  {mine && (
+                    <p className="mt-1 flex items-center justify-end gap-1 text-[11px] font-bold text-white/75">
+                      {m.timeLabel || ''}
+                      {m.state === 'pending' ? (
+                        <Clock size={13} strokeWidth={2.5} aria-label="Sending" />
+                      ) : m.state === 'failed' ? (
+                        <RotateCcw size={13} strokeWidth={2.5} className="text-red-200" aria-label="Failed — tap to retry" />
+                      ) : (
+                        <Check size={13} strokeWidth={2.5} aria-label="Sent" />
+                      )}
+                    </p>
+                  )}
                 </div>
               </motion.div>
             )
