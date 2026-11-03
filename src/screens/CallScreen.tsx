@@ -151,7 +151,16 @@ export function CallScreen({ contactId, kind, ringId, onEnd }: Props) {
         </div>
       )}
 
-      
+      <div className="relative z-10 flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))]">
+        <div className="flex items-center gap-1 text-sm font-bold font-display">
+          <span className="text-brand-red">Safe</span>
+          <span className="text-white">Chat</span>
+          <span className="text-brand-blue">.</span>
+        </div>
+        <span className="flex items-center gap-1 rounded-full bg-white/15 px-3 py-1 text-xs font-bold">
+          <Lock size={12} /> Encrypted
+        </span>
+      </div>
 
       <div className={`relative z-10 flex flex-col items-center ${video ? 'mt-6' : 'mt-20'}`}>
         {!video && (
