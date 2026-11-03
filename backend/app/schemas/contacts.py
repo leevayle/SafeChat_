@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class ContactRequestCreate(BaseModel):
     to_username: str = Field(..., min_length=3, max_length=32)
     message: Optional[str] = Field(None, max_length=256)
+    share_phone: bool = False
 
 
 class ContactNicknameUpdate(BaseModel):
@@ -18,6 +19,7 @@ class ContactResponse(BaseModel):
     username: str
     display_name: str
     profile_photo: Optional[str] = None
+    phone_number: Optional[str] = None
     nickname: Optional[str] = None
     contact_status: str
     created_at: str

@@ -21,7 +21,10 @@ async def send_contact_request(
 ):
     try:
         result = await ContactService.send_request(
-            user["id"], body.to_username, body.message
+            user["id"],
+            body.to_username,
+            body.message,
+            share_phone=getattr(body, "share_phone", False),
         )
         return success_response("Contact request sent", result)
     except AppException as e:

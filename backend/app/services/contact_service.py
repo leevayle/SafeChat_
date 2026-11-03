@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 class ContactService:
     @staticmethod
-    async def send_request(from_user_id: str, to_username: str, message: Optional[str] = None) -> dict:
+    async def send_request(from_user_id: str, to_username: str, message: Optional[str] = None, share_phone: bool = False) -> dict:
         db = get_database()
         target = await db.users.find_one({"username": to_username.lower().strip()})
         if not target:
@@ -68,6 +68,7 @@ class ContactService:
             "from_user_id": from_user_id,
             "to_user_id": to_user_id,
             "message": message,
+            "share_phone": bool(share_phone),
             "status": ContactRequestStatus.PENDING.value,
             "created_at": now,
             "updated_at": now,
@@ -89,7 +90,7 @@ class ContactService:
             "from_user_id": from_user_id,
             "to_user_id": to_user_id,
             "status": ContactRequestStatus.PENDING.value,
-            "created_at": now.isoformat(),
+            "created_at": now.isoformat().replace("+00:00", "Z"),
         }
 
     @staticmethod
@@ -111,18 +112,32 @@ class ContactService:
             {"$set": {"status": ContactRequestStatus.ACCEPTED.value, "updated_at": now}},
         )
 
+        # Resolve phones: requester may opt to share their number
+        from_user = await db.users.find_one({"_id": ObjectId(req["from_user_id"])})
+        to_user = await db.users.find_one({"_id": ObjectId(req["to_user_id"])})
+        share_phone = bool(req.get("share_phone"))
+        from_phone = (
+            (from_user.get("phone_number") or from_user.get("phone") or "")
+            if from_user and share_phone
+            else ""
+        )
+        # Accepter's phone is not auto-shared unless they had sent a mutual request with share
+
         # Create bidirectional contacts
-        for owner, contact in (
-            (req["from_user_id"], req["to_user_id"]),
-            (req["to_user_id"], req["from_user_id"]),
+        for owner, contact, peer_phone in (
+            (req["from_user_id"], req["to_user_id"], ""),
+            (req["to_user_id"], req["from_user_id"], from_phone),
         ):
+            set_fields = {
+                "contact_status": ContactStatus.ACCEPTED.value,
+                "updated_at": now,
+            }
+            if peer_phone:
+                set_fields["shared_phone"] = peer_phone
             await db.contacts.update_one(
                 {"owner_user_id": owner, "contact_user_id": contact},
                 {
-                    "$set": {
-                        "contact_status": ContactStatus.ACCEPTED.value,
-                        "updated_at": now,
-                    },
+                    "$set": set_fields,
                     "$setOnInsert": {
                         "owner_user_id": owner,
                         "contact_user_id": contact,
@@ -177,6 +192,12 @@ class ContactService:
             contact_user = await db.users.find_one({"_id": ObjectId(c["contact_user_id"])})
             if not contact_user:
                 continue
+            phone = (
+                c.get("shared_phone")
+                or contact_user.get("phone_number")
+                or contact_user.get("phone")
+                or ""
+            )
             results.append(
                 {
                     "id": str(c["_id"]),
@@ -184,6 +205,7 @@ class ContactService:
                     "username": contact_user["username"],
                     "display_name": contact_user["display_name"],
                     "profile_photo": contact_user.get("profile_photo"),
+                    "phone_number": phone,
                     "nickname": c.get("nickname"),
                     "contact_status": c["contact_status"],
                     "created_at": c["created_at"].isoformat() if c.get("created_at") else None,
@@ -210,7 +232,7 @@ class ContactService:
                     "from_profile_photo": from_user.get("profile_photo") if from_user else None,
                     "message": r.get("message"),
                     "status": r["status"],
-                    "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+                    "created_at": (r["created_at"].isoformat().replace("+00:00","Z") if r["created_at"].tzinfo else r["created_at"].isoformat() + "Z") if r.get("created_at") else None,
                 }
             )
         return results
@@ -233,7 +255,7 @@ class ContactService:
                     "to_display_name": to_user["display_name"] if to_user else None,
                     "message": r.get("message"),
                     "status": r["status"],
-                    "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
+                    "created_at": (r["created_at"].isoformat().replace("+00:00","Z") if r["created_at"].tzinfo else r["created_at"].isoformat() + "Z") if r.get("created_at") else None,
                 }
             )
         return results
