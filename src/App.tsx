@@ -405,6 +405,10 @@ function Shell() {
               onBack={() => setChat(null)}
               onCall={(kind) => placeCall(chat, kind)}
               onOpenCalls={() => { setChat(null); setTab('calls') }}
+              onOpenStatus={(userId) => {
+                setChat(null)
+                if (userId) setStatusUser(userId)
+              }}
             />
           </div>
         )}

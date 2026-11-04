@@ -19,6 +19,8 @@ export type ApiUser = {
   createdAt?: string
   email?: string | null
   account_role?: string
+  email?: string
+  subscriptionPlan?: string
 }
 
 export type ApiContact = {
@@ -62,7 +64,7 @@ export type ApiMsg = {
   replyToId?: string | null
   replyToText?: string | null
   /** Encoded status reply preview */
-  statusReply?: { preview: string; time?: string } | null
+  statusReply?: { preview: string; time?: string; statusId?: string } | null
   /** Inline call log row in chat */
   callLog?: {
     kind: 'audio' | 'video'
@@ -142,6 +144,7 @@ export function setSession(access: string, refresh: string, user: ApiUser) {
   localStorage.setItem('sc_refresh', refresh)
   localStorage.setItem('sc_token', access)
   localStorage.setItem('sc_user', JSON.stringify(user))
+  startProactiveRefresh()
 }
 
 export function saveStoredUser(user: ApiUser) {
@@ -149,6 +152,7 @@ export function saveStoredUser(user: ApiUser) {
 }
 
 export function clearSession() {
+  stopProactiveRefresh()
   localStorage.removeItem('sc_access')
   localStorage.removeItem('sc_refresh')
   localStorage.removeItem('sc_token')
@@ -188,8 +192,9 @@ function mapUser(u: any): ApiUser {
     lastSeen: u.last_seen || u.lastSeen || null,
     hue: hueFor(id || u.username || 'x'),
     createdAt: u.created_at || u.createdAt,
-    email: u.email,
+    email: u.email || '',
     account_role: u.account_role,
+    subscriptionPlan: u.subscription_plan || u.subscriptionPlan || 'free',
   }
 }
 
@@ -201,7 +206,7 @@ function mapContact(c: any): ApiContact {
     peerId,
     phone: c.phone_number || c.phone || '',
     username: c.username || '',
-    name: c.nickname || c.saved_name || c.savedName || c.display_name || c.name || c.username || '',
+    name: c.nickname || c.saved_name || c.savedName || c.display_name || c.name || c.username || peerId || 'User',
     savedName: c.nickname || c.savedName || c.display_name || c.name || '',
     bio: c.bio || '',
     note: c.note || '',
@@ -237,10 +242,10 @@ function mapMessage(m: any, meId?: string): ApiMsg {
   if (state !== 'sent' && state !== 'delivered' && state !== 'read') state = 'sent'
   let text = String(m.content ?? m.text ?? '')
   let statusReply: ApiMsg['statusReply'] = null
-  const sr = text.match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)⟦\/⟧([\s\S]*)$/)
+  const sr = text.match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
   if (sr) {
-    statusReply = { preview: sr[1], time: sr[2] || undefined }
-    text = sr[3]
+    statusReply = { preview: sr[1], time: sr[2] || undefined, statusId: sr[3] || undefined }
+    text = sr[4]
   }
   return {
     id: String(m.id || m._id),
@@ -262,6 +267,16 @@ function mapMessage(m: any, meId?: string): ApiMsg {
     replyToText: m.reply_to_text || m.replyToText || null,
     statusReply: statusReply || m.status_reply || null,
   }
+}
+
+function formatChatPreviewLast(raw: string): string {
+  if (!raw) return ''
+  const sr = raw.match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
+  if (sr) {
+    const body = (sr[4] || '').trim()
+    return body ? `Status reply: ${body}` : 'Status reply'
+  }
+  return raw
 }
 
 function mapConversation(c: any, meId?: string): ChatPreview {
@@ -286,7 +301,7 @@ function mapConversation(c: any, meId?: string): ChatPreview {
     name: other.display_name || other.username || contactId,
     photo: other.profile_photo ?? null,
     hue: hueFor(contactId),
-    last: lastText,
+    last: formatChatPreviewLast(lastText),
     time,
     unread: c.unread_count || 0,
     mine: last ? String(last.sender_id) === meId : false,
@@ -325,7 +340,7 @@ function mapStatus(s: any): any {
     userId,
     text: s.content || s.text || '',
     image: (s.media_attachments && s.media_attachments[0]?.url) || s.image || null,
-    background: s.background || 'solid_1',
+    background: s.background || 'theme_purple_grad',
     createdAt: s.created_at || s.createdAt,
     expiresAt: s.expires_at || s.expiresAt,
     type: s.status_type || s.type || 'text',
@@ -370,6 +385,23 @@ async function tryRefresh(): Promise<boolean> {
   } catch { /* */ }
   return false
 }
+
+/** Refresh access token periodically so short-lived tokens don't force re-login. */
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+export function startProactiveRefresh() {
+  if (refreshTimer) return
+  refreshTimer = setInterval(() => {
+    if (sessionDead || !refreshToken()) return
+    void tryRefresh()
+  }, 10 * 60 * 1000) // every 10 minutes
+}
+export function stopProactiveRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
+  }
+}
+
 
 async function req<T = any>(path: string, opts: RequestInit = {}, retried = false): Promise<T> {
   const publicPath = isPublicAuthPath(path)
@@ -528,7 +560,41 @@ export const api = {
 
   me: async () => {
     const data = await req<any>('/api/v1/auth/me')
-    return { user: mapUser(data), settings: {} as Record<string, unknown> }
+    const theme = (data && data.theme) || 'purple'
+    const prefs = (data && data.preferences) || {}
+    const map: Record<string, string> = {
+      chat_accent: 'chatAccent',
+      font_size: 'fontSize',
+      status_privacy: 'statusPrivacy',
+      status_validity: 'statusValidity',
+      msg_notif: 'msgNotif',
+      group_notif: 'groupNotif',
+      call_notif: 'callNotif',
+      enter_is_send: 'enterIsSend',
+      typing_indicator: 'typingIndicator',
+      auto_download: 'autoDownload',
+    }
+    const mapped: Record<string, unknown> = {
+      theme: prefs.theme || theme,
+      email: data?.email || '',
+      phone: data?.phone_number || data?.phone || '',
+      subscriptionPlan: data?.subscription_plan || 'free',
+    }
+    for (const [k, v] of Object.entries(prefs)) {
+      const fe = map[k] || k
+      if (v !== undefined && v !== null) mapped[fe] = v
+    }
+    return {
+      user: mapUser(data),
+      settings: mapped,
+    }
+  },
+
+  updatePreferences: async (prefs: Record<string, unknown>) => {
+    return req<any>('/api/v1/users/me/preferences', {
+      method: 'PATCH',
+      body: JSON.stringify(prefs),
+    })
   },
 
   updateMe: async (body: Record<string, unknown>) => {
@@ -539,6 +605,7 @@ export const api = {
     if (body.bio !== undefined) payload.bio = body.bio
     if (body.photo !== undefined) payload.profile_photo = body.photo
     if (body.profile_photo !== undefined) payload.profile_photo = body.profile_photo
+    if (body.theme !== undefined) payload.theme = body.theme
     if (Object.keys(payload).length === 0) return
     return req<any>('/api/v1/users/me', {
       method: 'PATCH',
@@ -706,12 +773,13 @@ export const api = {
     conversationId: string,
     text: string,
     image?: string | null,
-    opts?: { replyToId?: string; statusReply?: { preview: string; time?: string } },
+    opts?: { replyToId?: string; statusReply?: { preview: string; time?: string; statusId?: string } },
   ) => {
     let content = text || (image ? '' : '')
     if (opts?.statusReply) {
       // Encode status reply so peers can render the tag without schema changes
-      content = `⟦status⟧${opts.statusReply.preview || ''}⟦t⟧${opts.statusReply.time || ''}⟦/⟧${content}`
+      const sid = opts.statusReply.statusId ? `⟦id⟧${opts.statusReply.statusId}` : ''
+      content = `⟦status⟧${opts.statusReply.preview || ''}⟦t⟧${opts.statusReply.time || ''}${sid}⟦/⟧${content}`
     }
     const payload: Record<string, unknown> = {
       content,
@@ -814,13 +882,18 @@ export const api = {
     return { status: mapped }
   },
 
-  postStatus: async (text: string, image?: string | null, background?: string | null) => {
+  postStatus: async (
+    text: string,
+    image?: string | null,
+    background?: string | null,
+    opts?: { expiresInHours?: number; visibility?: string },
+  ) => {
     const payload: Record<string, unknown> = {
       content: text || '',
       status_type: image ? 'image' : 'text',
-      visibility: 'contacts',
-      expires_in_hours: 24,
-      background: background || 'solid_1',
+      visibility: opts?.visibility || 'contacts',
+      expires_in_hours: opts?.expiresInHours ?? 24,
+      background: background || 'theme_purple_grad',
     }
     if (image) {
       payload.media_attachments = [{ type: 'image', url: image }]

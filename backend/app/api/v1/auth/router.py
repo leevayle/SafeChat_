@@ -87,6 +87,10 @@ async def me(user: dict = Depends(get_current_user)):
             "account_status": user.get("account_status"),
             "privacy_settings": user.get("privacy_settings"),
             "notification_settings": user.get("notification_settings"),
+            "theme": user.get("theme") or "purple",
+            "subscription_plan": user.get("subscription_plan") or "free",
+            "preferences": user.get("preferences") or {},
+            "email": user.get("email"),
             "created_at": user.get("created_at").isoformat() if user.get("created_at") else None,
         },
     )

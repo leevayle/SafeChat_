@@ -66,3 +66,33 @@ export async function compressProfileImage(file: File): Promise<string> {
   const crop = defaultCenterCrop(img.naturalWidth, img.naturalHeight)
   return cropAndCompress(src, crop)
 }
+
+const CHAT_MAX_EDGE = 1600
+const CHAT_JPEG_QUALITY = 0.78
+
+/**
+ * Compress an image for chat/web without cropping.
+ * Scales down so the longest edge is at most CHAT_MAX_EDGE, keeps aspect ratio.
+ */
+export async function compressForWeb(
+  file: File,
+  maxEdge = CHAT_MAX_EDGE,
+  quality = CHAT_JPEG_QUALITY,
+): Promise<string> {
+  const src = await fileToDataUrl(file)
+  const img = await loadImage(src)
+  const w = img.naturalWidth
+  const h = img.naturalHeight
+  const scale = Math.min(1, maxEdge / Math.max(w, h))
+  const outW = Math.max(1, Math.round(w * scale))
+  const outH = Math.max(1, Math.round(h * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = outW
+  canvas.height = outH
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Canvas unavailable')
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(img, 0, 0, outW, outH)
+  return canvas.toDataURL('image/jpeg', quality)
+}

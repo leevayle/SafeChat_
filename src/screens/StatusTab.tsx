@@ -1,14 +1,15 @@
 import { useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, ImagePlus, X, Settings as SettingsIcon, Eye } from 'lucide-react'
+import { Plus, ImagePlus, X, Settings as SettingsIcon, Eye, Camera } from 'lucide-react'
 import { BrandMark } from '../components/AppHeaderLogo'
 import { Avatar } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
 import { api } from '../api'
-import { STATUS_BG_OPTIONS, statusBgCss } from '../lib/statusBg'
+import { STATUS_BG_OPTIONS, statusBgCss, themeDefaultStatusBg } from '../lib/statusBg'
 import { useStore } from '../store'
 import { PillButton } from '../components/PillButton'
 import { parseUtc } from '../time'
+import { compressForWeb } from '../lib/imageProcess'
 
 const API_ORIGIN = import.meta.env.VITE_API_URL || ''
 function mediaUrl(path?: string | null) {
@@ -26,7 +27,9 @@ type Props = {
 
 export function StatusTab({ onOpenStatus }: Props) {
   const { statusList, me, refreshStatus, settings, setSetting, showToast, patchStatusList } = useStore()
-  const [bgCode, setBgCode] = useState('solid_1')
+  const [bgCode, setBgCode] = useState(() => themeDefaultStatusBg('purple'))
+  const [validity, setValidity] = useState<(typeof VALIDITY)[number]>('24 hours')
+  const [privacy, setPrivacy] = useState<(typeof PRIVACY)[number]>('My contacts')
   const [text, setText] = useState('')
   const [image, setImage] = useState<string | null>(null)
   const [composing, setComposing] = useState(false)
@@ -70,13 +73,33 @@ export function StatusTab({ onOpenStatus }: Props) {
     return Array.from(map.values())
   }, [others, me])
 
-  const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     e.target.value = ''
     if (!f || !f.type.startsWith('image/')) return
-    const r = new FileReader()
-    r.onload = () => setImage(String(r.result))
-    r.readAsDataURL(f)
+    try {
+      const data = await compressForWeb(f)
+      setImage(data)
+    } catch {
+      showToast('Could not process image')
+    }
+  }
+
+  const hoursFromValidity = (v: string) => {
+    if (v.startsWith('1 ')) return 1
+    if (v.startsWith('6 ')) return 6
+    if (v.startsWith('12')) return 12
+    return 24
+  }
+  const visibilityFromPrivacy = (v: string) => {
+    if (v.startsWith('Only')) return 'selected'
+    if (v.startsWith('Contacts except')) return 'contacts'
+    return 'contacts'
+  }
+
+  const openComposer = () => {
+    setBgCode(themeDefaultStatusBg(settings.theme))
+    setComposing(true)
   }
 
   const post = async () => {
@@ -84,8 +107,9 @@ export function StatusTab({ onOpenStatus }: Props) {
     const body = text.trim()
     const img = image
     const localId = `local-status-${Date.now()}`
+    const hours = hoursFromValidity(validity)
     const createdAt = new Date().toISOString()
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    const expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString()
     const optimistic = {
       id: localId,
       userId: me?.id || '',
@@ -119,7 +143,10 @@ export function StatusTab({ onOpenStatus }: Props) {
     setBusy(true)
 
     try {
-      const { status } = await api.postStatus(body, img, bgCode)
+      const { status } = await api.postStatus(body, img, bgCode, {
+        expiresInHours: hours,
+        visibility: visibilityFromPrivacy(privacy),
+      })
       // Keep the same list slot — swap id/metadata only so the bubble never disappears
       patchStatusList((list) =>
         list.map((s) =>
@@ -140,7 +167,7 @@ export function StatusTab({ onOpenStatus }: Props) {
             : s,
         ),
       )
-      showToast('Just now')
+      showToast('Status posted')
     } catch (e: any) {
       patchStatusList((list) => list.filter((s) => s.id !== localId))
       showToast(e?.message || 'Could not post status — try again')
@@ -176,7 +203,10 @@ export function StatusTab({ onOpenStatus }: Props) {
               onClick={() => me?.id && onOpenStatus?.(me.id)}
               className="flex w-[88px] shrink-0 flex-col items-center gap-1.5 text-left"
             >
-              <div className="relative h-[112px] w-[88px] overflow-hidden rounded-2xl bg-gradient-to-br from-brand-purple/80 to-brand-blue/70 shadow-sm ring-1 ring-black/5">
+              <div
+                className="relative h-[112px] w-[88px] overflow-hidden rounded-2xl shadow-sm ring-1 ring-black/5"
+                style={{ background: statusBgCss(s.background || 'theme_purple_grad') }}
+              >
                 {s.image ? (
                   <img src={mediaUrl(s.image)} alt="" className="h-full w-full object-cover" />
                 ) : (
@@ -201,7 +231,7 @@ export function StatusTab({ onOpenStatus }: Props) {
           {/* Add status — always last; sole item when empty */}
           <button
             type="button"
-            onClick={() => setComposing(true)}
+            onClick={openComposer}
             className="flex w-[88px] shrink-0 flex-col items-center gap-1.5"
           >
             <span className="flex h-[112px] w-[88px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-brand-purple/35 bg-brand-purple/5 text-brand-purple">
@@ -269,13 +299,31 @@ export function StatusTab({ onOpenStatus }: Props) {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => fileRef.current?.click()}
-                  className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm"
+                  onClick={() => {
+                    if (fileRef.current) {
+                      fileRef.current.removeAttribute('capture')
+                      fileRef.current.click()
+                    }
+                  }}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-white shadow-sm ring-1 ring-white/30 backdrop-blur-md transition active:scale-95"
                   aria-label="Add photo"
                 >
-                  <ImagePlus size={20} />
+                  <ImagePlus size={18} strokeWidth={2.2} />
                 </button>
-                <PillButton onClick={post} loading={busy} variant="orange" className="!px-5 !py-2 text-sm">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (fileRef.current) {
+                      fileRef.current.setAttribute('capture', 'environment')
+                      fileRef.current.click()
+                    }
+                  }}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-white shadow-sm ring-1 ring-white/30 backdrop-blur-md transition active:scale-95"
+                  aria-label="Take photo"
+                >
+                  <Camera size={18} strokeWidth={2.2} />
+                </button>
+                <PillButton onClick={post} loading={busy} variant="orange" className="!px-5 !py-2 text-sm shadow-lg">
                   Post
                 </PillButton>
               </div>
@@ -330,16 +378,38 @@ export function StatusTab({ onOpenStatus }: Props) {
                   />
                 ))}
               </div>
-              <div className="flex justify-center gap-2.5 flex-wrap px-1">
+              <div className="flex justify-center gap-2 flex-wrap px-1">
                 {VALIDITY.map((v) => (
                   <button
                     key={v}
                     type="button"
-                    onClick={() => setSetting('statusValidity', v)}
-                    className={`shrink-0 rounded-full px-4 py-2 text-xs font-extrabold backdrop-blur-sm transition ${
-                      (settings.statusValidity || '24 hours') === v
-                        ? 'bg-white text-ink'
-                        : 'bg-white/15 text-white'
+                    onClick={() => {
+                      setValidity(v)
+                      setSetting('statusValidity', v)
+                    }}
+                    className={`shrink-0 rounded-full px-3.5 py-1.5 text-[11px] font-extrabold backdrop-blur-md transition ${
+                      validity === v
+                        ? 'bg-white text-ink shadow-lg'
+                        : 'bg-white/15 text-white ring-1 ring-white/20'
+                    }`}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+              <div className="flex justify-center gap-2 flex-wrap px-1">
+                {PRIVACY.map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => {
+                      setPrivacy(v)
+                      setSetting('statusPrivacy', v)
+                    }}
+                    className={`shrink-0 rounded-full px-3.5 py-1.5 text-[11px] font-extrabold backdrop-blur-md transition ${
+                      privacy === v
+                        ? 'bg-white text-ink shadow-lg'
+                        : 'bg-white/15 text-white ring-1 ring-white/20'
                     }`}
                   >
                     {v}
@@ -347,9 +417,9 @@ export function StatusTab({ onOpenStatus }: Props) {
                 ))}
               </div>
               <p className="pt-1 text-center text-[11px] font-semibold leading-relaxed text-white/55">
-                Visible to {settings.statusPrivacy || 'My contacts'}
+                Visible to {privacy}
                 <span className="mx-1.5 opacity-40">·</span>
-                expires in {settings.statusValidity || '24 hours'}
+                expires in {validity} (UTC)
               </p>
             </div>
           </div>

@@ -7,8 +7,9 @@ import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
 import { isRealtimeOpen, wsSendMessage, wsReceipt } from '../realtime'
 import { FONT_SIZES, WALLPAPERS, useStore } from '../store'
 import { playInboxLandingChime } from '../lib/sounds'
+import { compressForWeb } from '../lib/imageProcess'
 
-type Props = { contactId: string; onBack: () => void; onCall: (kind: 'audio' | 'video') => void; onOpenCalls?: () => void }
+type Props = { contactId: string; onBack: () => void; onCall: (kind: 'audio' | 'video') => void; onOpenCalls?: () => void; onOpenStatus?: (userId: string, statusId?: string) => void }
 
 const REACT_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const
 const EMOJIS = [
@@ -121,6 +122,7 @@ type BubbleProps = {
   onOpenCalls?: () => void
   onJumpTo?: (id: string) => void
   onOpenAction?: () => void
+  onOpenStatusReply?: (sr: { preview: string; time?: string; statusId?: string }) => void
 }
 
 /** One mount animation only; later receipt updates re-render ticks in place */
@@ -134,6 +136,7 @@ const MessageBubble = memo(function MessageBubble({
   onOpenCalls,
   onJumpTo,
   onOpenAction,
+  onOpenStatusReply,
 }: BubbleProps) {
   const startX = useRef(0)
   const startY = useRef(0)
@@ -207,20 +210,24 @@ const MessageBubble = memo(function MessageBubble({
         onClick={() => {
           if (mine && m.state === 'failed') onRetry(m)
         }}
-        className={`max-w-[78%] overflow-hidden shadow-sm ${
+        className={`max-w-[76%] overflow-hidden ${
           mine
-            ? 'bubble-mine rounded-3xl rounded-br-md text-white'
-            : 'rounded-3xl rounded-bl-md bg-white text-ink'
+            ? 'bubble-mine rounded-2xl rounded-br-sm text-white shadow-[0_4px_18px_-6px_rgba(0,0,0,0.28)]'
+            : 'rounded-2xl rounded-bl-sm bg-white text-ink shadow-[0_4px_16px_-8px_rgba(15,23,42,0.18)] ring-1 ring-black/[0.04]'
         } ${mine && m.state === 'failed' ? 'ring-2 ring-red-300/80' : ''}`}
       >
         {m.statusReply && (
           <button
             type="button"
-            className={`mx-2 mt-2 w-[calc(100%-1rem)] rounded-xl px-3 py-1.5 text-left text-[12px] font-semibold ${
-              mine ? 'bg-white/15 text-white/90' : 'bg-gray-100 text-gray-600'
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenStatusReply?.(m.statusReply!)
+            }}
+            className={`mx-2.5 mt-2 w-[calc(100%-1.25rem)] border-l-[3px] px-2.5 py-1.5 text-left text-[12px] font-semibold ${
+              mine ? 'border-white/70 bg-white/12 text-white/90' : 'border-brand-purple/80 bg-gray-50 text-gray-600'
             }`}
           >
-            <span className="block text-[10px] font-black uppercase tracking-wide opacity-70">Status</span>
+            <span className="block text-[10px] font-black uppercase tracking-wide opacity-70">Status reply</span>
             <span className="line-clamp-2">{m.statusReply.preview}</span>
             {m.statusReply.time ? (
               <span className="mt-0.5 block text-[10px] opacity-60">{m.statusReply.time}</span>
@@ -234,10 +241,10 @@ const MessageBubble = memo(function MessageBubble({
               e.stopPropagation()
               if (m.replyToId) onJumpTo?.(m.replyToId)
             }}
-            className={`mx-2 mt-2 flex w-[calc(100%-1rem)] gap-2 rounded-xl border-l-4 px-2.5 py-1.5 text-left text-[12px] font-semibold ${
+            className={`mx-2.5 mt-2 flex w-[calc(100%-1.25rem)] gap-2 border-l-[3px] px-2.5 py-1.5 text-left text-[12px] font-semibold ${
               mine
-                ? 'border-white/70 bg-white/15 text-white/90'
-                : 'border-brand-purple bg-gray-50 text-gray-600'
+                ? 'border-white/80 bg-white/12 text-white/90'
+                : 'border-brand-purple bg-gray-50/90 text-gray-600'
             }`}
           >
             <span className="line-clamp-2">{m.replyToText || 'Original message'}</span>
@@ -247,16 +254,16 @@ const MessageBubble = memo(function MessageBubble({
           <img
             src={mediaUrl(m.image)}
             alt=""
-            className="max-h-56 w-full object-cover"
+            className={`max-h-60 w-full object-cover ${m.text && m.text !== '📷 Photo' ? '' : 'rounded-b-none'}`}
             loading="lazy"
           />
         )}
         {m.text && m.text !== '📷 Photo' && (
-          <p className="px-4 pt-2.5 font-semibold leading-snug">{m.text}</p>
+          <p className="px-3.5 pt-2.5 text-[15px] font-semibold leading-[1.35] tracking-[-0.01em]">{m.text}</p>
         )}
         <p
-          className={`flex items-center justify-end gap-1 px-4 pb-2 pt-1 text-[11px] font-bold ${
-            mine ? 'text-white/75' : 'text-gray-400'
+          className={`flex items-center justify-end gap-1 px-3.5 pb-1.5 pt-0.5 text-[10px] font-bold tracking-wide ${
+            mine ? 'text-white/70' : 'text-gray-400'
           }`}
         >
           {m.timeLabel ||
@@ -272,8 +279,8 @@ const MessageBubble = memo(function MessageBubble({
   )
 })
 
-function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
-  const { settings, contacts, chats, me, showToast, upsertChatPreview } = useStore()
+function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus }: Props) {
+  const { settings, contacts, chats, me, showToast, upsertChatPreview, statusList } = useStore()
   // Resolve peer from contacts, or from an existing chat preview (notifications may pass contactId)
   const chatPreview =
     chats.find(
@@ -335,7 +342,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
       return false
     }
   })
-  const [statusReply, setStatusReply] = useState<{ preview: string; time?: string } | null>(null)
+  const [statusReply, setStatusReply] = useState<{ preview: string; time?: string; statusId?: string } | null>(null)
   const prevMsgCountRef = useRef(0)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -375,13 +382,16 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
     }
 
     const username = ((c as any).username || '').replace(/^@/, '').trim()
-    if (!username) {
+    const peer = peerId || contactId
+    if (!username && !peer) {
       showToast('Could not open chat — contact is missing')
       return null
     }
     ensurePromise.current = (async () => {
       try {
-        const preview = await api.openPrivateChat(username)
+        const preview = await api.openPrivateChat(
+          username ? { username, userId: peer } : { userId: peer },
+        )
         const cid = preview.conversationId || null
         if (cid) {
           setConversationId(cid)
@@ -524,6 +534,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
           time?: string
           image?: string | null
           state?: string
+          reply_to_message_id?: string | null
+          reply_to_text?: string | null
         }
         mine?: boolean
       }
@@ -531,12 +543,19 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
       const openCid = convRef.current
       if (!openCid || detail.cid !== openCid) return
       const mine = detail.mine ?? detail.m.from === me?.id
+      let text = detail.m.text || (detail.m.image ? '📷 Photo' : '')
+      let statusReply: { preview: string; time?: string; statusId?: string } | null = null
+      const sr = text.match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
+      if (sr) {
+        statusReply = { preview: sr[1], time: sr[2] || undefined, statusId: sr[3] || undefined }
+        text = sr[4]
+      }
       const incoming = {
         id: detail.m.id,
         clientKey: detail.m.id,
         from: detail.m.from,
         to: contactId,
-        text: detail.m.text || (detail.m.image ? '📷 Photo' : ''),
+        text,
         image: detail.m.image || null,
         time: detail.m.time || new Date().toISOString(),
         timeLabel: new Date(detail.m.time || Date.now()).toLocaleTimeString([], {
@@ -546,6 +565,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
         }),
         state: (detail.m.state as any) || (mine ? 'sent' : undefined),
         mine,
+        replyToId: detail.m.reply_to_message_id || null,
+        replyToText: detail.m.reply_to_text || null,
+        statusReply,
       }
       // Delivered was already fired in the store handler before this event.
       setMsgs((prev) => {
@@ -678,7 +700,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
     localId: string,
     body: string,
     img: string | null,
-    opts?: { replyToId?: string; statusReply?: { preview: string; time?: string } },
+    opts?: { replyToId?: string; statusReply?: { preview: string; time?: string; statusId?: string } },
   ) => {
     try {
       const cid = await ensureConversation()
@@ -702,11 +724,17 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
         convRef.current = cid
       }
       // Prefer persistent WebSocket (no new HTTP handshake)
+      let wsText = body || ''
+      if (opts?.statusReply) {
+        const sid = opts.statusReply.statusId ? `⟦id⟧${opts.statusReply.statusId}` : ''
+        wsText = `⟦status⟧${opts.statusReply.preview || ''}⟦t⟧${opts.statusReply.time || ''}${sid}⟦/⟧${wsText}`
+      }
       const usedWs = isRealtimeOpen() && wsSendMessage({
         conversationId: cid,
-        text: body || '',
+        text: wsText,
         clientKey: localId,
         image: img,
+        replyToId: opts?.replyToId || undefined,
       })
       if (usedWs) {
         // Ack arrives via sc:rt-ack / store onAck → updates ticks to sent
@@ -773,7 +801,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
     const localId = `local-${Date.now()}`
     const nowIso = utcNowIso()
     const timeLabel = formatLocalTime(nowIso)
-    const previewText = body || (img ? '📷 Photo' : '')
+    const previewText = statusSnap
+      ? (body ? `Status reply: ${body}` : 'Status reply')
+      : body || (img ? '📷 Photo' : '')
     const optimistic: ApiMsg = {
       id: localId,
       clientKey: localId,
@@ -825,9 +855,17 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
     const f = e.target.files?.[0]
     e.target.value = ''
     if (!f || !f.type.startsWith('image/')) return
-    if (f.size > 8 * 1024 * 1024) return
-    const data = await fileToDataUrl(f)
-    setPendingImage(data)
+    if (f.size > 25 * 1024 * 1024) {
+      showToast('Image is too large')
+      return
+    }
+    try {
+      // Compress + optimize for web; do not crop
+      const data = await compressForWeb(f)
+      setPendingImage(data)
+    } catch {
+      showToast('Could not process image')
+    }
   }
 
 
@@ -938,10 +976,19 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
     try {
       const raw = sessionStorage.getItem('sc_status_reply')
       if (!raw) return
-      const data = JSON.parse(raw) as { peerId?: string; preview?: string; time?: string }
+      const data = JSON.parse(raw) as {
+        peerId?: string
+        preview?: string
+        time?: string
+        statusId?: string
+      }
       sessionStorage.removeItem('sc_status_reply')
       if (data.peerId && data.peerId === contactId) {
-        setStatusReply({ preview: data.preview || 'Status', time: data.time })
+        setStatusReply({
+          preview: data.preview || 'Status',
+          time: data.time,
+          statusId: data.statusId,
+        })
       }
     } catch {
       /* */
@@ -1138,6 +1185,23 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
                   }}
                   onOpenCalls={onOpenCalls}
                   onJumpTo={(id) => msgRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                  onOpenStatusReply={(sr) => {
+                    if (!sr.statusId) {
+                      showToast('This status is no longer available')
+                      return
+                    }
+                    const found = (statusList || []).find((s: any) => s.id === sr.statusId)
+                    if (!found) {
+                      showToast('This status is no longer available')
+                      return
+                    }
+                    const exp = found.expiresAt ? Date.parse(found.expiresAt) : NaN
+                    if (!Number.isNaN(exp) && exp <= Date.now()) {
+                      showToast('This status has expired')
+                      return
+                    }
+                    onOpenStatus?.(found.userId || contactId, sr.statusId)
+                  }}
                 />
               </div>
             )

@@ -24,7 +24,8 @@ class ForwardMessageRequest(BaseModel):
 
 
 class CreatePrivateConversationRequest(BaseModel):
-    participant_username: str = Field(..., min_length=3, max_length=32)
+    participant_username: Optional[str] = Field(None, min_length=3, max_length=32)
+    participant_user_id: Optional[str] = Field(None, min_length=1, max_length=64)
 
 
 class ConversationSettingsUpdate(BaseModel):

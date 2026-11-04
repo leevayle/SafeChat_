@@ -43,12 +43,6 @@ def get_database() -> AsyncIOMotorDatabase:
 
 async def create_indexes() -> None:
     logger.info("Boot · checking indexes…")
-    before_total = 0
-    try:
-        for name in await db.list_collection_names():
-            before_total += len(await db[name].index_information())
-    except Exception:
-        before_total = 0
     """Create all required indexes for performance and uniqueness."""
     database = get_database()
 
@@ -212,15 +206,3 @@ async def create_indexes() -> None:
     await database.system_audit_logs.create_index("actor_id")
 
     logger.info("All MongoDB indexes created/verified")
-
-    after_total = 0
-    try:
-        for name in await db.list_collection_names():
-            after_total += len(await db[name].index_information())
-    except Exception:
-        after_total = before_total
-    delta = max(0, after_total - before_total)
-    if delta:
-        logger.info("Boot · indexes passed — ensured set, %s new/updated", delta)
-    else:
-        logger.info("Boot · indexes passed — all indexes present")

@@ -73,6 +73,8 @@ class UserInDB(BaseModel):
     privacy_settings: PrivacySettings = Field(default_factory=PrivacySettings)
     notification_settings: NotificationSettings = Field(default_factory=NotificationSettings)
     security_settings: SecuritySettings = Field(default_factory=SecuritySettings)
+    theme: str = "purple"
+    subscription_plan: str = "free"
 
     class Config:
         populate_by_name = True

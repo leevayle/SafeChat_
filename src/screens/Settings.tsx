@@ -169,7 +169,18 @@ export function Settings({
                       ? 'Blocked'
                       : 'Help'
 
+  const persistThemeToServer = async () => {
+    try {
+      await api.updateMe({ theme: s.theme || 'purple' })
+    } catch {
+      /* ignore offline / auth errors */
+    }
+  }
+
   const goBack = () => {
+    if (page === 'chats') {
+      void persistThemeToServer()
+    }
     if (page === 'home') onBack()
     else setPage('home')
   }
@@ -286,6 +297,36 @@ export function Settings({
                     }
                   }}
                 />
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => file.current?.click()}
+                    className="rounded-full bg-brand-purple/10 px-4 py-2 text-xs font-extrabold text-brand-purple"
+                  >
+                    Change photo
+                  </button>
+                  {s.photo ? (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await saveProfile({
+                            name: draft.name.trim() || s.name,
+                            username: draft.username.trim() || s.username,
+                            bio: draft.bio || s.bio || '',
+                            photo: null,
+                          })
+                          setToast('Profile photo removed')
+                        } catch (e: any) {
+                          setToast(e?.message || 'Could not remove photo')
+                        }
+                      }}
+                      className="rounded-full bg-red-50 px-4 py-2 text-xs font-extrabold text-brand-red"
+                    >
+                      Delete photo
+                    </button>
+                  ) : null}
+                </div>
               </div>
 
               <Card>
@@ -339,6 +380,23 @@ export function Settings({
                       className="mt-1.5 w-full resize-none rounded-2xl bg-gray-100 px-4 py-3 font-semibold outline-none focus:ring-4 focus:ring-brand-purple/20"
                     />
                   </label>
+                  <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                    <p className="text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Phone</p>
+                    <p className="mt-0.5 font-bold text-ink">{s.phone || 'Not set'}</p>
+                  </div>
+                  <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                    <p className="text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Email</p>
+                    <p className="mt-0.5 font-bold text-ink">{(s as any).email || 'Not set'}</p>
+                  </div>
+                  <div className="flex items-center justify-between rounded-2xl bg-gradient-to-r from-brand-purple/10 to-orange-50 px-4 py-3 ring-1 ring-brand-purple/15">
+                    <div>
+                      <p className="text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Subscription</p>
+                      <p className="mt-0.5 font-black capitalize text-ink">{(s as any).subscriptionPlan || 'Free'}</p>
+                    </div>
+                    <span className="rounded-full bg-white px-3 py-1 text-[11px] font-extrabold text-brand-purple shadow-sm ring-1 ring-brand-purple/20">
+                      Current plan
+                    </span>
+                  </div>
                   <PrimaryButton
                     disabled={!canSaveProfile}
                     onClick={async () => {
@@ -459,104 +517,147 @@ export function Settings({
                 />
               </Card>
 
+              <Card>
+                <Row
+                  label="Liquid glass"
+                  hint="Reflective blur on panels"
+                  right={
+                    <Toggle
+                      on={!!s.liquidGlass}
+                      onChange={(v) => setSetting('liquidGlass', v as never)}
+                      label="Liquid glass"
+                    />
+                  }
+                />
+                <Row
+                  label="Dark mode"
+                  hint="Switch interface brightness"
+                  right={
+                    <Toggle
+                      on={(s.colorMode || 'light') === 'dark'}
+                      onChange={(v) => setSetting('colorMode', (v ? 'dark' : 'light') as never)}
+                      label="Dark mode"
+                    />
+                  }
+                />
+              </Card>
+
               <div>
-                <SectionLabel>App theme</SectionLabel>
-                <div className="flex gap-2.5">
-                  {Object.values(THEMES).map((t) => {
-                    const active = (s.theme || 'purple') === t.id
-                    return (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => setSetting('theme', t.id as never)}
-                        className={`flex flex-1 flex-col items-center gap-1.5 rounded-2xl border-2 bg-white p-2 shadow-sm transition ${
-                          active ? 'border-brand-purple ring-2 ring-brand-purple/15' : 'border-transparent'
-                        }`}
-                      >
-                        <span
-                          className="h-10 w-10 rounded-full shadow-md"
-                          style={{
-                            background: t.primary,
-                            boxShadow: `0 6px 14px -4px ${t.primary}99`,
+                <SectionLabel>Brand color</SectionLabel>
+                <div className="overflow-hidden rounded-3xl bg-white p-3 shadow-sm">
+                  <div className="grid grid-cols-4 gap-2">
+                    {Object.values(THEMES).map((t) => {
+                      const active = (s.theme || 'purple') === t.id
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => {
+                            setSetting('theme', t.id as never)
+                            void api.updateMe({ theme: t.id })
                           }}
-                        />
-                        <span className="text-[11px] font-extrabold text-ink">{t.label}</span>
-                      </button>
-                    )
-                  })}
+                          className={`flex flex-col items-center gap-2 rounded-2xl px-2 py-3 transition ${
+                            active
+                              ? 'bg-brand-purple/10 ring-2 ring-brand-purple/40'
+                              : 'hover:bg-gray-50'
+                          }`}
+                        >
+                          <span
+                            className="h-11 w-11 rounded-full"
+                            style={{
+                              background: `linear-gradient(145deg, ${t.primary}, ${t.accent})`,
+                              boxShadow: active
+                                ? `0 8px 18px -4px ${t.primary}aa`
+                                : `0 4px 10px -4px ${t.primary}66`,
+                            }}
+                          />
+                          <span className="text-[11px] font-extrabold text-ink">{t.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="mt-3 px-1 text-center text-[11px] font-semibold text-gray-400">
+                    Buttons, rings, and accents follow this color. Logo stays fixed.
+                  </p>
                 </div>
-                <p className="mt-2 px-1 text-xs font-semibold text-gray-400">
-                  Accent + floating button shadows follow the theme. Logo colors never change.
-                </p>
               </div>
 
               <div>
-                <SectionLabel>Chat accent</SectionLabel>
-                <div className="flex gap-2.5">
-                  {CHAT_ACCENTS.map((a) => {
-                    const active = (s.chatAccent || 'purple') === a.id
-                    return (
-                      <button
-                        key={a.id}
-                        type="button"
-                        onClick={() => setSetting('chatAccent', a.id as never)}
-                        className={`flex flex-1 flex-col items-center gap-1.5 rounded-2xl border-2 bg-white p-2 shadow-sm transition ${
-                          active ? 'border-brand-purple ring-2 ring-brand-purple/15' : 'border-transparent'
-                        }`}
-                      >
-                        <span
-                          className="h-10 w-10 rounded-full"
-                          style={{
-                            background: a.color,
-                            boxShadow: `0 6px 14px -4px ${a.color}99`,
-                          }}
-                        />
-                        <span className="text-[11px] font-extrabold text-ink">{a.label}</span>
-                      </button>
-                    )
-                  })}
+                <SectionLabel>Chat bubble</SectionLabel>
+                <div className="overflow-hidden rounded-3xl bg-white p-3 shadow-sm">
+                  <div className="grid grid-cols-4 gap-2">
+                    {CHAT_ACCENTS.map((a) => {
+                      const active = (s.chatAccent || 'purple') === a.id
+                      return (
+                        <button
+                          key={a.id}
+                          type="button"
+                          onClick={() => setSetting('chatAccent', a.id as never)}
+                          className={`flex flex-col items-center gap-2 rounded-2xl px-2 py-3 transition ${
+                            active
+                              ? 'bg-brand-purple/10 ring-2 ring-brand-purple/40'
+                              : 'hover:bg-gray-50'
+                          }`}
+                        >
+                          <span
+                            className="flex h-11 w-11 items-center justify-center rounded-2xl"
+                            style={{ background: a.color }}
+                          >
+                            <span className="h-2.5 w-6 rounded-full bg-white/90" />
+                          </span>
+                          <span className="text-[11px] font-extrabold text-ink">{a.label}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
               </div>
 
               <div>
-                <SectionLabel>Chat wallpaper</SectionLabel>
-                <p className="mb-2 px-1 text-[11px] font-bold uppercase tracking-wide text-gray-400">Solids</p>
-                <div className="mb-3 flex gap-2.5">
-                  {WALLPAPER_SOLIDS.map((w) => {
-                    const active = (s.wallpaper || 'Cloud') === w.id
-                    return (
-                      <button
-                        key={w.id}
-                        type="button"
-                        onClick={() => setSetting('wallpaper', w.id as never)}
-                        className={`flex flex-1 flex-col items-center gap-1 overflow-hidden rounded-2xl border-2 bg-white shadow-sm transition ${
-                          active ? 'border-brand-purple ring-2 ring-brand-purple/15' : 'border-transparent'
-                        }`}
-                      >
-                        <div className="h-12 w-full" style={{ background: w.css }} />
-                        <span className="px-1 pb-1.5 text-[10px] font-extrabold text-ink">{w.label}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-                <p className="mb-2 px-1 text-[11px] font-bold uppercase tracking-wide text-gray-400">Gradients</p>
-                <div className="flex gap-2.5">
-                  {WALLPAPER_GRADIENTS.map((w) => {
-                    const active = (s.wallpaper || 'Cloud') === w.id
-                    return (
-                      <button
-                        key={w.id}
-                        type="button"
-                        onClick={() => setSetting('wallpaper', w.id as never)}
-                        className={`flex flex-1 flex-col items-center gap-1 overflow-hidden rounded-2xl border-2 bg-white shadow-sm transition ${
-                          active ? 'border-brand-purple ring-2 ring-brand-purple/15' : 'border-transparent'
-                        }`}
-                      >
-                        <div className="h-12 w-full" style={{ background: w.css }} />
-                        <span className="truncate px-1 pb-1.5 text-[10px] font-extrabold text-ink">{w.label}</span>
-                      </button>
-                    )
-                  })}
+                <SectionLabel>Wallpaper</SectionLabel>
+                <div className="overflow-hidden rounded-3xl bg-white p-3 shadow-sm">
+                  <p className="mb-2 px-1 text-[11px] font-bold uppercase tracking-wide text-gray-400">Solids</p>
+                  <div className="grid grid-cols-4 gap-2">
+                    {WALLPAPER_SOLIDS.map((w) => {
+                      const active = (s.wallpaper || 'Cloud') === w.id
+                      return (
+                        <button
+                          key={w.id}
+                          type="button"
+                          onClick={() => setSetting('wallpaper', w.id as never)}
+                          className={`overflow-hidden rounded-2xl ring-2 transition ${
+                            active ? 'ring-brand-purple' : 'ring-transparent'
+                          }`}
+                        >
+                          <div className="h-12 w-full" style={{ background: w.css }} />
+                          <span className="block truncate bg-white px-1 py-1 text-center text-[10px] font-extrabold text-ink">
+                            {w.label}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="mb-2 mt-3 px-1 text-[11px] font-bold uppercase tracking-wide text-gray-400">Gradients</p>
+                  <div className="grid grid-cols-4 gap-2">
+                    {WALLPAPER_GRADIENTS.map((w) => {
+                      const active = (s.wallpaper || 'Cloud') === w.id
+                      return (
+                        <button
+                          key={w.id}
+                          type="button"
+                          onClick={() => setSetting('wallpaper', w.id as never)}
+                          className={`overflow-hidden rounded-2xl ring-2 transition ${
+                            active ? 'ring-brand-purple' : 'ring-transparent'
+                          }`}
+                        >
+                          <div className="h-12 w-full" style={{ background: w.css }} />
+                          <span className="block truncate bg-white px-1 py-1 text-center text-[10px] font-extrabold text-ink">
+                            {w.label}
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
               </div>
 
@@ -566,7 +667,10 @@ export function Settings({
                   setSetting('theme', 'purple' as never)
                   setSetting('chatAccent', 'purple' as never)
                   setSetting('wallpaper', 'Cloud' as never)
+                  setSetting('liquidGlass', false as never)
+                  setSetting('colorMode', 'light' as never)
                   setToast('Defaults restored')
+                  void api.updateMe({ theme: 'purple' })
                 }}
                 className="w-full rounded-2xl bg-white py-3.5 text-sm font-extrabold text-brand-purple shadow-sm ring-1 ring-gray-100"
               >

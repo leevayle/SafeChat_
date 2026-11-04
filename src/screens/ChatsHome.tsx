@@ -294,13 +294,13 @@ export function ChatsHome({
               </div>
             )}
 
-            <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-2.5 pt-2">
+            <div className="no-scrollbar flex gap-1.5 overflow-x-auto px-4 pb-2 pt-1.5">
               {FILTERS.map((f) => (
                 <button
                   key={f}
                   type="button"
                   onClick={() => setFilter(f)}
-                  className={`shrink-0 rounded-full px-3.5 py-1.5 font-ui text-[13px] font-extrabold transition ${
+                  className={`shrink-0 rounded-full px-2.5 py-1 font-ui text-[11px] font-extrabold leading-none transition ${
                     filter === f
                       ? 'bg-brand-purple text-white shadow-sm'
                       : 'bg-brand-purple/10 text-brand-purple'

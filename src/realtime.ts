@@ -25,6 +25,8 @@ export type RtMsg = {
   type?: string
   image?: string | null
   state?: string
+  reply_to_message_id?: string | null
+  reply_to_text?: string | null
 }
 
 export type RtCallPacket = {
@@ -235,6 +237,7 @@ export function wsSendMessage(opts: {
   text: string
   clientKey: string
   image?: string | null
+  replyToId?: string | null
 }): boolean {
   return rawSend({
     t: 'send',
@@ -242,6 +245,7 @@ export function wsSendMessage(opts: {
     text: opts.text || '',
     ck: opts.clientKey,
     img: opts.image || undefined,
+    reply_to: opts.replyToId || undefined,
   })
 }
 

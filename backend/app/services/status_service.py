@@ -335,6 +335,7 @@ class StatusService:
             "media_attachments": s.get("media_attachments") or [],
             "visibility": s.get("visibility"),
             "status_type": s.get("status_type"),
+            "background": s.get("background") or "theme_purple_grad",
             "created_at": _iso(s.get("created_at")),
             "expires_at": _iso(s.get("expires_at")),
         }

@@ -48,6 +48,10 @@ export type Settings = {
   disappearing: string
   statusValidity: string
   statusPrivacy: string
+  email: string
+  subscriptionPlan: string
+  liquidGlass: boolean
+  colorMode: string
   appLock: boolean
   twoStep: boolean
   msgNotif: boolean
@@ -176,6 +180,20 @@ export function applyTheme(themeId: string) {
   root.dataset.theme = t.id
 }
 
+export function applyLiquidGlass(on: boolean) {
+  const root = document.documentElement
+  if (on) root.dataset.glass = '1'
+  else delete root.dataset.glass
+}
+
+export function applyColorMode(mode: string) {
+  const root = document.documentElement
+  const m = mode === 'dark' ? 'dark' : 'light'
+  root.dataset.mode = m
+  if (m === 'dark') root.classList.add('dark')
+  else root.classList.remove('dark')
+}
+
 export function applyChatAccent(accentId: string) {
   const a = CHAT_ACCENTS.find((c) => c.id === accentId) || CHAT_ACCENTS[0]
   document.documentElement.style.setProperty('--chat-accent', a.color)
@@ -209,6 +227,10 @@ const defaultSettings: Settings = {
   enterIsSend: true,
   wallpaper: 'Cloud',
   theme: 'purple',
+  email: '',
+  subscriptionPlan: 'free',
+  liquidGlass: false,
+  colorMode: 'light',
   chatAccent: 'purple',
   autoDownload: 'Wi-Fi only',
   lowDataCalls: false,
@@ -285,6 +307,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (raw) {
         const merged = { ...defaultSettings, ...JSON.parse(raw) }
         applyTheme(merged.theme || 'purple')
+        applyLiquidGlass(!!merged.liquidGlass)
+        applyColorMode(merged.colorMode || 'light')
         applyChatAccent(merged.chatAccent || 'purple')
         return merged
       }
@@ -334,6 +358,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         photo: user.photo,
         ...(s || {}),
       } as Settings
+      if (next.theme) applyTheme(String(next.theme))
+      if (next.chatAccent) applyChatAccent(String(next.chatAccent))
       try {
         localStorage.setItem('sc_settings', JSON.stringify(next))
         localStorage.setItem('sc_has_logged_in', '1')
@@ -359,6 +385,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setCalls([])
     setSaveRequestPending(0)
     setListsReady(true)
+    // Do not inherit previous user's theme after session expiry / forced logout
+    setSettings((prev) => {
+      const next = {
+        ...defaultSettings,
+        appLock: !!prev.appLock,
+        twoStep: !!prev.twoStep,
+        msgNotif: prev.msgNotif ?? defaultSettings.msgNotif,
+        groupNotif: prev.groupNotif ?? defaultSettings.groupNotif,
+        callNotif: prev.callNotif ?? defaultSettings.callNotif,
+        sound: prev.sound || defaultSettings.sound,
+        language: prev.language || defaultSettings.language,
+        wallpaper: prev.wallpaper || defaultSettings.wallpaper,
+        fontSize: prev.fontSize || defaultSettings.fontSize,
+      }
+      try {
+        localStorage.setItem('sc_settings', JSON.stringify(next))
+      } catch { /* ignore */ }
+      return next
+    })
+    applyTheme(defaultSettings.theme)
+    applyChatAccent(defaultSettings.chatAccent)
   }, [])
 
   const refreshChats = useCallback(async () => {
@@ -673,7 +720,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!mine) {
             void api.markDelivered(m.id).catch(() => {})
           }
-          const previewText = m.text || (m.image ? '📷 Photo' : '')
+          let previewText = m.text || (m.image ? '📷 Photo' : '')
+          const sr = String(previewText).match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
+          if (sr) {
+            const body = (sr[4] || '').trim()
+            previewText = body ? `Status reply: ${body}` : 'Status reply'
+          }
           const iso = m.time || new Date().toISOString()
           const timeLabel = new Date(iso).toLocaleTimeString([], {
             hour: '2-digit',
@@ -918,6 +970,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       setSettings(defaultSettings)
     }
+    applyTheme(defaultSettings.theme)
+    applyChatAccent(defaultSettings.chatAccent)
   }
 
   const meRef = useRef(me)
@@ -929,10 +983,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSettings(next)
     if (k === 'theme') applyTheme(String(v))
     if (k === 'chatAccent') applyChatAccent(String(v))
+    if (k === 'liquidGlass') applyLiquidGlass(!!v)
+    if (k === 'colorMode') applyColorMode(String(v))
     try {
       localStorage.setItem('sc_settings', JSON.stringify(next))
     } catch {
       /* ignore storage quota / private browsing errors */
+    }
+    const serverKey: Record<string, string> = {
+      theme: 'theme',
+      chatAccent: 'chat_accent',
+      wallpaper: 'wallpaper',
+      fontSize: 'font_size',
+      language: 'language',
+      statusPrivacy: 'status_privacy',
+      statusValidity: 'status_validity',
+      msgNotif: 'msg_notif',
+      groupNotif: 'group_notif',
+      callNotif: 'call_notif',
+      enterIsSend: 'enter_is_send',
+      typingIndicator: 'typing_indicator',
+      autoDownload: 'auto_download',
+      sound: 'sound',
+    }
+    const sk = serverKey[k as string]
+    if (sk && hasAccessToken() && !isSessionDead()) {
+      void api.updatePreferences({ [sk]: v }).catch(() => {})
     }
   }, [settings])
 

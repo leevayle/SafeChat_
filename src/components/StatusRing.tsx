@@ -5,12 +5,15 @@ export function StatusRing({
   size,
   children,
   className = '',
+  accent,
 }: {
   total: number
   viewed?: number
   size: number
   children: React.ReactNode
   className?: string
+  /** Unviewed segment color — defaults to current theme brand purple */
+  accent?: string
 }) {
   if (total <= 0) {
     return <span className={`relative inline-flex ${className}`}>{children}</span>
@@ -19,7 +22,7 @@ export function StatusRing({
   const stroke = 3
   const r = (size - stroke) / 2
   const c = 2 * Math.PI * r
-  const gap = total > 1 ? 0.08 : 0 // fraction of circumference as gap between segments
+  const gap = total > 1 ? 0.04 : 0 // fraction of circumference as gap between segments
   const usable = 1 - gap * total
   const segLen = (usable / total) * c
   const gapLen = gap * c
@@ -33,7 +36,7 @@ export function StatusRing({
         cy={size / 2}
         r={r}
         fill="none"
-        stroke={isViewed ? '#d1d5db' : '#7b2cbf'}
+        stroke={isViewed ? '#d1d5db' : (accent || 'var(--color-brand-purple, #7b2cbf)')}
         strokeWidth={stroke}
         strokeLinecap="round"
         strokeDasharray={`${segLen} ${c - segLen}`}

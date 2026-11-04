@@ -310,16 +310,25 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
     try {
       sessionStorage.setItem(
         'sc_status_reply',
-        JSON.stringify({ peerId: userId, preview, time }),
+        JSON.stringify({
+          peerId: userId,
+          preview,
+          time,
+          statusId: current?.id || undefined,
+        }),
       )
     } catch { /* */ }
     onClose()
     onReplyToStatus?.(userId)
   }
 
+  const bgCode = (current as any)?.background || 'theme_purple_grad'
+  const bgCss = statusBgCss(bgCode)
+
   return (
     <div
-      className="relative flex h-full flex-col select-none bg-gradient-to-b from-[#2a1a3a] to-ink text-white"
+      className="relative flex h-full flex-col select-none text-white"
+      style={{ background: bgCss }}
       onContextMenu={(e) => e.preventDefault()}
       onPointerUp={onPressEnd}
       onPointerCancel={onPressEnd}
@@ -430,17 +439,8 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
           </>
         ) : (
           <>
-            {/* Left stack: mute (top) · download/copy (bottom) */}
+            {/* Left stack: download/copy */}
             <div className="flex flex-col items-center gap-3">
-              <button
-                type="button"
-                data-status-action
-                onClick={toggleMute}
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm"
-                aria-label={muted ? 'Unmute status' : 'Mute status'}
-              >
-                {muted ? <VolumeX size={20} /> : <Volume2 size={20} />}
-              </button>
               <button
                 type="button"
                 data-status-action

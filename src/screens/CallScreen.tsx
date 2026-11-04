@@ -96,6 +96,7 @@ export function CallScreen({
   const [speaker, setSpeaker] = useState(true)
   const [camOff, setCamOff] = useState(false)
   const [pip, setPip] = useState({ x: 16, y: 72 })
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const dragRef = useRef<{ ox: number; oy: number; sx: number; sy: number } | null>(null)
 
   const pcRef = useRef<RTCPeerConnection | null>(null)
@@ -158,6 +159,7 @@ export function CallScreen({
     pcRef.current = null
     localStreamRef.current?.getTracks().forEach((t) => t.stop())
     localStreamRef.current = null
+    setLocalStream(null)
     remoteStreamRef.current.getTracks().forEach((t) => {
       try {
         remoteStreamRef.current.removeTrack(t)
@@ -222,6 +224,35 @@ export function CallScreen({
     }
   }, [])
 
+  const acquireLocalMedia = useCallback(async (): Promise<MediaStream> => {
+    if (localStreamRef.current) return localStreamRef.current
+    const audio: MediaTrackConstraints = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    }
+    // Progressive fallbacks — mobile browsers often reject ideal resolution
+    const tries: MediaStreamConstraints[] = isVideo
+      ? [
+          { audio, video: { facingMode: 'user' } },
+          { audio, video: true },
+          { audio: true, video: { facingMode: 'user' } },
+        ]
+      : [{ audio }, { audio: true }]
+    let lastErr: any = null
+    for (const constraints of tries) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints)
+        localStreamRef.current = stream
+        setLocalStream(stream)
+        return stream
+      } catch (e) {
+        lastErr = e
+      }
+    }
+    throw lastErr || new Error('Mic/camera permission needed')
+  }, [isVideo])
+
   const ensurePc = useCallback(async () => {
     if (pcRef.current) return pcRef.current
 
@@ -229,13 +260,10 @@ export function CallScreen({
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
       ],
     })
     pcRef.current = pc
-
-    // Explicit recv slots so audio/video always negotiate
-    pc.addTransceiver('audio', { direction: 'sendrecv' })
-    if (isVideo) pc.addTransceiver('video', { direction: 'sendrecv' })
 
     pc.onicecandidate = (ev) => {
       if (!ev.candidate || intentionalEndRef.current) return
@@ -260,53 +288,60 @@ export function CallScreen({
       }
     }
 
-    pc.ontrack = (ev) => {
-      const track = ev.track
-      // Replace same-kind track if renegotiating
-      remoteStreamRef.current.getTracks()
-        .filter((t) => t.kind === track.kind)
-        .forEach((t) => {
-          remoteStreamRef.current.removeTrack(t)
-        })
-      remoteStreamRef.current.addTrack(track)
-      playRemote()
-      track.onunmute = () => playRemote()
+    pc.oniceconnectionstatechange = () => {
+      const st = pc.iceConnectionState
+      if (st === 'connected' || st === 'completed') {
+        connectedRef.current = true
+        setConnected(true)
+        setStatusText('Connected')
+        playRemote()
+      } else if (st === 'failed') {
+        setStatusText('Connection failed')
+      }
     }
 
-    const constraints: MediaStreamConstraints = {
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-      video: isVideo ? { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-    }
-    const stream = await navigator.mediaDevices.getUserMedia(constraints)
-    localStreamRef.current = stream
-    // Prefer replaceTrack on existing transceivers
-    for (const track of stream.getTracks()) {
-      const sender = pc.getSenders().find((s) => s.track?.kind === track.kind || (!s.track && (s as any).track == null && pc.getTransceivers().some((tr) => tr.sender === s && tr.receiver.track?.kind === track.kind)))
-      const tr = pc.getTransceivers().find((x) => x.receiver.track?.kind === track.kind || x.mid === null)
-      if (tr) {
-        await tr.sender.replaceTrack(track)
-        tr.direction = 'sendrecv'
+    pc.ontrack = (ev) => {
+      const stream = ev.streams?.[0]
+      if (stream) {
+        remoteStreamRef.current = stream
       } else {
+        const track = ev.track
+        remoteStreamRef.current.getTracks()
+          .filter((t) => t.kind === track.kind)
+          .forEach((t) => remoteStreamRef.current.removeTrack(t))
+        remoteStreamRef.current.addTrack(track)
+      }
+      playRemote()
+      ev.track.onunmute = () => playRemote()
+    }
+
+    const stream = await acquireLocalMedia()
+    for (const track of stream.getTracks()) {
+      if (!pc.getSenders().some((s) => s.track === track)) {
         pc.addTrack(track, stream)
       }
     }
-    // Simpler reliable path: always addTrack if no sender yet
-    for (const track of stream.getTracks()) {
-      const has = pc.getSenders().some((s) => s.track === track || s.track?.kind === track.kind)
-      if (!has) pc.addTrack(track, stream)
-    }
-
-    if (localVideoRef.current && isVideo) {
-      localVideoRef.current.srcObject = stream
-      localVideoRef.current.muted = true
-      void localVideoRef.current.play().catch(() => {})
-    }
     return pc
-  }, [contactId, isVideo, playRemote])
+  }, [acquireLocalMedia, contactId, playRemote])
+
+  // Keep local PIP video element in sync with the live MediaStream
+  useEffect(() => {
+    const el = localVideoRef.current
+    if (!el || !localStream) return
+    if (el.srcObject !== localStream) {
+      el.srcObject = localStream
+    }
+    el.muted = true
+    el.playsInline = true
+    el.setAttribute('playsinline', 'true')
+    el.setAttribute('webkit-playsinline', 'true')
+    const play = () => void el.play().catch(() => {})
+    play()
+    el.onloadedmetadata = play
+    return () => {
+      el.onloadedmetadata = null
+    }
+  }, [localStream, isVideo])
 
   const applyRemoteOffer = useCallback(
     async (sdp: string, callId?: string) => {
@@ -359,18 +394,41 @@ export function CallScreen({
 
   useEffect(() => {
     if (!isCallee) return
-    wsCall({ a: 'accepted', to: contactId, callId: callIdRef.current || ringId || '' } as any)
-    setStatusText('Connecting…')
-  }, [contactId, isCallee, ringId])
+    let alive = true
+    ;(async () => {
+      try {
+        setStatusText(isVideo ? 'Starting camera…' : 'Connecting…')
+        await acquireLocalMedia()
+        if (!alive) return
+        wsCall({ a: 'accepted', to: contactId, callId: callIdRef.current || ringId || '' } as any)
+        setStatusText('Connecting…')
+      } catch (e: any) {
+        if (alive) setStatusText(e?.message || 'Mic/camera permission needed')
+      }
+    })()
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contactId, isCallee, ringId, isVideo])
 
+  // Outbound: run once. Do NOT depend on ensurePc identity — that cancelled the call mid-setup.
   useEffect(() => {
     if (isCallee) return
     if (offerDoneRef.current) return
     offerDoneRef.current = true
-    let cancelled = false
+    let alive = true
     ;(async () => {
       try {
-        setStatusText(isRealtimeOpen() ? 'Ringing…' : 'Connecting…')
+        setStatusText(isVideo ? 'Starting camera…' : 'Starting mic…')
+        // Media first so PIP paints even if signaling is slow
+        await acquireLocalMedia()
+        if (!alive || intentionalEndRef.current) return
+        setStatusText(isVideo ? 'Camera ready…' : 'Mic ready…')
+
+        const pc = await ensurePc()
+        if (!alive || intentionalEndRef.current) return
+
         wsCall({
           a: 'ring',
           to: contactId,
@@ -379,10 +437,14 @@ export function CallScreen({
           fromName: me?.name || me?.username,
           fromUsername: me?.username,
         } as any)
-        const pc = await ensurePc()
-        if (cancelled || intentionalEndRef.current) return
-        const offer = await pc.createOffer()
+
+        const offer = await pc.createOffer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: isVideo,
+        })
         await pc.setLocalDescription(offer)
+        if (!alive || intentionalEndRef.current) return
+
         wsCall({
           a: 'offer',
           to: contactId,
@@ -392,15 +454,20 @@ export function CallScreen({
           fromName: me?.name || me?.username,
           fromUsername: me?.username,
         } as any)
-        setStatusText('Ringing…')
+        setStatusText(isRealtimeOpen() ? 'Ringing…' : 'Ringing (waiting for network)…')
       } catch (e: any) {
-        if (!cancelled) setStatusText(e?.message || 'Mic/camera permission needed')
+        if (alive) {
+          const msg = String(e?.message || e?.name || 'Mic/camera permission needed')
+          setStatusText(msg.includes('Permission') || msg.includes('NotAllowed') ? 'Allow camera/mic in browser settings' : msg)
+        }
       }
     })()
     return () => {
-      cancelled = true
+      // Only mark dead on unmount — not on re-render
+      alive = false
     }
-  }, [contactId, ensurePc, isCallee, kind, me?.name, me?.username])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCallee, contactId, kind])
 
   useEffect(() => {
     if (!isCallee || !remoteOfferSdp) return
@@ -507,8 +574,8 @@ export function CallScreen({
           onPointerCancel={() => {
             dragRef.current = null
           }}
-          className="absolute z-20 h-40 w-[7.25rem] touch-none rounded-2xl object-cover shadow-2xl ring-2 ring-white/25"
-          style={{ left: pip.x, top: pip.y }}
+          className="absolute z-30 h-44 w-[7.5rem] touch-none rounded-2xl object-cover shadow-2xl ring-2 ring-white/40 bg-black/40"
+          style={{ left: pip.x, top: pip.y, transform: 'scaleX(-1)' }}
         />
       )}
 

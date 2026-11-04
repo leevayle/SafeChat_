@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field(
         default="dev-secret-key-change-in-production-must-be-at-least-64-characters-long"
     )
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 120
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # MongoDB

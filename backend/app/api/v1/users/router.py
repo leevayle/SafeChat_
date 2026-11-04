@@ -36,6 +36,7 @@ class ProfileUpdate(BaseModel):
     display_name: Optional[str] = Field(None, min_length=1, max_length=64)
     bio: Optional[str] = Field(None, max_length=256)
     profile_photo: Optional[str] = None
+    theme: Optional[str] = Field(None, max_length=32)
 
 
 class PrivacySettingsUpdate(BaseModel):
@@ -69,6 +70,10 @@ async def get_my_profile(user: dict = Depends(get_current_user)):
             "account_status": user.get("account_status"),
             "privacy_settings": user.get("privacy_settings"),
             "notification_settings": user.get("notification_settings"),
+            "theme": user.get("theme") or "purple",
+            "subscription_plan": user.get("subscription_plan") or "free",
+            "preferences": user.get("preferences") or {},
+            "email": user.get("email"),
             "created_at": user.get("created_at").isoformat()
             if user.get("created_at")
             else None,
@@ -84,8 +89,12 @@ async def update_my_profile(
     body: ProfileUpdate,
     user: dict = Depends(get_current_user),
 ):
+    raw = body.model_dump(exclude_unset=True)
+    # Allow clearing profile_photo with null; other fields still skip null
     updates = {
-        k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None
+        k: v
+        for k, v in raw.items()
+        if v is not None or k == "profile_photo"
     }
     if not updates:
         return success_response("Nothing to update")
@@ -104,6 +113,45 @@ async def update_my_profile(
         }
     )
     return success_response("Profile updated", updates)
+
+
+
+class PreferencesUpdate(BaseModel):
+    theme: Optional[str] = Field(None, max_length=32)
+    chat_accent: Optional[str] = Field(None, max_length=32)
+    wallpaper: Optional[str] = Field(None, max_length=64)
+    font_size: Optional[str] = Field(None, max_length=32)
+    language: Optional[str] = Field(None, max_length=64)
+    status_privacy: Optional[str] = Field(None, max_length=64)
+    status_validity: Optional[str] = Field(None, max_length=32)
+    msg_notif: Optional[bool] = None
+    group_notif: Optional[bool] = None
+    call_notif: Optional[bool] = None
+    enter_is_send: Optional[bool] = None
+    read_receipts: Optional[bool] = None
+    typing_indicator: Optional[bool] = None
+    auto_download: Optional[str] = Field(None, max_length=64)
+    sound: Optional[str] = Field(None, max_length=64)
+
+
+@router.patch("/me/preferences")
+async def update_preferences(
+    body: PreferencesUpdate,
+    user: dict = Depends(get_current_user),
+):
+    updates = {
+        k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None
+    }
+    if not updates:
+        return success_response("Nothing to update")
+    db = get_database()
+    set_ops = {f"preferences.{k}": v for k, v in updates.items()}
+    # Also mirror theme at top-level for quick access
+    if "theme" in updates:
+        set_ops["theme"] = updates["theme"]
+    set_ops["updated_at"] = datetime.now(timezone.utc)
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
+    return success_response("Preferences updated", updates)
 
 
 @router.patch("/me/privacy")

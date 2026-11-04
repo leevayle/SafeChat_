@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 
-/** Calm logo — soft fade, subtle sequential typing dots */
+/** Calm logo — soft fade, sequential ripple dots, gentle vertical float */
 export function LogoIcon({ size = 112, animate = true }: { size?: number; animate?: boolean }) {
   return (
     <motion.svg
@@ -9,8 +9,20 @@ export function LogoIcon({ size = 112, animate = true }: { size?: number; animat
       viewBox="0 0 112 112"
       fill="none"
       initial={animate ? { opacity: 0, scale: 0.92 } : false}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.55, ease: 'easeOut' }}
+      animate={
+        animate
+          ? { opacity: 1, scale: 1, y: [0, -4, 0] }
+          : { opacity: 1, scale: 1 }
+      }
+      transition={
+        animate
+          ? {
+              opacity: { duration: 0.55, ease: 'easeOut' },
+              scale: { duration: 0.55, ease: 'easeOut' },
+              y: { duration: 2.4, repeat: Infinity, ease: 'easeInOut' },
+            }
+          : undefined
+      }
     >
       <defs>
         <linearGradient id="sc-grad" x1="8" y1="100" x2="104" y2="12" gradientUnits="userSpaceOnUse">
@@ -30,7 +42,11 @@ export function LogoIcon({ size = 112, animate = true }: { size?: number; animat
           cy={51}
           r={5.5}
           fill="#fff"
-          animate={animate ? { opacity: [0.35, 1, 0.35] } : undefined}
+          animate={
+            animate
+              ? { opacity: [0.35, 1, 0.35], cy: [51, 46, 51] }
+              : undefined
+          }
           transition={{
             duration: 1.4,
             repeat: Infinity,
