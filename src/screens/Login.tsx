@@ -56,7 +56,7 @@ export function Login({
         </div>
         <h2 className="mt-5 text-2xl font-black tracking-tight text-ink mt-10">Welcome back</h2>
         <p className="mt-1.5 max-w-[280px] text-sm font-semibold text-gray-500 pb-10">
-          Sign in to pick up where you left off.
+          Sign in to start Safechatting now!
         </p>
       </motion.div>
 
