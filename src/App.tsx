@@ -300,6 +300,7 @@ function Shell() {
                 setStage('welcome')
               }}
               onSuccess={goApp}
+              onSignup={() => setStage('signup')}
             />
           )}
           {stage === 'signup' && (

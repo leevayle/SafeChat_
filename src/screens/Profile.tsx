@@ -3,6 +3,8 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Camera, User } from 'lucide-react'
 import { ProgressDots } from '../components/ProgressDots'
 import { PillButton } from '../components/PillButton'
+import { ImageCropper } from '../components/ImageCropper'
+import { fileToDataUrl } from '../lib/imageProcess'
 import { useStore } from '../store'
 import { api } from '../api'
 
@@ -31,26 +33,20 @@ export function Profile({ phone, countryCode, registrationToken, onBack, onSubmi
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle')
+  const [cropSrc, setCropSrc] = useState<string | null>(null)
   const gallery = useRef<HTMLInputElement>(null)
   const camera = useRef<HTMLInputElement>(null)
 
   const pick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
+    e.target.value = ''
     setSheet(false)
     if (!file) return
     if (!file.type.startsWith('image/')) { setError('Choose an image file.'); return }
-    if (file.size > 8 * 1024 * 1024) { setError('Choose an image smaller than 8 MB.'); return }
+    if (file.size > 12 * 1024 * 1024) { setError('Choose an image smaller than 12 MB.'); return }
     try {
-      const bitmap = await createImageBitmap(file)
-      const scale = Math.min(1, 512 / Math.max(bitmap.width, bitmap.height))
-      const canvas = document.createElement('canvas')
-      canvas.width = Math.max(1, Math.round(bitmap.width * scale))
-      canvas.height = Math.max(1, Math.round(bitmap.height * scale))
-      const context = canvas.getContext('2d')
-      if (!context) throw new Error('Image processing is unavailable.')
-      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
-      setPhoto(canvas.toDataURL('image/jpeg', 0.78))
-      bitmap.close()
+      const src = await fileToDataUrl(file)
+      setCropSrc(src)
       setError('')
     } catch { setError('Could not read that image. Please choose another one.') }
   }
@@ -279,6 +275,18 @@ export function Profile({ phone, countryCode, registrationToken, onBack, onSubmi
           </motion.div>
         )}
       </AnimatePresence>
+
+      {cropSrc && (
+        <ImageCropper
+          src={cropSrc}
+          title="Adjust profile photo"
+          onCancel={() => setCropSrc(null)}
+          onDone={(dataUrl) => {
+            setPhoto(dataUrl)
+            setCropSrc(null)
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -60,26 +60,55 @@ export type Settings = {
   enterIsSend: boolean
   wallpaper: string
   theme: string
+  chatAccent: string
   autoDownload: string
   lowDataCalls: boolean
   language: string
   blocked: string[]
 }
 
-/** Chat wallpapers — solids + aura-style gradients */
-export const WALLPAPERS: Record<string, string> = {
-  Cloud: '#F3F4F6',
-  Mist: '#E8ECF1',
-  Ivory: '#F7F3EE',
-  SoftInk: '#EDE9F6',
-  WarmSand: '#F5EDE4',
-  // Gradients (aura style)
-  Aurora: 'linear-gradient(145deg, #EFE4F9 0%, #E3EBFD 55%, #FFEBDD 100%)',
-  Dusk: 'linear-gradient(160deg, #F3E8FF 0%, #FCE7F3 50%, #FFEDD5 100%)',
-  Ocean: 'linear-gradient(150deg, #DBEAFE 0%, #E0E7FF 45%, #F5F3FF 100%)',
-  Citrus: 'linear-gradient(155deg, #FFEDD5 0%, #FEF3C7 50%, #ECFDF5 100%)',
-  Twilight: 'linear-gradient(165deg, #EDE9FE 0%, #FCE7F3 40%, #DBEAFE 100%)',
-}
+/** Brand palette — only these four drive customization. */
+export const BRAND = {
+  purple: '#7B2CBF',
+  blue: '#6389EB',
+  orange: '#FF8C00',
+  white: '#FFFFFF',
+} as const
+
+/** Chat wallpapers — 4 solids then 4 aura-style gradients (brand × soft white). */
+export const WALLPAPER_SOLIDS: { id: string; label: string; css: string }[] = [
+  { id: 'PurpleSoft', label: 'Purple', css: '#F3EAFB' },
+  { id: 'BlueSoft', label: 'Blue', css: '#E8EEFC' },
+  { id: 'OrangeSoft', label: 'Orange', css: '#FFF1E0' },
+  { id: 'Cloud', label: 'White', css: '#F5F6F8' },
+]
+
+export const WALLPAPER_GRADIENTS: { id: string; label: string; css: string }[] = [
+  {
+    id: 'PurpleMist',
+    label: 'Purple mist',
+    css: 'linear-gradient(145deg, #F8F1FF 0%, #EFE4F9 40%, #FFFFFF 100%)',
+  },
+  {
+    id: 'BlueHaze',
+    label: 'Blue haze',
+    css: 'linear-gradient(150deg, #F0F4FF 0%, #E3EBFD 45%, #FFFFFF 100%)',
+  },
+  {
+    id: 'OrangeGlow',
+    label: 'Orange glow',
+    css: 'linear-gradient(155deg, #FFF6EC 0%, #FFE8CC 50%, #FFFFFF 100%)',
+  },
+  {
+    id: 'SoftLight',
+    label: 'Soft light',
+    css: 'linear-gradient(160deg, #FFFFFF 0%, #F7F8FA 55%, #EEF1F6 100%)',
+  },
+]
+
+export const WALLPAPERS: Record<string, string> = Object.fromEntries(
+  [...WALLPAPER_SOLIDS, ...WALLPAPER_GRADIENTS].map((w) => [w.id, w.css]),
+)
 
 export const WALLPAPER_KEYS = Object.keys(WALLPAPERS)
 
@@ -87,34 +116,42 @@ export const THEMES = {
   purple: {
     id: 'purple',
     label: 'Purple',
-    primary: '#7B2CBF',
+    primary: BRAND.purple,
     accent: '#9C31A1',
     soft: '#EFE4F9',
-  },
-  orange: {
-    id: 'orange',
-    label: 'Orange',
-    primary: '#F97316',
-    accent: '#FF8C00',
-    soft: '#FFEDD5',
-  },
-  grey: {
-    id: 'grey',
-    label: 'Grey',
-    primary: '#4B5563',
-    accent: '#6B7280',
-    soft: '#F3F4F6',
   },
   blue: {
     id: 'blue',
     label: 'Blue',
-    primary: '#6389EB',
+    primary: BRAND.blue,
     accent: '#4F73D4',
     soft: '#E3EBFD',
+  },
+  orange: {
+    id: 'orange',
+    label: 'Orange',
+    primary: BRAND.orange,
+    accent: '#F97316',
+    soft: '#FFEDD5',
+  },
+  white: {
+    id: 'white',
+    label: 'Mono',
+    primary: '#374151',
+    accent: '#6B7280',
+    soft: '#F3F4F6',
   },
 } as const
 
 export type ThemeId = keyof typeof THEMES
+
+/** Chat bubble / accent colors (same 4 brand hues). */
+export const CHAT_ACCENTS: { id: string; label: string; color: string }[] = [
+  { id: 'purple', label: 'Purple', color: BRAND.purple },
+  { id: 'blue', label: 'Blue', color: BRAND.blue },
+  { id: 'orange', label: 'Orange', color: BRAND.orange },
+  { id: 'neutral', label: 'Neutral', color: '#4B5563' },
+]
 
 export const FONT_SIZES: Record<string, string> = {
   Small: '0.9rem',
@@ -122,12 +159,27 @@ export const FONT_SIZES: Record<string, string> = {
   Large: '1.15rem',
 }
 
+function hexToRgb(hex: string): string {
+  const h = hex.replace('#', '')
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h
+  const n = parseInt(full, 16)
+  if (Number.isNaN(n)) return '123, 44, 191'
+  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`
+}
+
 export function applyTheme(themeId: string) {
   const t = THEMES[themeId as ThemeId] || THEMES.purple
   const root = document.documentElement
   root.style.setProperty('--color-brand-purple', t.primary)
   root.style.setProperty('--color-brand-magenta', t.accent)
+  root.style.setProperty('--brand-shadow-rgb', hexToRgb(t.primary))
   root.dataset.theme = t.id
+}
+
+export function applyChatAccent(accentId: string) {
+  const a = CHAT_ACCENTS.find((c) => c.id === accentId) || CHAT_ACCENTS[0]
+  document.documentElement.style.setProperty('--chat-accent', a.color)
+  document.documentElement.style.setProperty('--chat-accent-rgb', hexToRgb(a.color))
 }
 
 const defaultSettings: Settings = {
@@ -157,6 +209,7 @@ const defaultSettings: Settings = {
   enterIsSend: true,
   wallpaper: 'Cloud',
   theme: 'purple',
+  chatAccent: 'purple',
   autoDownload: 'Wi-Fi only',
   lowDataCalls: false,
   language: 'English',
@@ -232,12 +285,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (raw) {
         const merged = { ...defaultSettings, ...JSON.parse(raw) }
         applyTheme(merged.theme || 'purple')
+        applyChatAccent(merged.chatAccent || 'purple')
         return merged
       }
     } catch {
       /* ignore */
     }
     applyTheme(defaultSettings.theme)
+    applyChatAccent(defaultSettings.chatAccent)
     return defaultSettings
   })
   const [contacts, setContacts] = useState<ApiContact[]>([])
@@ -873,6 +928,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const next = { ...settings, [k]: v }
     setSettings(next)
     if (k === 'theme') applyTheme(String(v))
+    if (k === 'chatAccent') applyChatAccent(String(v))
     try {
       localStorage.setItem('sc_settings', JSON.stringify(next))
     } catch {

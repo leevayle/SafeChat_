@@ -294,14 +294,16 @@ export function ChatsHome({
               </div>
             )}
 
-            <div className="no-scrollbar flex gap-5 overflow-x-auto px-5 pb-3 pt-3">
+            <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-2.5 pt-2">
               {FILTERS.map((f) => (
                 <button
                   key={f}
                   type="button"
                   onClick={() => setFilter(f)}
-                  className={`shrink-0 rounded-xl px-2.5 py-0.2 font-ui text-sm transition ${
-                    filter === f ? 'bg-gray-200 font-bold' : 'bg-gray-200 text-gray-600'
+                  className={`shrink-0 rounded-full px-3.5 py-1.5 font-ui text-[13px] font-extrabold transition ${
+                    filter === f
+                      ? 'bg-brand-purple text-white shadow-sm'
+                      : 'bg-brand-purple/10 text-brand-purple'
                   }`}
                 >
                   {f}
@@ -410,7 +412,7 @@ export function ChatsHome({
         whileHover={{ scale: 1.06 }}
         whileTap={{ scale: 0.94 }}
         onClick={onNewChat}
-        className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white shadow-[0_10px_28px_-6px_rgba(123,44,191,0.55)]"
+        className="fab-theme fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white"
       >
         <Plus size={26} strokeWidth={2.4} />
       </motion.button>

@@ -508,10 +508,10 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
 
       {!isOwner && (
         <div
-          className="pointer-events-none absolute inset-x-0 bottom-[5.75rem] z-20 flex justify-center"
-          style={{ opacity: 0.5 + swipeDy / 120, transform: `translateY(${-swipeDy * 0.3}px)` }}
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+          style={{ opacity: 0.55 + swipeDy / 120, transform: `translateY(${-swipeDy * 0.25}px)` }}
         >
-          <div className="rounded-full bg-white/15 px-4 py-1.5 text-xs font-bold text-white/90 backdrop-blur">
+          <div className="rounded-full bg-black/35 px-4 py-1.5 text-xs font-bold text-white/95 backdrop-blur-md">
             Swipe up to reply
           </div>
         </div>

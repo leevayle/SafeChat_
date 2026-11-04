@@ -209,7 +209,7 @@ const MessageBubble = memo(function MessageBubble({
         }}
         className={`max-w-[78%] overflow-hidden shadow-sm ${
           mine
-            ? 'rounded-3xl rounded-br-md bg-gradient-to-br from-brand-magenta to-brand-purple text-white'
+            ? 'bubble-mine rounded-3xl rounded-br-md text-white'
             : 'rounded-3xl rounded-bl-md bg-white text-ink'
         } ${mine && m.state === 'failed' ? 'ring-2 ring-red-300/80' : ''}`}
       >

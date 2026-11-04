@@ -6,8 +6,19 @@ import {
 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { OptionList, PrimaryButton, ScreenHeader, Sheet, Toast, Toggle } from '../components/ui'
-import { FONT_SIZES, WALLPAPERS, WALLPAPER_KEYS, THEMES, useStore, type Settings as S } from '../store'
+import {
+  FONT_SIZES,
+  WALLPAPERS,
+  WALLPAPER_SOLIDS,
+  WALLPAPER_GRADIENTS,
+  THEMES,
+  CHAT_ACCENTS,
+  useStore,
+  type Settings as S,
+} from '../store'
 import { api } from '../api'
+import { ImageCropper } from '../components/ImageCropper'
+import { fileToDataUrl } from '../lib/imageProcess'
 
 const WHO = ['Everyone', 'My contacts', 'Nobody']
 const themeLabelFromId = (id: string) =>
@@ -95,6 +106,7 @@ export function Settings({
   >('idle')
   const usernameCheckRef = useRef(0)
   const file = useRef<HTMLInputElement>(null)
+  const [cropSrc, setCropSrc] = useState<string | null>(null)
 
   useEffect(() => {
     if (page !== 'profile') return
@@ -264,17 +276,14 @@ export function Settings({
                   className="hidden"
                   onChange={async (e) => {
                     const f = e.target.files?.[0]
-                    if (!f) return
-                    const reader = new FileReader()
-                    reader.onload = async () => {
-                      try {
-                        await saveProfile({ photo: String(reader.result) })
-                        setToast('Photo updated')
-                      } catch {
-                        setToast('Could not update photo')
-                      }
+                    e.target.value = ''
+                    if (!f || !f.type.startsWith('image/')) return
+                    try {
+                      const src = await fileToDataUrl(f)
+                      setCropSrc(src)
+                    } catch {
+                      setToast('Could not open image')
                     }
-                    reader.readAsDataURL(f)
                   }}
                 />
               </div>
@@ -451,8 +460,8 @@ export function Settings({
               </Card>
 
               <div>
-                <SectionLabel>Theme</SectionLabel>
-                <div className="grid grid-cols-2 gap-3">
+                <SectionLabel>App theme</SectionLabel>
+                <div className="flex gap-2.5">
                   {Object.values(THEMES).map((t) => {
                     const active = (s.theme || 'purple') === t.id
                     return (
@@ -460,53 +469,109 @@ export function Settings({
                         key={t.id}
                         type="button"
                         onClick={() => setSetting('theme', t.id as never)}
-                        className={`overflow-hidden rounded-2xl border-2 bg-white text-left shadow-sm transition ${
-                          active ? 'border-brand-purple ring-2 ring-brand-purple/20' : 'border-transparent'
+                        className={`flex flex-1 flex-col items-center gap-1.5 rounded-2xl border-2 bg-white p-2 shadow-sm transition ${
+                          active ? 'border-brand-purple ring-2 ring-brand-purple/15' : 'border-transparent'
                         }`}
                       >
-                        <div
-                          className="flex h-16 items-end gap-1.5 p-3"
-                          style={{ background: `linear-gradient(135deg, ${t.soft}, #fff 70%)` }}
-                        >
-                          <span className="h-6 w-6 rounded-full shadow" style={{ background: t.primary }} />
-                          <span className="h-6 w-6 rounded-full shadow" style={{ background: t.accent }} />
-                          <span className="h-6 flex-1 rounded-full bg-white/80 shadow-sm" />
-                        </div>
-                        <p className="px-3 py-2 text-sm font-extrabold text-ink">{t.label}</p>
+                        <span
+                          className="h-10 w-10 rounded-full shadow-md"
+                          style={{
+                            background: t.primary,
+                            boxShadow: `0 6px 14px -4px ${t.primary}99`,
+                          }}
+                        />
+                        <span className="text-[11px] font-extrabold text-ink">{t.label}</span>
                       </button>
                     )
                   })}
                 </div>
                 <p className="mt-2 px-1 text-xs font-semibold text-gray-400">
-                  Accent colors update across the app. The SafeChat logo stays the same.
+                  Accent + floating button shadows follow the theme. Logo colors never change.
                 </p>
               </div>
 
               <div>
-                <SectionLabel>Chat wallpaper</SectionLabel>
-                <div className="grid grid-cols-3 gap-2.5">
-                  {WALLPAPER_KEYS.map((key) => {
-                    const active = (s.wallpaper || 'Cloud') === key
-                    const bg = WALLPAPERS[key]
+                <SectionLabel>Chat accent</SectionLabel>
+                <div className="flex gap-2.5">
+                  {CHAT_ACCENTS.map((a) => {
+                    const active = (s.chatAccent || 'purple') === a.id
                     return (
                       <button
-                        key={key}
+                        key={a.id}
                         type="button"
-                        onClick={() => setSetting('wallpaper', key as never)}
-                        className={`overflow-hidden rounded-2xl border-2 bg-white text-left shadow-sm transition ${
-                          active ? 'border-brand-purple ring-2 ring-brand-purple/20' : 'border-transparent'
+                        onClick={() => setSetting('chatAccent', a.id as never)}
+                        className={`flex flex-1 flex-col items-center gap-1.5 rounded-2xl border-2 bg-white p-2 shadow-sm transition ${
+                          active ? 'border-brand-purple ring-2 ring-brand-purple/15' : 'border-transparent'
                         }`}
                       >
-                        <div className="relative h-20 w-full" style={{ background: bg }}>
-                          <span className="absolute bottom-2 left-2 right-8 h-5 rounded-full bg-white/70 shadow-sm" />
-                          <span className="absolute bottom-2 right-2 h-5 w-5 rounded-full bg-white/90 shadow-sm" />
-                        </div>
-                        <p className="truncate px-2 py-1.5 text-center text-[11px] font-extrabold text-ink">{key}</p>
+                        <span
+                          className="h-10 w-10 rounded-full"
+                          style={{
+                            background: a.color,
+                            boxShadow: `0 6px 14px -4px ${a.color}99`,
+                          }}
+                        />
+                        <span className="text-[11px] font-extrabold text-ink">{a.label}</span>
                       </button>
                     )
                   })}
                 </div>
               </div>
+
+              <div>
+                <SectionLabel>Chat wallpaper</SectionLabel>
+                <p className="mb-2 px-1 text-[11px] font-bold uppercase tracking-wide text-gray-400">Solids</p>
+                <div className="mb-3 flex gap-2.5">
+                  {WALLPAPER_SOLIDS.map((w) => {
+                    const active = (s.wallpaper || 'Cloud') === w.id
+                    return (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => setSetting('wallpaper', w.id as never)}
+                        className={`flex flex-1 flex-col items-center gap-1 overflow-hidden rounded-2xl border-2 bg-white shadow-sm transition ${
+                          active ? 'border-brand-purple ring-2 ring-brand-purple/15' : 'border-transparent'
+                        }`}
+                      >
+                        <div className="h-12 w-full" style={{ background: w.css }} />
+                        <span className="px-1 pb-1.5 text-[10px] font-extrabold text-ink">{w.label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="mb-2 px-1 text-[11px] font-bold uppercase tracking-wide text-gray-400">Gradients</p>
+                <div className="flex gap-2.5">
+                  {WALLPAPER_GRADIENTS.map((w) => {
+                    const active = (s.wallpaper || 'Cloud') === w.id
+                    return (
+                      <button
+                        key={w.id}
+                        type="button"
+                        onClick={() => setSetting('wallpaper', w.id as never)}
+                        className={`flex flex-1 flex-col items-center gap-1 overflow-hidden rounded-2xl border-2 bg-white shadow-sm transition ${
+                          active ? 'border-brand-purple ring-2 ring-brand-purple/15' : 'border-transparent'
+                        }`}
+                      >
+                        <div className="h-12 w-full" style={{ background: w.css }} />
+                        <span className="truncate px-1 pb-1.5 text-[10px] font-extrabold text-ink">{w.label}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSetting('theme', 'purple' as never)
+                  setSetting('chatAccent', 'purple' as never)
+                  setSetting('wallpaper', 'Cloud' as never)
+                  setToast('Defaults restored')
+                }}
+                className="w-full rounded-2xl bg-white py-3.5 text-sm font-extrabold text-brand-purple shadow-sm ring-1 ring-gray-100"
+              >
+                Restore defaults
+              </button>
             </motion.div>
           )}
 
@@ -700,6 +765,28 @@ export function Settings({
       </Sheet>
 
       <Toast msg={toast} clear={() => setToast(null)} />
+
+      {cropSrc && (
+        <ImageCropper
+          src={cropSrc}
+          title="Adjust profile photo"
+          onCancel={() => setCropSrc(null)}
+          onDone={async (dataUrl) => {
+            setCropSrc(null)
+            try {
+              await saveProfile({
+                name: s.name,
+                username: s.username,
+                bio: s.bio,
+                photo: dataUrl,
+              })
+              setToast('Photo updated')
+            } catch {
+              setToast('Could not update photo')
+            }
+          }}
+        />
+      )}
     </div>
   )
 }

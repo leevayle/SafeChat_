@@ -80,8 +80,17 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
         {list.length === 0 && <p className="flex flex-col items-center gap-2 py-14 font-bold text-gray-400"><Users /> No groups found</p>}
       </div>
 
-      <motion.button initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', delay: 0.2 }} whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.9 }} onClick={onCreate} aria-label="New group" className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 z-[5] flex h-14 w-14 items-center justify-center rounded-full bg-linear-to-br from-brand-orange to-brand-orange-2 text-white shadow-xl shadow-brand-orange-2/40">
-        <Users size={24} />
+      <motion.button
+        initial={{ scale: 0 }}
+        animate={{ scale: 1 }}
+        transition={{ type: 'spring', delay: 0.2 }}
+        whileHover={{ scale: 1.06 }}
+        whileTap={{ scale: 0.94 }}
+        onClick={onCreate}
+        aria-label="New group"
+        className="fab-theme fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white"
+      >
+        <Plus size={26} strokeWidth={2.4} />
       </motion.button>
 
       <Sheet open={join} onClose={() => setJoin(false)} title="Join with invite link">
