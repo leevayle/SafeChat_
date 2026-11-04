@@ -32,7 +32,7 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
 
   return (
     <div className="relative flex h-full flex-col">
-      <header className="sticky top-0 z-20 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 px-5 pt-[max(10px,env(safe-area-inset-top))] backdrop-blur">
+      <header className="sticky top-0 z-10 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 px-5 pt-[max(10px,env(safe-area-inset-top))] backdrop-blur">
         <BrandMark />
         <IconBtn label="Join with invite link" onClick={() => setJoin(true)}><Link2 size={22} /></IconBtn>
       </header>

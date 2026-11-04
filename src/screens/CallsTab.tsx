@@ -44,7 +44,7 @@ export function CallsTab({ onCall, onSimulateIncoming }: Props) {
 
   return (
     <div className="relative flex h-full flex-col bg-white">
-      <header className="sticky top-0 z-20 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 px-5 pt-[max(10px,env(safe-area-inset-top))] backdrop-blur">
+      <header className="sticky top-0 z-10 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 px-5 pt-[max(10px,env(safe-area-inset-top))] backdrop-blur">
         <BrandMark />
         <button
           type="button"
@@ -126,7 +126,7 @@ export function CallsTab({ onCall, onSimulateIncoming }: Props) {
       <AnimatePresence>
         {picker && (
           <motion.div
-            className="absolute inset-0 z-30 flex flex-col bg-white"
+            className="fixed inset-0 z-[35] flex flex-col bg-white"
             initial={{ y: '100%' }}
             animate={{ y: 0 }}
             exit={{ y: '100%' }}

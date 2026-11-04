@@ -144,14 +144,11 @@ export function ChatsHome({
 
   return (
     <div className="relative flex h-full flex-col bg-white">
-      <header className="sticky top-0 z-20 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 pb-3 px-5 pt-[20px] backdrop-blur">
-        <div
-          className={`flex w-full items-center transition-all duration-200 ease-out  ${
-            searching ? 'opacity-100 ' : 'opacity-100 '
-          }`}
-        >
+      {/* z-10: sticky top chrome — below overlays */}
+      <header className="sticky top-0 z-10 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 pb-3 px-5 pt-[max(12px,env(safe-area-inset-top))] backdrop-blur">
+        <div className="flex w-full items-center">
           {searching ? (
-            <div className="flex h-11 w-full items-center gap-2 rounded-full bg-gray-100 px-4 transition-all duration-200">
+            <div className="flex h-11 w-full items-center gap-2 rounded-full bg-gray-100 px-4">
               <Search size={18} className="shrink-0 text-brand-purple" />
               <input
                 autoFocus
@@ -191,64 +188,69 @@ export function ChatsHome({
             </div>
           )}
         </div>
-        <AnimatePresence>
-          {menu && (
-            <>
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-20 bg-ink/25 backdrop-blur-sm"
-                onClick={() => setMenu(false)}
-              />
-              <motion.ul
-                initial={{ opacity: 0, scale: 0.85 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.85 }}
-                style={{ transformOrigin: 'top right' }}
-                className="absolute right-4 top-14 z-30 max-h-[min(70vh,420px)] w-56 overflow-y-auto rounded-2xl bg-white p-1.5 shadow-xl ring-1 ring-black/5"
-              >
-                {(
-                  [
-                    { label: 'New chat', fn: onNewChat, Icon: MessageCirclePlus },
-                    { label: 'New group', fn: onNewGroup, Icon: UsersRound },
-                    { label: 'Contacts', fn: onContacts, Icon: Contact },
-                    { label: 'Save requests', fn: onSaveRequests, Icon: UserPlus, badge: pendingCount },
-                    { label: 'Notifications', fn: onNotifications, Icon: Bell, badge: systemNotifCount },
-                    { label: 'Support', fn: onSupport, Icon: LifeBuoy },
-                    { label: 'Settings', fn: onSettings, Icon: Settings },
-                  ] as const
-                ).map(({ label, fn, Icon, ...rest }, i, arr) => {
-                  const badge = 'badge' in rest ? (rest as { badge?: number }).badge : 0
-                  return (
-                    <li
-                      key={label}
-                      className={i < arr.length - 1 ? 'border-b border-gray-200' : undefined}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMenu(false)
-                          fn()
-                        }}
-                        className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left font-bold hover:bg-gray-100"
-                      >
-                        <span className="min-w-0 flex-1">{label}</span>
-                        {badge && badge > 0 ? (
-                          <span className="mr-1 min-w-5 rounded-full bg-brand-red px-1.5 text-center text-[11px] font-black text-white">
-                            {badge > 9 ? '9+' : badge}
-                          </span>
-                        ) : null}
-                        <Icon size={18} className="shrink-0 text-brand-purple" strokeWidth={2.2} />
-                      </button>
-                    </li>
-                  )
-                })}
-              </motion.ul>
-            </>
-          )}
-        </AnimatePresence>
       </header>
+
+      {/* z-40: hamburger menu covers header + list + FAB + bottom nav */}
+      <AnimatePresence>
+        {menu && (
+          <>
+            <motion.div
+              key="menu-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-40 bg-ink/30 backdrop-blur-sm"
+              onClick={() => setMenu(false)}
+            />
+            <motion.ul
+              key="menu-panel"
+              initial={{ opacity: 0, scale: 0.92, y: -6 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: -4 }}
+              transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+              style={{ transformOrigin: 'top right' }}
+              className="fixed right-3 top-[max(3.75rem,calc(env(safe-area-inset-top)+2.75rem))] z-50 max-h-[min(70vh,420px)] w-56 overflow-y-auto rounded-2xl bg-white p-1.5 shadow-xl ring-1 ring-black/5"
+            >
+              {(
+                [
+                  { label: 'New chat', fn: onNewChat, Icon: MessageCirclePlus },
+                  { label: 'New group', fn: onNewGroup, Icon: UsersRound },
+                  { label: 'Contacts', fn: onContacts, Icon: Contact },
+                  { label: 'Save requests', fn: onSaveRequests, Icon: UserPlus, badge: pendingCount },
+                  { label: 'Notifications', fn: onNotifications, Icon: Bell, badge: systemNotifCount },
+                  { label: 'Support', fn: onSupport, Icon: LifeBuoy },
+                  { label: 'Settings', fn: onSettings, Icon: Settings },
+                ] as const
+              ).map(({ label, fn, Icon, ...rest }, i, arr) => {
+                const badge = 'badge' in rest ? (rest as { badge?: number }).badge : 0
+                return (
+                  <li
+                    key={label}
+                    className={i < arr.length - 1 ? 'border-b border-gray-200' : undefined}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenu(false)
+                        fn()
+                      }}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left font-bold hover:bg-gray-100"
+                    >
+                      <span className="min-w-0 flex-1">{label}</span>
+                      {badge && badge > 0 ? (
+                        <span className="mr-1 min-w-5 rounded-full bg-brand-red px-1.5 text-center text-[11px] font-black text-white">
+                          {badge > 9 ? '9+' : badge}
+                        </span>
+                      ) : null}
+                      <Icon size={18} className="shrink-0 text-brand-purple" strokeWidth={2.2} />
+                    </button>
+                  </li>
+                )
+              })}
+            </motion.ul>
+          </>
+        )}
+      </AnimatePresence>
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-24 ">
         {showSkeleton ? (

@@ -351,7 +351,7 @@ function Shell() {
 
         {/* Chat — only leaves when user taps back */}
         {chat && (
-          <div className="absolute inset-0 z-20 bg-white">
+          <div className="absolute inset-0 z-[35] bg-white">
             <ChatWindow
               contactId={chat}
               onBack={() => setChat(null)}
@@ -362,14 +362,14 @@ function Shell() {
         )}
 
         {group && (
-          <div className="absolute inset-0 z-20 bg-white">
+          <div className="absolute inset-0 z-[35] bg-white">
             <GroupChat groupId={group} onBack={() => setGroup(null)} />
           </div>
         )}
 
         <Toast msg={toast} clear={clearToast} />
       {overlay === 'newChat' && (
-          <div className="absolute inset-0 z-[25] bg-white">
+          <div className="absolute inset-0 z-[35] bg-white">
             <NewChat
               onClose={() => setOverlay(null)}
               onPick={(id) => {
@@ -383,7 +383,7 @@ function Shell() {
         )}
 
         {overlay === 'newGroup' && (
-          <div className="absolute inset-0 z-[25] bg-white">
+          <div className="absolute inset-0 z-[35] bg-white">
             <CreateGroup
               onClose={() => setOverlay(null)}
               onCreated={(id) => {
@@ -396,7 +396,7 @@ function Shell() {
         )}
 
         {overlay === 'settings' && (
-          <div className="absolute inset-0 z-[25] bg-gray-50">
+          <div className="absolute inset-0 z-[35] bg-gray-50">
             <Settings
               onBack={() => setOverlay(null)}
               onLogout={async () => {
@@ -414,7 +414,7 @@ function Shell() {
         )}
 
         {overlay === 'contacts' && (
-          <div className="absolute inset-0 z-[25] bg-white">
+          <div className="absolute inset-0 z-[35] bg-white">
             <Contacts
               onClose={() => setOverlay(null)}
               onChat={(id) => {
@@ -431,7 +431,7 @@ function Shell() {
         )}
 
         {overlay === 'saveRequests' && (
-          <div className="absolute inset-0 z-[25] bg-white">
+          <div className="absolute inset-0 z-[35] bg-white">
             <SaveRequests
               onClose={() => setOverlay(null)}
               onChat={(id) => {
@@ -444,7 +444,7 @@ function Shell() {
         )}
 
         {overlay === 'notifications' && (
-          <div className="absolute inset-0 z-[25] bg-white">
+          <div className="absolute inset-0 z-[35] bg-white">
             <Notifications
               onClose={() => setOverlay(null)}
               onOpenSaveRequests={() => setOverlay('saveRequests')}
@@ -458,13 +458,13 @@ function Shell() {
         )}
 
         {overlay === 'support' && (
-          <div className="absolute inset-0 z-[25] bg-white">
+          <div className="absolute inset-0 z-[35] bg-white">
             <Support onClose={() => setOverlay(null)} />
           </div>
         )}
 
         {statusUser && (
-          <div className="absolute inset-0 z-[28]">
+          <div className="absolute inset-0 z-[45]">
             <StatusViewer
               userId={statusUser}
               onClose={() => setStatusUser(null)}
@@ -478,7 +478,7 @@ function Shell() {
 
         {/* Call stays until user ends it */}
         {call && (
-          <div className="absolute inset-0 z-[40]">
+          <div className="absolute inset-0 z-[50]">
             <CallScreen
               contactId={call.id}
               kind={call.kind}
