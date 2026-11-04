@@ -22,8 +22,18 @@ import {
   type ChatPreview,
   saveStoredUser,
 } from './api'
+import { playIncomingMessageChime } from './lib/sounds'
 
 export type Settings = {
+  messageNotifs?: boolean
+  callNotifs?: boolean
+  statusNotifs?: boolean
+  about?: string
+  statusPrivacy?: string
+  autoDownload?: string
+  enterIsSend?: boolean
+  language?: string
+
   name: string
   username: string
   bio: string
@@ -49,22 +59,75 @@ export type Settings = {
   fontSize: string
   enterIsSend: boolean
   wallpaper: string
+  theme: string
   autoDownload: string
   lowDataCalls: boolean
   language: string
   blocked: string[]
 }
 
+/** Chat wallpapers — solids + aura-style gradients */
 export const WALLPAPERS: Record<string, string> = {
   Cloud: '#F3F4F6',
-  Lavender: '#EFE4F9',
-  Peach: '#FFEBDD',
-  Sky: '#E3EBFD',
+  Mist: '#E8ECF1',
+  Ivory: '#F7F3EE',
+  SoftInk: '#EDE9F6',
+  WarmSand: '#F5EDE4',
+  // Gradients (aura style)
+  Aurora: 'linear-gradient(145deg, #EFE4F9 0%, #E3EBFD 55%, #FFEBDD 100%)',
+  Dusk: 'linear-gradient(160deg, #F3E8FF 0%, #FCE7F3 50%, #FFEDD5 100%)',
+  Ocean: 'linear-gradient(150deg, #DBEAFE 0%, #E0E7FF 45%, #F5F3FF 100%)',
+  Citrus: 'linear-gradient(155deg, #FFEDD5 0%, #FEF3C7 50%, #ECFDF5 100%)',
+  Twilight: 'linear-gradient(165deg, #EDE9FE 0%, #FCE7F3 40%, #DBEAFE 100%)',
 }
+
+export const WALLPAPER_KEYS = Object.keys(WALLPAPERS)
+
+export const THEMES = {
+  purple: {
+    id: 'purple',
+    label: 'Purple',
+    primary: '#7B2CBF',
+    accent: '#9C31A1',
+    soft: '#EFE4F9',
+  },
+  orange: {
+    id: 'orange',
+    label: 'Orange',
+    primary: '#F97316',
+    accent: '#FF8C00',
+    soft: '#FFEDD5',
+  },
+  grey: {
+    id: 'grey',
+    label: 'Grey',
+    primary: '#4B5563',
+    accent: '#6B7280',
+    soft: '#F3F4F6',
+  },
+  blue: {
+    id: 'blue',
+    label: 'Blue',
+    primary: '#6389EB',
+    accent: '#4F73D4',
+    soft: '#E3EBFD',
+  },
+} as const
+
+export type ThemeId = keyof typeof THEMES
+
 export const FONT_SIZES: Record<string, string> = {
   Small: '0.9rem',
   Medium: '1rem',
   Large: '1.15rem',
+}
+
+export function applyTheme(themeId: string) {
+  const t = THEMES[themeId as ThemeId] || THEMES.purple
+  const root = document.documentElement
+  root.style.setProperty('--color-brand-purple', t.primary)
+  root.style.setProperty('--color-brand-magenta', t.accent)
+  root.dataset.theme = t.id
 }
 
 const defaultSettings: Settings = {
@@ -93,6 +156,7 @@ const defaultSettings: Settings = {
   fontSize: 'Medium',
   enterIsSend: true,
   wallpaper: 'Cloud',
+  theme: 'purple',
   autoDownload: 'Wi-Fi only',
   lowDataCalls: false,
   language: 'English',
@@ -165,10 +229,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<Settings>(() => {
     try {
       const raw = localStorage.getItem('sc_settings')
-      if (raw) return { ...defaultSettings, ...JSON.parse(raw) }
+      if (raw) {
+        const merged = { ...defaultSettings, ...JSON.parse(raw) }
+        applyTheme(merged.theme || 'purple')
+        return merged
+      }
     } catch {
       /* ignore */
     }
+    applyTheme(defaultSettings.theme)
     return defaultSettings
   })
   const [contacts, setContacts] = useState<ApiContact[]>([])
@@ -241,7 +310,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!hasAccessToken() || isSessionDead()) return
     try {
       const { chats: c } = await api.chats()
-      setChats((prev) => (prev.length === c.length && JSON.stringify(prev) === JSON.stringify(c) ? prev : c))
+      // Cheap equality: length + last message iso/unread — avoid full JSON.stringify on every poll
+      setChats((prev) => {
+        if (prev.length === c.length) {
+          let same = true
+          for (let i = 0; i < prev.length; i++) {
+            const a = prev[i]
+            const b = c[i]
+            if (
+              a.contactId !== b.contactId ||
+              a.unread !== b.unread ||
+              a.last !== b.last ||
+              a.iso !== b.iso ||
+              (a as any).receipt !== (b as any).receipt
+            ) {
+              same = false
+              break
+            }
+          }
+          if (same) return prev
+        }
+        return c
+      })
     } catch (e: any) {
       if ((e as any)?.status === 401 || String(e?.message || '').toLowerCase().includes('unauthorized')) {
         wipeSession()
@@ -352,6 +442,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             next[idx] = updated
             return next
           }
+          // New peer message while app is open → soft inbox chime
+          if (contentChanged && updated.mine === false) {
+            try {
+              const mutedMap = JSON.parse(localStorage.getItem('sc_chat_muted') || '{}')
+              if (!mutedMap[updated.contactId]) playIncomingMessageChime()
+            } catch {
+              playIncomingMessageChime()
+            }
+          }
           // New message content → bump to top
           const next = [...prev]
           next[idx] = updated
@@ -400,7 +499,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setListsReady(true)
       return
     }
-    // 1. Chats — critical path for home
+    // 1. Chats only on the critical path — home can paint as soon as this returns
     await refreshChats()
     if (isSessionDead()) {
       setListsReady(true)
@@ -409,16 +508,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setListsReady(true)
     setSessionOk(true)
 
-    // 2–6 sequential so we never stampede the API and order matches priority
-    await refreshCalls()
+    // 2–6 in parallel (not sequential) so secondary lists fill without blocking each other
     if (isSessionDead()) return
-    await refreshStatus()
-    if (isSessionDead()) return
-    await refreshGroups()
-    if (isSessionDead()) return
-    await refreshSaveRequests()
-    if (isSessionDead()) return
-    await refreshContacts()
+    await Promise.all([
+      refreshCalls(),
+      refreshStatus(),
+      refreshGroups(),
+      refreshSaveRequests(),
+      refreshContacts(),
+    ])
   }, [refreshChats, refreshCalls, refreshStatus, refreshGroups, refreshSaveRequests, refreshContacts])
 
   const bootStarted = useRef(false)
@@ -774,6 +872,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const setSetting = useCallback(<K extends keyof Settings>(k: K, v: Settings[K]) => {
     const next = { ...settings, [k]: v }
     setSettings(next)
+    if (k === 'theme') applyTheme(String(v))
     try {
       localStorage.setItem('sc_settings', JSON.stringify(next))
     } catch {

@@ -43,7 +43,42 @@ export default function App() {
 
 function Shell() {
   const { ready, me, logout, contacts, toast, clearToast, settings, chats, groups, calls } = useStore()
+
+  // Must be declared before any use — avoids TDZ "Cannot access before initialization"
+  const [seenMissed, setSeenMissed] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('sc_seen_missed')
+      return new Set(raw ? JSON.parse(raw) : [])
+    } catch {
+      return new Set()
+    }
+  })
+
   const chatUnread = (chats || []).reduce((n, c) => n + (c.unread > 0 ? 1 : 0), 0)
+  const missedCallBadge = (calls || []).filter((c: any) => {
+    const missed = c.status === 'missed' || c.direction === 'missed'
+    if (!missed) return false
+    const id = String(c.id || c.call_id || '')
+    return id && !seenMissed.has(id)
+  }).length
+  const markMissedSeen = (ids?: string[]) => {
+    setSeenMissed((prev) => {
+      const next = new Set(prev)
+      const list =
+        ids ||
+        (calls || [])
+          .filter((c: any) => c.status === 'missed' || c.direction === 'missed')
+          .map((c: any) => String(c.id || c.call_id || ''))
+      list.forEach((id) => id && next.add(id))
+      try {
+        localStorage.setItem('sc_seen_missed', JSON.stringify([...next]))
+      } catch {
+        /* */
+      }
+      return next
+    })
+  }
+
   const groupUnread = (groups || []).reduce((n, g: any) => n + (g.unread > 0 ? 1 : 0), 0)
   const [stage, setStage] = useState<Stage>('splash')
   const [submitting, setSubmitting] = useState(false)
@@ -54,6 +89,7 @@ function Shell() {
   const [registrationToken, setRegistrationToken] = useState('')
   const [developmentCode, setDevelopmentCode] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('chats')
+
   const [chat, setChat] = useState<string | null>(null)
   const [group, setGroup] = useState<string | null>(null)
   const [overlay, setOverlay] = useState<Overlay>(null)
@@ -318,7 +354,17 @@ function Shell() {
         <div className="relative h-full">
           <div className={tab === 'chats' ? 'h-full' : 'hidden'}>
             <ChatsHome
-              onOpenChat={setChat}
+              onOpenChat={(id) => {
+                setChat(id)
+                const ids = (calls || [])
+                  .filter(
+                    (c: any) =>
+                      (c.status === 'missed' || c.direction === 'missed') &&
+                      (c.contactId === id || c.peer_id === id),
+                  )
+                  .map((c: any) => String(c.id || c.call_id || ''))
+                if (ids.length) markMissedSeen(ids)
+              }}
               onNewChat={() => setOverlay('newChat')}
               onNewGroup={() => setOverlay('newGroup')}
               onSettings={() => setOverlay('settings')}
@@ -338,6 +384,7 @@ function Shell() {
           <div className={tab === 'calls' ? 'h-full' : 'hidden'}>
             <CallsTab
               onCall={placeCall}
+              onOpenContacts={() => setOverlay('contacts')}
               onSimulateIncoming={() => {
                 const id = contacts?.[0]?.id || 'amina'
                 setIncoming({ id, kind: 'video' })
@@ -345,7 +392,7 @@ function Shell() {
             />
           </div>
           {!chat && !group && !call && !overlay && !statusUser && (
-            <BottomNav tab={tab} onChange={setTab} badges={{ chats: chatUnread, groups: groupUnread }} />
+            <BottomNav tab={tab} onChange={(t) => { if (t === 'calls') markMissedSeen(); setTab(t) }} badges={{ chats: chatUnread, groups: groupUnread, calls: missedCallBadge }} />
           )}
         </div>
 
@@ -399,6 +446,7 @@ function Shell() {
           <div className="absolute inset-0 z-[35] bg-gray-50">
             <Settings
               onBack={() => setOverlay(null)}
+              onSupport={() => setOverlay('support')}
               onLogout={async () => {
                 setOverlay(null)
                 setChat(null)

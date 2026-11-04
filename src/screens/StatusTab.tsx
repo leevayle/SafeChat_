@@ -5,6 +5,7 @@ import { BrandMark } from '../components/AppHeaderLogo'
 import { Avatar } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
 import { api } from '../api'
+import { STATUS_BG_OPTIONS, statusBgCss } from '../lib/statusBg'
 import { useStore } from '../store'
 import { PillButton } from '../components/PillButton'
 import { parseUtc } from '../time'
@@ -17,7 +18,7 @@ function mediaUrl(path?: string | null) {
 }
 
 const VALIDITY = ['1 hour', '6 hours', '12 hours', '24 hours'] as const
-const PRIVACY = ['Everyone', 'My contacts', 'Contacts except…', 'Only share with…'] as const
+const PRIVACY = ['My contacts', 'Contacts except…', 'Only share with…'] as const
 
 type Props = {
   onOpenStatus?: (userId: string) => void
@@ -25,6 +26,7 @@ type Props = {
 
 export function StatusTab({ onOpenStatus }: Props) {
   const { statusList, me, refreshStatus, settings, setSetting, showToast, patchStatusList } = useStore()
+  const [bgCode, setBgCode] = useState('solid_1')
   const [text, setText] = useState('')
   const [image, setImage] = useState<string | null>(null)
   const [composing, setComposing] = useState(false)
@@ -89,10 +91,12 @@ export function StatusTab({ onOpenStatus }: Props) {
       userId: me?.id || '',
       text: body,
       image: img,
+      background: bgCode,
       createdAt,
       expiresAt,
       type: img ? 'image' : 'text',
       views: [] as string[],
+      ago: 'Posting…',
       user: me
         ? {
             id: me.id,
@@ -115,10 +119,28 @@ export function StatusTab({ onOpenStatus }: Props) {
     setBusy(true)
 
     try {
-      const { status } = await api.postStatus(body, img)
-      patchStatusList((list) => list.map((s) => (s.id === localId ? { ...status, pending: false } : s)))
-      showToast('Status posted')
-      refreshStatus().catch(() => {})
+      const { status } = await api.postStatus(body, img, bgCode)
+      // Keep the same list slot — swap id/metadata only so the bubble never disappears
+      patchStatusList((list) =>
+        list.map((s) =>
+          s.id === localId
+            ? {
+                ...s,
+                ...status,
+                id: status?.id || s.id,
+                pending: false,
+                ago: 'Just now',
+                text: status?.text ?? s.text,
+                image: status?.image ?? s.image,
+                background: status?.background ?? s.background,
+                createdAt: status?.createdAt || s.createdAt,
+                expiresAt: status?.expiresAt || s.expiresAt,
+                user: s.user,
+              }
+            : s,
+        ),
+      )
+      showToast('Just now')
     } catch (e: any) {
       patchStatusList((list) => list.filter((s) => s.id !== localId))
       showToast(e?.message || 'Could not post status — try again')
@@ -228,50 +250,109 @@ export function StatusTab({ onOpenStatus }: Props) {
         })}
       </div>
 
-      {/* Composer */}
+      {/* Composer — full-screen modern status editor */}
       {composing && (
-        <div className="absolute inset-0 z-20 flex flex-col bg-white px-6 pt-14">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xl font-black">New status</h3>
-            <button type="button" onClick={() => setComposing(false)} aria-label="Close">
-              <X />
-            </button>
-          </div>
-          <textarea
-            autoFocus
-            value={text}
-            onChange={(e) => setText(e.target.value.slice(0, 140))}
-            placeholder="What's on your mind?"
-            className="mt-4 min-h-[100px] w-full resize-none rounded-2xl bg-gray-100 p-4 text-[15px] font-semibold outline-none"
-          />
-          {image && (
-            <div className="relative mt-3 inline-block">
-              <img src={image} alt="" className="max-h-40 rounded-2xl object-cover" />
+        <div className="absolute inset-0 z-[90] flex flex-col bg-black">
+          <div
+            className="relative flex min-h-0 flex-1 flex-col"
+            style={{ background: statusBgCss(bgCode) }}
+          >
+            <div className="flex items-center justify-between px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
               <button
                 type="button"
-                onClick={() => setImage(null)}
-                className="absolute right-2 top-2 rounded-full bg-black/50 p-1 text-white"
+                onClick={() => setComposing(false)}
+                aria-label="Close"
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm"
               >
-                <X size={14} />
+                <X size={20} />
               </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm"
+                  aria-label="Add photo"
+                >
+                  <ImagePlus size={20} />
+                </button>
+                <PillButton onClick={post} loading={busy} variant="orange" className="!px-5 !py-2 text-sm">
+                  Post
+                </PillButton>
+              </div>
             </div>
-          )}
-          <div className="mt-4 flex items-center gap-3">
-            <button
-              type="button"
-              onClick={() => fileRef.current?.click()}
-              className="flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-brand-purple"
-            >
-              <ImagePlus size={20} />
-            </button>
+
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6">
+              {image ? (
+                <div className="relative max-h-[55vh] w-full">
+                  <img src={image} alt="" className="mx-auto max-h-[55vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl" />
+                  <button
+                    type="button"
+                    onClick={() => setImage(null)}
+                    className="absolute right-2 top-2 rounded-full bg-black/55 p-1.5 text-white"
+                    aria-label="Remove photo"
+                  >
+                    <X size={16} />
+                  </button>
+                  <textarea
+                    value={text}
+                    onChange={(e) => setText(e.target.value.slice(0, 140))}
+                    placeholder="Add a caption…"
+                    className="mt-4 w-full resize-none bg-transparent text-center text-base font-bold text-white outline-none placeholder:text-white/55"
+                    rows={2}
+                  />
+                </div>
+              ) : (
+                <textarea
+                  autoFocus
+                  value={text}
+                  onChange={(e) => setText(e.target.value.slice(0, 140))}
+                  placeholder="Type a status…"
+                  className="w-full max-w-md resize-none bg-transparent text-center text-3xl font-black leading-snug text-white outline-none placeholder:text-white/45"
+                  rows={4}
+                />
+              )}
+            </div>
+
             <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPick} />
-            <PillButton onClick={post} loading={busy} variant="orange" className="flex-1">
-              Post
-            </PillButton>
+
+            <div className="space-y-5 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4">
+              <div className="flex gap-3 overflow-x-auto no-scrollbar px-1 py-1">
+                {STATUS_BG_OPTIONS.map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => setBgCode(o.id)}
+                    title={o.label}
+                    className={`h-10 w-10 shrink-0 rounded-lg ring-2 transition ${
+                      bgCode === o.id ? 'ring-white ring-offset-2 ring-offset-black/25' : 'ring-white/25'
+                    }`}
+                    style={{ background: statusBgCss(o.id) }}
+                  />
+                ))}
+              </div>
+              <div className="flex justify-center gap-2.5 flex-wrap px-1">
+                {VALIDITY.map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setSetting('statusValidity', v)}
+                    className={`shrink-0 rounded-full px-4 py-2 text-xs font-extrabold backdrop-blur-sm transition ${
+                      (settings.statusValidity || '24 hours') === v
+                        ? 'bg-white text-ink'
+                        : 'bg-white/15 text-white'
+                    }`}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
+              <p className="pt-1 text-center text-[11px] font-semibold leading-relaxed text-white/55">
+                Visible to {settings.statusPrivacy || 'My contacts'}
+                <span className="mx-1.5 opacity-40">·</span>
+                expires in {settings.statusValidity || '24 hours'}
+              </p>
+            </div>
           </div>
-          <p className="mt-3 text-center text-xs font-semibold text-gray-400">
-            Visible for {settings.statusValidity || '24 hours'} · {settings.statusPrivacy || 'My contacts'}
-          </p>
         </div>
       )}
 
@@ -279,7 +360,7 @@ export function StatusTab({ onOpenStatus }: Props) {
       <AnimatePresence>
         {statusSettings && (
           <motion.div
-            className="absolute inset-0 z-30 flex flex-col justify-end bg-black/40"
+            className="fixed inset-0 z-[100] flex flex-col justify-end bg-black/40"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}

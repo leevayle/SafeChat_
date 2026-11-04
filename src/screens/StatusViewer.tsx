@@ -1,6 +1,7 @@
+import { statusBgCss } from '../lib/statusBg'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Volume2, VolumeX, Heart, Trash2, Eye } from 'lucide-react'
+import { X, Volume2, VolumeX, Heart, Trash2, Eye, Download, Repeat2, Copy } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { api } from '../api'
 import { useStore } from '../store'
@@ -83,6 +84,7 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
   const [viewersLoading, setViewersLoading] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmRepost, setConfirmRepost] = useState(false)
 
   const viewedRef = useRef<Set<string>>(new Set())
   const rafRef = useRef<number | null>(null)
@@ -402,7 +404,7 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
         </AnimatePresence>
       </div>
 
-      <div className="relative z-20 flex items-center justify-between px-6 pb-8 safe-pb" data-status-action>
+      <div className="relative z-20 flex items-end justify-between px-5 pb-8 safe-pb" data-status-action>
         {isOwner ? (
           <>
             <button
@@ -410,58 +412,104 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
               data-status-action
               onClick={(e) => { e.stopPropagation(); setPaused(true); setConfirmDelete(true) }}
               disabled={deleting}
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm disabled:opacity-50"
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm disabled:opacity-50"
               aria-label="Delete status"
             >
-              <Trash2 size={22} className="text-white" />
+              <Trash2 size={22} />
             </button>
-            <p className="text-center text-xs font-semibold text-white/40">
-              {idx + 1}/{items.length}
-            </p>
             <button
               type="button"
               data-status-action
               onClick={openViewers}
-              className="flex min-w-12 items-center justify-center gap-1.5 rounded-full bg-white/10 px-3 py-2.5 backdrop-blur-sm"
+              className="flex min-w-12 items-center justify-center gap-1.5 rounded-full bg-white/10 px-3 py-2.5 text-white backdrop-blur-sm"
               aria-label="Viewers"
             >
-              <Eye size={18} className="text-white" />
-              <span className="text-sm font-bold text-white">{viewCount}</span>
+              <Eye size={18} />
+              <span className="text-sm font-bold">{viewCount}</span>
             </button>
           </>
         ) : (
           <>
-            <button
-              type="button"
-              data-status-action
-              onClick={toggleMute}
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm"
-              aria-label={muted ? 'Unmute status' : 'Mute status'}
-            >
-              {muted ? <VolumeX size={22} /> : <Volume2 size={22} />}
-            </button>
-            <p className="text-center text-xs font-semibold text-white/40">
-              {idx + 1}/{items.length}
-            </p>
-            <button
-              type="button"
-              data-status-action
-              onClick={toggleLike}
-              className={`flex h-12 w-12 items-center justify-center rounded-full backdrop-blur-sm ${
-                liked ? 'bg-brand-red/90 text-white' : 'bg-white/10'
-              }`}
-              aria-label={liked ? 'Unlike' : 'Like'}
-            >
-              <Heart size={22} fill={liked ? 'currentColor' : 'none'} />
-            </button>
+            {/* Left stack: mute (top) · download/copy (bottom) */}
+            <div className="flex flex-col items-center gap-3">
+              <button
+                type="button"
+                data-status-action
+                onClick={toggleMute}
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm"
+                aria-label={muted ? 'Unmute status' : 'Mute status'}
+              >
+                {muted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+              </button>
+              <button
+                type="button"
+                data-status-action
+                onClick={async (e) => {
+                  e.stopPropagation()
+                  try {
+                    const src = current?.image
+                    if (src) {
+                      const a = document.createElement('a')
+                      a.href = src.startsWith('http') || src.startsWith('data:') || src.startsWith('blob:')
+                        ? src
+                        : mediaUrl(src)
+                      a.download = `safechat-status-${current?.id || 'img'}.jpg`
+                      a.target = '_blank'
+                      a.rel = 'noopener'
+                      document.body.appendChild(a)
+                      a.click()
+                      a.remove()
+                      showToast('Saving…')
+                    } else {
+                      await navigator.clipboard?.writeText(current?.text || '')
+                      showToast('Status text copied')
+                    }
+                  } catch {
+                    showToast('Could not save')
+                  }
+                }}
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm"
+                aria-label={current?.image ? 'Download' : 'Copy text'}
+              >
+                {current?.image ? <Download size={20} /> : <Copy size={20} />}
+              </button>
+            </div>
+
+            {/* Right stack: repost (top) · like (bottom) */}
+            <div className="flex flex-col items-center gap-3">
+              <button
+                type="button"
+                data-status-action
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setPaused(true)
+                  setConfirmRepost(true)
+                }}
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm"
+                aria-label="Repost"
+              >
+                <Repeat2 size={20} />
+              </button>
+              <button
+                type="button"
+                data-status-action
+                onClick={toggleLike}
+                className={`flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-sm ${
+                  liked ? 'bg-brand-red/90 text-white' : 'bg-white/10 text-white'
+                }`}
+                aria-label={liked ? 'Unlike' : 'Like'}
+              >
+                <Heart size={20} fill={liked ? 'currentColor' : 'none'} />
+              </button>
+            </div>
           </>
         )}
       </div>
 
       {!isOwner && (
         <div
-          className="pointer-events-none absolute inset-x-0 bottom-24 z-20 flex flex-col items-center"
-          style={{ opacity: 0.45 + swipeDy / 120, transform: `translateY(${-swipeDy * 0.3}px)` }}
+          className="pointer-events-none absolute inset-x-0 bottom-[5.75rem] z-20 flex justify-center"
+          style={{ opacity: 0.5 + swipeDy / 120, transform: `translateY(${-swipeDy * 0.3}px)` }}
         >
           <div className="rounded-full bg-white/15 px-4 py-1.5 text-xs font-bold text-white/90 backdrop-blur">
             Swipe up to reply
@@ -508,6 +556,65 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
                 }}
               >
                 {deleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmRepost && (
+        <div
+          className="absolute inset-0 z-[70] flex items-end justify-center bg-black/50 px-4 pb-10"
+          onClick={(e) => {
+            e.stopPropagation()
+            setConfirmRepost(false)
+            setPaused(false)
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-lg font-black text-ink">Repost this status?</p>
+            <p className="mt-1 text-sm font-semibold text-gray-500">
+              It will be shared to your status with your privacy settings.
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-ink"
+                onClick={() => {
+                  setConfirmRepost(false)
+                  setPaused(false)
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
+                onClick={async () => {
+                  setConfirmRepost(false)
+                  if (!current) {
+                    setPaused(false)
+                    return
+                  }
+                  try {
+                    await api.postStatus(
+                      current.text || '',
+                      current.image || null,
+                      (current as any).background || 'solid_1',
+                    )
+                    showToast('Reposted to your status')
+                    void refreshStatus?.()
+                  } catch {
+                    showToast('Could not repost')
+                  } finally {
+                    setPaused(false)
+                  }
+                }}
+              >
+                Repost
               </button>
             </div>
           </div>

@@ -139,6 +139,7 @@ class MessagingService:
         if mt == MessageType.TEXT and not content:
             raise ValidationError("Text messages require content")
 
+        reply_to_text = None
         if reply_to_message_id:
             if not ObjectId.is_valid(reply_to_message_id):
                 raise ValidationError("Invalid reply_to_message_id")
@@ -147,6 +148,22 @@ class MessagingService:
             )
             if not reply:
                 raise NotFoundError("Reply target message not found")
+            # Snapshot preview so both sides can render without a second fetch
+            if reply.get("deleted_at"):
+                reply_to_text = "Original message"
+            else:
+                body = (reply.get("content") or "").strip()
+                if body:
+                    # Strip status-reply encoding markers for preview
+                    if body.startswith("⟦status⟧"):
+                        import re
+                        m = re.match(r"⟦status⟧(.*?)⟦t⟧(.*?)⟦/⟧(.*)", body, re.DOTALL)
+                        body = (m.group(3) if m else body) or "Status"
+                    reply_to_text = body[:180]
+                elif reply.get("media_attachments"):
+                    reply_to_text = "📷 Photo"
+                else:
+                    reply_to_text = "Message"
 
         now = datetime.now(timezone.utc)
         msg = {
@@ -156,6 +173,7 @@ class MessagingService:
             "content": content,
             "media_attachments": media_attachments or [],
             "reply_to_message_id": reply_to_message_id,
+            "reply_to_text": reply_to_text,
             "forwarded_from": None,
             "created_at": now,
             "updated_at": now,
@@ -239,7 +257,7 @@ class MessagingService:
 
         query: Dict[str, Any] = {
             "conversation_id": conversation_id,
-            "deleted_at": None,
+            # Soft-deleted messages stay in history as placeholders
         }
         if before_id and ObjectId.is_valid(before_id):
             query["_id"] = {"$lt": ObjectId(before_id)}
@@ -403,6 +421,77 @@ class MessagingService:
         return result.modified_count
 
     @staticmethod
+    async def forward_message(
+        message_id: str,
+        user_id: str,
+        to_conversation_id: str,
+    ) -> dict:
+        """Copy a message into another conversation the user belongs to."""
+        db = get_database()
+        if not ObjectId.is_valid(message_id) or not ObjectId.is_valid(to_conversation_id):
+            raise ValidationError("Invalid id")
+        src = await db.messages.find_one({"_id": ObjectId(message_id), "deleted_at": None})
+        if not src:
+            raise NotFoundError("Message not found")
+        src_conv = await db.conversations.find_one({"_id": ObjectId(src["conversation_id"])})
+        if not src_conv or user_id not in src_conv.get("participant_ids", []):
+            raise ForbiddenError("Not a participant")
+        dest = await db.conversations.find_one({"_id": ObjectId(to_conversation_id)})
+        if not dest or user_id not in dest.get("participant_ids", []):
+            raise ForbiddenError("Not a participant of destination")
+
+        now = datetime.now(timezone.utc)
+        msg = {
+            "conversation_id": to_conversation_id,
+            "sender_id": user_id,
+            "message_type": src.get("message_type") or "text",
+            "content": src.get("content"),
+            "media_attachments": src.get("media_attachments") or [],
+            "reply_to_message_id": None,
+            "forwarded_from": {
+                "message_id": message_id,
+                "conversation_id": src["conversation_id"],
+                "sender_id": src.get("sender_id"),
+            },
+            "created_at": now,
+            "updated_at": now,
+            "deleted_at": None,
+            "delivery_status": DeliveryStatus.SENT.value,
+            "edited": False,
+            "idempotency_key": None,
+        }
+        result = await db.messages.insert_one(msg)
+        msg_id = str(result.inserted_id)
+        await db.conversations.update_one(
+            {"_id": ObjectId(to_conversation_id)},
+            {
+                "$set": {
+                    "last_message_id": msg_id,
+                    "last_message_at": now,
+                    "updated_at": now,
+                }
+            },
+        )
+        for pid in dest["participant_ids"]:
+            if pid != user_id:
+                await db.message_receipts.update_one(
+                    {"message_id": msg_id, "user_id": pid},
+                    {
+                        "$setOnInsert": {
+                            "message_id": msg_id,
+                            "user_id": pid,
+                            "conversation_id": to_conversation_id,
+                            "delivered_at": None,
+                            "read_at": None,
+                            "created_at": now,
+                        }
+                    },
+                    upsert=True,
+                )
+        msg["_id"] = result.inserted_id
+        return await MessagingService._serialize_message(msg, viewer_id=user_id)
+
+    @staticmethod
     async def react_to_message(message_id: str, user_id: str, emoji: str) -> dict:
         db = get_database()
         if not ObjectId.is_valid(message_id):
@@ -469,15 +558,18 @@ class MessagingService:
             "sender_username": sender["username"] if sender else None,
             "sender_display_name": sender["display_name"] if sender else None,
             "message_type": msg["message_type"],
-            "content": msg.get("content"),
-            "media_attachments": msg.get("media_attachments") or [],
+            "content": None if msg.get("deleted_at") else msg.get("content"),
+            "media_attachments": [] if msg.get("deleted_at") else (msg.get("media_attachments") or []),
             "reply_to_message_id": msg.get("reply_to_message_id"),
+            "reply_to_text": msg.get("reply_to_text"),
             "forwarded_from": msg.get("forwarded_from"),
             "created_at": _utc_iso(msg.get("created_at")),
             "updated_at": msg["updated_at"].isoformat() if msg.get("updated_at") else None,
             "deleted_at": msg["deleted_at"].isoformat() if msg.get("deleted_at") else None,
+            "deleted": bool(msg.get("deleted_at")),
             "delivery_status": status,
             "edited": msg.get("edited", False),
+            "reactions": msg.get("_reactions") or [],
         }
 
     @staticmethod

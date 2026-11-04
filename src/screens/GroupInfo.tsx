@@ -37,17 +37,19 @@ export function GroupInfo({ groupId, onBack, onLeft }: { groupId: string; onBack
   const [adding, setAdding] = useState<string[]>([])
   if (!g) return null
 
-  const isAdmin = !!g.members.find((m) => m.id === 'me')?.admin
+  const membersList = Array.isArray(g.members) ? g.members : []
+  const blocked = Array.isArray(settings?.blocked) ? settings.blocked : []
+  const isAdmin = !!membersList.find((m: any) => m.id === 'me')?.admin
   const sys = (text: string, from = 'me') => ({ id: String(Date.now()) + Math.random(), from, text, time: stamp(), system: true })
   const log = (text: string) => patchGroup(groupId, (x) => ({ ...x, messages: [...x.messages, sys(text)] }))
   const link = `safechat.app/join/${g.invite}`
-  const members = [...g.members].sort((a, b) => Number(b.admin) - Number(a.admin))
+  const members = [...membersList].sort((a, b) => Number(b.admin) - Number(a.admin))
   const shown = members.filter((m) => whoById(m.id).name.toLowerCase().includes(q.toLowerCase()))
-  const addable = contacts.filter((c) => !g.members.some((m) => m.id === c.id) && !settings.blocked.includes(c.id))
-  const target = sheet && typeof sheet === 'object' ? g.members.find((m) => m.id === sheet.member) : undefined
+  const addable = contacts.filter((c) => !membersList.some((m: any) => m.id === c.id) && !blocked.includes(c.id))
+  const target = sheet && typeof sheet === 'object' ? membersList.find((m: any) => m.id === sheet.member) : undefined
 
   const leave = () => {
-    const rest = g.members.filter((m) => m.id !== 'me')
+    const rest = membersList.filter((m: any) => m.id !== 'me')
     if (!rest.some((m) => m.admin) && rest.length) rest[0] = { ...rest[0], admin: true }
     if (rest.length === 0) removeGroup(groupId)
     else patchGroup(groupId, (x) => ({ ...x, members: rest }))

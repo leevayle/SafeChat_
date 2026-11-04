@@ -79,29 +79,28 @@ export function SaveRequests({ onClose, onChat }: Props) {
   }, [load])
 
   const accept = async (id: string) => {
-    setBusyId(id)
+    // Optimistic remove — request runs in background
+    const snapshot = incoming
+    setIncoming((list) => list.filter((r) => r.id !== id))
+    showToast('Contact saved')
     try {
       await api.acceptContactRequest(id)
-      setIncoming((list) => list.filter((r) => r.id !== id))
-      await refreshContacts()
-      showToast('Contact saved')
+      void refreshContacts()
     } catch (e: any) {
+      setIncoming(snapshot)
       showToast(e?.message || 'Could not accept')
-    } finally {
-      setBusyId(null)
     }
   }
 
   const decline = async (id: string) => {
-    setBusyId(id)
+    const snapshot = incoming
+    setIncoming((list) => list.filter((r) => r.id !== id))
+    showToast('Request declined')
     try {
       await api.rejectContactRequest(id)
-      setIncoming((list) => list.filter((r) => r.id !== id))
-      showToast('Request declined')
     } catch (e: any) {
+      setIncoming(snapshot)
       showToast(e?.message || 'Could not decline')
-    } finally {
-      setBusyId(null)
     }
   }
 

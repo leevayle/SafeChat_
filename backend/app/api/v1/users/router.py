@@ -186,8 +186,22 @@ async def revoke_session(session_id: str, user: dict = Depends(get_current_user)
 
 
 @router.post("/me/deactivate")
-async def deactivate_account(user: dict = Depends(get_current_user)):
+async def deactivate_account(
+    body: dict = None,
+    user: dict = Depends(get_current_user),
+):
+    """Require password confirmation before deactivating the account."""
+    from app.core.security import verify_password
+    from app.core.exceptions import UnauthorizedError, ValidationError
+
     db = get_database()
+    password = (body or {}).get("password") if isinstance(body, dict) else None
+    if not password:
+        raise ValidationError("Password is required")
+    full = await db.users.find_one({"_id": ObjectId(user["id"])})
+    if not full or not verify_password(password, full.get("password_hash") or ""):
+        raise UnauthorizedError("Incorrect password")
+
     now = datetime.now(timezone.utc)
     await db.users.update_one(
         {"_id": ObjectId(user["id"])},

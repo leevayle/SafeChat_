@@ -25,6 +25,7 @@ class StatusService:
         visibility: str = "contacts",
         selected_viewer_ids: Optional[List[str]] = None,
         expires_in_hours: int = 24,
+        background: Optional[str] = None,
     ) -> dict:
         try:
             st = StatusType(status_type)
@@ -47,6 +48,7 @@ class StatusService:
             "visibility": vis.value,
             "selected_viewer_ids": selected_viewer_ids or [],
             "created_at": now,
+            "background": background or "solid_1",
             "expires_at": expires,
             "status_type": st.value,
         }

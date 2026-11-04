@@ -140,37 +140,41 @@ class ContactService:
             raise ConflictError("Request is not pending")
 
         now = datetime.now(timezone.utc)
-        await db.contact_requests.update_one(
-            {"_id": ObjectId(request_id)},
-            {"$set": {"status": ContactRequestStatus.ACCEPTED.value, "updated_at": now}},
-        )
-
-        from_user = await db.users.find_one(
-            {"_id": ObjectId(req["from_user_id"])},
-            {"phone_number": 1, "phone": 1},
-        )
         share_phone = bool(req.get("share_phone"))
-        from_phone = (
-            (from_user.get("phone_number") or from_user.get("phone") or "")
-            if from_user and share_phone
-            else ""
-        )
-
         sender_nick = (req.get("from_nickname") or "").strip() or None
-        for owner, contact, peer_phone in (
-            (req["from_user_id"], req["to_user_id"], ""),
-            (req["to_user_id"], req["from_user_id"], from_phone),
-        ):
+
+        # Parallel: mark request accepted + optional phone lookup
+        import asyncio
+
+        async def _mark_accepted():
+            await db.contact_requests.update_one(
+                {"_id": ObjectId(request_id)},
+                {"$set": {"status": ContactRequestStatus.ACCEPTED.value, "updated_at": now}},
+            )
+
+        async def _phone():
+            if not share_phone:
+                return ""
+            from_user = await db.users.find_one(
+                {"_id": ObjectId(req["from_user_id"])},
+                {"phone_number": 1, "phone": 1},
+            )
+            if not from_user:
+                return ""
+            return from_user.get("phone_number") or from_user.get("phone") or ""
+
+        _, from_phone = await asyncio.gather(_mark_accepted(), _phone())
+
+        # Upsert both contact edges in parallel
+        async def _upsert_edge(owner: str, contact: str, peer_phone: str, nick: Optional[str]):
             set_fields: Dict[str, Any] = {
                 "contact_status": ContactStatus.ACCEPTED.value,
                 "updated_at": now,
             }
             if peer_phone:
                 set_fields["shared_phone"] = peer_phone
-            # Only the sender sees/stores their private nickname for the peer
-            insert_nick = sender_nick if owner == req["from_user_id"] else None
-            if insert_nick and owner == req["from_user_id"]:
-                set_fields["nickname"] = insert_nick
+            if nick:
+                set_fields["nickname"] = nick
             await db.contacts.update_one(
                 {"owner_user_id": owner, "contact_user_id": contact},
                 {
@@ -178,23 +182,27 @@ class ContactService:
                     "$setOnInsert": {
                         "owner_user_id": owner,
                         "contact_user_id": contact,
-                        "nickname": insert_nick,
+                        "nickname": nick,
                         "created_at": now,
                     },
                 },
                 upsert=True,
             )
 
-        await db.user_activity_logs.insert_one(
-            {
-                "user_id": user_id,
-                "event_type": "contact",
-                "action": "request_accepted",
-                "resource_type": "contact_request",
-                "resource_id": request_id,
-                "timestamp": now,
-                "metadata": {"from_user_id": req["from_user_id"]},
-            }
+        await asyncio.gather(
+            _upsert_edge(req["from_user_id"], req["to_user_id"], "", sender_nick),
+            _upsert_edge(req["to_user_id"], req["from_user_id"], from_phone or "", None),
+            db.user_activity_logs.insert_one(
+                {
+                    "user_id": user_id,
+                    "event_type": "contact",
+                    "action": "request_accepted",
+                    "resource_type": "contact_request",
+                    "resource_id": request_id,
+                    "timestamp": now,
+                    "metadata": {"from_user_id": req["from_user_id"]},
+                }
+            ),
         )
         return {"id": request_id, "status": ContactRequestStatus.ACCEPTED.value}
 

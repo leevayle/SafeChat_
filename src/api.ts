@@ -56,6 +56,9 @@ export type ApiMsg = {
   conversationId?: string
   messageType?: string
   edited?: boolean
+  deleted?: boolean
+  forwarded?: boolean
+  reactions?: { emoji: string; user_id?: string }[]
   replyToId?: string | null
   replyToText?: string | null
   /** Encoded status reply preview */
@@ -252,6 +255,9 @@ function mapMessage(m: any, meId?: string): ApiMsg {
     conversationId: m.conversation_id,
     messageType: m.message_type,
     edited: !!m.edited,
+    deleted: !!(m.deleted || m.deleted_at),
+    forwarded: !!(m.forwarded_from || m.forwarded),
+    reactions: m.reactions || [],
     replyToId: m.reply_to_message_id || m.replyToId || null,
     replyToText: m.reply_to_text || m.replyToText || null,
     statusReply: statusReply || m.status_reply || null,
@@ -319,6 +325,7 @@ function mapStatus(s: any): any {
     userId,
     text: s.content || s.text || '',
     image: (s.media_attachments && s.media_attachments[0]?.url) || s.image || null,
+    background: s.background || 'solid_1',
     createdAt: s.created_at || s.createdAt,
     expiresAt: s.expires_at || s.expiresAt,
     type: s.status_type || s.type || 'text',
@@ -370,12 +377,12 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
   // Hard stop: dead session or missing token → never hit the network for protected routes
   if (!publicPath) {
     if (sessionDead) {
-      const err = new Error('Unauthorized')
+      const err = new Error('Session expired — log in again')
       ;(err as any).status = 401
       throw err
     }
     if (!accessToken()) {
-      const err = new Error('Unauthorized')
+      const err = new Error('Please log in again')
       ;(err as any).status = 401
       throw err
     }
@@ -400,18 +407,36 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
     }
     // Refresh failed or already retried → kill session so polls stop
     markSessionDead()
-    const err = new Error(body.message || 'Unauthorized')
+    const err = new Error(friendlyError(body.message || 'Session expired — log in again', 401))
     ;(err as any).status = 401
     throw err
   }
 
   if (!res.ok || body.success === false) {
-    const msg = body.message || (body as any).error || res.statusText || 'Request failed'
-    const err = new Error(msg)
+    const raw = body.message || (body as any).error || res.statusText || 'Request failed'
+    const err = new Error(friendlyError(raw, res.status))
     ;(err as any).status = res.status
     throw err
   }
   return (body.data !== undefined ? body.data : body) as T
+}
+
+/** Map technical API errors to short, user-friendly copy. */
+function friendlyError(raw: string, status?: number): string {
+  const t = (raw || '').toLowerCase()
+  if (status === 401 || t.includes('unauthorized') || t.includes('not authenticated') || t.includes('invalid token')) {
+    return 'Session expired — log in again'
+  }
+  if (status === 403 || t.includes('forbidden')) return 'You don’t have permission for that'
+  if (status === 404 || t.includes('not found')) return 'Not found'
+  if (status === 409 || t.includes('conflict') || t.includes('already')) return raw.length < 80 ? raw : 'That action isn’t available right now'
+  if (status === 429 || t.includes('rate limit') || t.includes('too many')) return 'Slow down a moment and try again'
+  if (status && status >= 500) return 'Something went wrong — try again'
+  if (t.includes('network') || t.includes('failed to fetch')) return 'Check your connection and try again'
+  if (t.includes('incorrect password') || t.includes('wrong password')) return 'Incorrect password'
+  // Keep short human messages; trim long technical dumps
+  if (raw && raw.length <= 90 && !t.includes('exception') && !t.includes('traceback')) return raw
+  return 'Something went wrong — try again'
 }
 
 function meId(): string {
@@ -518,6 +543,13 @@ export const api = {
     return req<any>('/api/v1/users/me', {
       method: 'PATCH',
       body: JSON.stringify(payload),
+    })
+  },
+
+  deactivateAccount: async (password: string) => {
+    return req<any>('/api/v1/users/me/deactivate', {
+      method: 'POST',
+      body: JSON.stringify({ password }),
     })
   },
 
@@ -782,12 +814,13 @@ export const api = {
     return { status: mapped }
   },
 
-  postStatus: async (text: string, image?: string | null) => {
+  postStatus: async (text: string, image?: string | null, background?: string | null) => {
     const payload: Record<string, unknown> = {
       content: text || '',
       status_type: image ? 'image' : 'text',
       visibility: 'contacts',
       expires_in_hours: 24,
+      background: background || 'solid_1',
     }
     if (image) {
       payload.media_attachments = [{ type: 'image', url: image }]
@@ -901,6 +934,34 @@ export const api = {
     } catch {
       return { online: false, lastSeen: null }
     }
+  },
+  editMessage: async (messageId: string, content: string) => {
+    const data = await req<any>(`/api/v1/messages/${messageId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ content }),
+    })
+    return mapMessage(data, undefined)
+  },
+  deleteMessage: async (messageId: string) => {
+    await req(`/api/v1/messages/${messageId}`, { method: 'DELETE' })
+  },
+  reactMessage: async (messageId: string, emoji: string) => {
+    await req(`/api/v1/messages/${messageId}/reactions`, {
+      method: 'POST',
+      body: JSON.stringify({ emoji }),
+    })
+  },
+  removeReaction: async (messageId: string, emoji: string) => {
+    await req(`/api/v1/messages/${encodeURIComponent(messageId)}/reactions/${encodeURIComponent(emoji)}`, {
+      method: 'DELETE',
+    })
+  },
+  forwardMessage: async (messageId: string, conversationId: string) => {
+    const data = await req<any>(`/api/v1/messages/${messageId}/forward`, {
+      method: 'POST',
+      body: JSON.stringify({ conversation_id: conversationId }),
+    })
+    return mapMessage(data, undefined)
   },
   ring: async (_to: string, _kind: 'audio' | 'video') => ({ ring: null }),
   incomingRings: async () => ({ incoming: [] as any[] }),

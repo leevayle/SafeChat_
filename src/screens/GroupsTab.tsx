@@ -51,7 +51,8 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
         <ul className="px-2">
           <AnimatePresence initial={false}>
             {list.map((g, i) => {
-              const last = g.messages[g.messages.length - 1]
+              const msgs = Array.isArray(g.messages) ? g.messages : []
+              const last = msgs.length ? msgs[msgs.length - 1] : null
               const who = last ? (last.from === 'me' ? 'You' : whoById(last.from).name.split(' ')[0]) : ''
               return (
                 <motion.li key={g.id} layout initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -30 }} transition={{ delay: i * 0.03 }}>

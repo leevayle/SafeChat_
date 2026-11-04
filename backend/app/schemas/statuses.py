@@ -10,3 +10,5 @@ class CreateStatusRequest(BaseModel):
     visibility: str = Field(default="contacts")
     selected_viewer_ids: Optional[List[str]] = None
     expires_in_hours: int = Field(default=24, ge=1, le=168)
+    # solid_1..solid_4 | gradient_1..gradient_4
+    background: Optional[str] = Field(default="solid_1", max_length=32)

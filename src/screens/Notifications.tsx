@@ -30,48 +30,54 @@ export function Notifications({ onClose, onOpenSaveRequests, onOpenChat }: Props
 
   useEffect(() => {
     let alive = true
+    // Fire immediately on open — no artificial delay; single lightweight request
     const load = async () => {
       setLoading(true)
       try {
         const notifs: Notif[] = []
-        try {
-          const { requests } = await api.incomingContactRequests()
-          for (const r of requests || []) {
-            if (r.status !== 'pending') continue
-            notifs.push({
-              id: `req-${r.id}`,
-              type: 'request',
-              title: 'Save request',
-              body: `${r.name || r.username || 'Someone'} wants to save you as a contact`,
-              time: r.createdAt || '',
-              unread: true,
-            })
-          }
-        } catch {
-          /* offline */
+        const { requests } = await api.incomingContactRequests()
+        for (const r of requests || []) {
+          if (r.status !== 'pending') continue
+          notifs.push({
+            id: `req-${r.id}`,
+            type: 'request',
+            title: 'Save request',
+            body: `${r.name || r.username || 'Someone'} wants to save you as a contact`,
+            time: r.createdAt || '',
+            unread: true,
+          })
         }
-        // Chat unreads show on the Chats tab badge — not here
         if (!notifs.length) {
           notifs.push({
             id: 'sys-1',
             type: 'system',
-            title: 'You\'re all caught up',
+            title: "You're all caught up",
             body: 'New save requests, messages, and calls will show up here.',
             time: new Date().toISOString(),
           })
         }
         if (alive) setItems(notifs)
       } catch {
-        if (alive) showToast('Could not load notifications')
+        if (alive) {
+          setItems([
+            {
+              id: 'sys-1',
+              type: 'system',
+              title: "You're all caught up",
+              body: 'New save requests, messages, and calls will show up here.',
+              time: new Date().toISOString(),
+            },
+          ])
+        }
       } finally {
         if (alive) setLoading(false)
       }
     }
-    load()
+    void load()
     return () => {
       alive = false
     }
-  }, [chats, showToast])
+  }, [])
 
   const icon = (t: Notif['type']) => {
     if (t === 'request') return UserPlus

@@ -43,12 +43,13 @@ export function LogoIcon({ size = 112, animate = true }: { size?: number; animat
   )
 }
 
+/** Brand wordmark — absolute hex colors (never follow theme). */
 export function Wordmark({ className = 'text-4xl' }: { className?: string }) {
   return (
     <p className={`font-display tracking-tight ${className}`}>
-      <span className="text-brand-red">Safe</span>
-      <span className="text-brand-purple">Chat</span>
-      <span className="text-brand-blue">.</span>
+      <span style={{ color: '#E3404C' }}>Safe</span>
+      <span style={{ color: '#7B2CBF' }}>Chat</span>
+      <span style={{ color: '#6389EB' }}>.</span>
     </p>
   )
 }

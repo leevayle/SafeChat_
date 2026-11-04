@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState, memo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw } from 'lucide-react'
+import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { api, hasAccessToken, type ApiMsg } from '../api'
 import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
 import { isRealtimeOpen, wsSendMessage, wsReceipt } from '../realtime'
 import { FONT_SIZES, WALLPAPERS, useStore } from '../store'
+import { playInboxLandingChime } from '../lib/sounds'
 
 type Props = { contactId: string; onBack: () => void; onCall: (kind: 'audio' | 'video') => void; onOpenCalls?: () => void }
 
+const REACT_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const
 const EMOJIS = [
   '😀','😁','😂','🤣','😃','😄','😅','😆','😉','😊','😋','😎','😍','😘','🥰','😗','😙','😚',
   '🙂','🤗','🤩','🤔','🤨','😐','😑','😶','🙄','😏','😣','😥','😮','🤐','😯','😪','😫','🥱',
@@ -118,6 +120,7 @@ type BubbleProps = {
   onReply?: (m: ApiMsg) => void
   onOpenCalls?: () => void
   onJumpTo?: (id: string) => void
+  onOpenAction?: () => void
 }
 
 /** One mount animation only; later receipt updates re-render ticks in place */
@@ -130,6 +133,7 @@ const MessageBubble = memo(function MessageBubble({
   onReply,
   onOpenCalls,
   onJumpTo,
+  onOpenAction,
 }: BubbleProps) {
   const startX = useRef(0)
   const startY = useRef(0)
@@ -189,6 +193,8 @@ const MessageBubble = memo(function MessageBubble({
           setDx(Math.min(56, d * 0.4))
         }
       }}
+      onContextMenu={(e) => { e.preventDefault(); onOpenAction?.() }}
+      onDoubleClick={() => onOpenAction?.()}
       onTouchEnd={() => {
         if (dx > 28) onReply?.(m)
         setDx(0)
@@ -308,6 +314,11 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
   const [msgs, setMsgs] = useState<ApiMsg[]>([])
   const [text, setText] = useState('')
   const [typing, setTyping] = useState(false)
+  const [actionMsg, setActionMsg] = useState<ApiMsg | null>(null)
+  const [editText, setEditText] = useState('')
+  const [editing, setEditing] = useState(false)
+  const [forwardOpen, setForwardOpen] = useState(false)
+
   const [emoji, setEmoji] = useState(false)
   const [loading, setLoading] = useState(true)
   const [pendingImage, setPendingImage] = useState<string | null>(null)
@@ -315,7 +326,28 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
   const [profileOpen, setProfileOpen] = useState(false)
   const [peerOnline, setPeerOnline] = useState(false)
   const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null)
+  const [chatMenu, setChatMenu] = useState(false)
+  const [chatMuted, setChatMuted] = useState(() => {
+    try {
+      const map = JSON.parse(localStorage.getItem('sc_chat_muted') || '{}')
+      return !!map[contactId]
+    } catch {
+      return false
+    }
+  })
   const [statusReply, setStatusReply] = useState<{ preview: string; time?: string } | null>(null)
+  const prevMsgCountRef = useRef(0)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Auto-focus composer when starting a reply (message swipe or status)
+  useEffect(() => {
+    if (replyTo || statusReply) {
+      // Next frame so the reply bar is mounted
+      requestAnimationFrame(() => {
+        inputRef.current?.focus()
+      })
+    }
+  }, [replyTo, statusReply])
   const msgRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const end = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -631,6 +663,17 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
     end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [msgs.length, pendingImage, typing])
 
+  // Soft landing chime when a peer message arrives while this chat is open
+  useEffect(() => {
+    const prev = prevMsgCountRef.current
+    prevMsgCountRef.current = msgs.length
+    if (prev === 0 || msgs.length <= prev || chatMuted) return
+    const last = msgs[msgs.length - 1]
+    if (!last) return
+    const mine = last.mine ?? last.from === me?.id
+    if (!mine) playInboxLandingChime()
+  }, [msgs, chatMuted, me?.id])
+
   const deliverMessage = async (
     localId: string,
     body: string,
@@ -829,6 +872,67 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
     return () => window.removeEventListener('sc:rt-typing', onTyping)
   }, [contactId])
 
+
+  const applyEdit = async () => {
+    if (!actionMsg || !editText.trim()) return
+    const id = actionMsg.id
+    const text = editText.trim()
+    setMsgs((list) => list.map((m) => (m.id === id ? { ...m, text, edited: true } : m)))
+    setEditing(false)
+    setActionMsg(null)
+    try {
+      await api.editMessage(id, text)
+    } catch {
+      showToast('Could not edit message')
+    }
+  }
+
+  const applyDelete = async () => {
+    if (!actionMsg) return
+    const id = actionMsg.id
+    setMsgs((list) =>
+      list.map((m) =>
+        m.id === id ? { ...m, deleted: true, text: '', image: null } : m,
+      ),
+    )
+    setActionMsg(null)
+    try {
+      await api.deleteMessage(id)
+    } catch {
+      showToast('Could not delete')
+    }
+  }
+
+  const applyReact = async (emoji: string) => {
+    if (!actionMsg) return
+    const id = actionMsg.id
+    setMsgs((list) =>
+      list.map((m) => {
+        if (m.id !== id) return m
+        const reactions = [...(m.reactions || []).filter((r) => r.emoji !== emoji), { emoji }]
+        return { ...m, reactions }
+      }),
+    )
+    setActionMsg(null)
+    try {
+      await api.reactMessage(id, emoji)
+    } catch {
+      /* */
+    }
+  }
+
+  const applyForward = async (conversationId: string) => {
+    if (!actionMsg) return
+    try {
+      await api.forwardMessage(actionMsg.id, conversationId)
+      showToast('Forwarded')
+    } catch {
+      showToast('Could not forward')
+    }
+    setForwardOpen(false)
+    setActionMsg(null)
+  }
+
   // Status swipe-up reply hands off via sessionStorage
   useEffect(() => {
     try {
@@ -912,7 +1016,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
           <Avatar contact={{ ...c, online: peerOnline || c.online }} size={44} />
           <div className="min-w-0 flex-1">
             <p className="truncate font-extrabold leading-tight">{c.name}</p>
-            <p className={`text-xs font-bold ${typing || peerOnline || c.online ? 'text-[#5C8A5E]' : 'text-gray-400'}`}>
+            <p className={`text-xs font-bold ${typing || peerOnline || c.online ? 'text-brand-blue' : 'text-gray-400'}`}>
               {typing
                 ? 'typing…'
                 : peerOnline || c.online
@@ -935,10 +1039,63 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
           type="button"
           aria-label="Video call"
           onClick={() => onCall('video')}
-          className="flex h-10 w-10 m-r-2 items-center justify-center rounded-full text-brand-purple hover:bg-brand-purple/10"
+          className="flex h-10 w-10 items-center justify-center rounded-full text-brand-purple hover:bg-brand-purple/10"
         >
           <Video size={22} />
         </button>
+        <div className="relative">
+          <button
+            type="button"
+            aria-label="Chat options"
+            onClick={() => setChatMenu((m) => !m)}
+            className="flex h-10 w-10 items-center justify-center rounded-full text-brand-purple hover:bg-brand-purple/10"
+          >
+            <MoreVertical size={20} />
+          </button>
+          {chatMenu && (
+            <>
+              <button
+                type="button"
+                className="fixed inset-0 z-40"
+                aria-label="Close menu"
+                onClick={() => setChatMenu(false)}
+              />
+              <div className="absolute right-0 top-11 z-50 w-52 overflow-hidden rounded-2xl bg-white py-1.5 shadow-xl ring-1 ring-black/5">
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold hover:bg-gray-50"
+                  onClick={() => {
+                    setChatMuted((m) => {
+                      const next = !m
+                      try {
+                        const map = JSON.parse(localStorage.getItem('sc_chat_muted') || '{}')
+                        map[contactId] = next
+                        localStorage.setItem('sc_chat_muted', JSON.stringify(map))
+                      } catch { /* ignore */ }
+                      return next
+                    })
+                    setChatMenu(false)
+                    showToast?.(chatMuted ? 'Chat unmuted' : 'Chat muted')
+                  }}
+                >
+                  {chatMuted ? <Bell size={18} className="text-brand-purple" /> : <BellOff size={18} className="text-brand-purple" />}
+                  {chatMuted ? 'Unmute notifications' : 'Mute notifications'}
+                </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold hover:bg-gray-50"
+                  onClick={() => {
+                    setChatMenu(false)
+                    showToast?.('Custom ringtones coming soon')
+                  }}
+                >
+                  <Volume2 size={18} className="text-brand-purple" />
+                  Custom ringtone
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </header>
 
       <div
@@ -969,12 +1126,16 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
                 }}
               >
                 <MessageBubble
+                      onOpenAction={() => setActionMsg(m)}
                   m={m}
                   mine={!!mine}
                   readReceipts={settings.readReceipts !== false}
                   animateIn={animateIn}
                   onRetry={retryFailed}
-                  onReply={(msg) => setReplyTo(msg)}
+                  onReply={(msg) => {
+                    setReplyTo(msg)
+                    requestAnimationFrame(() => inputRef.current?.focus())
+                  }}
                   onOpenCalls={onOpenCalls}
                   onJumpTo={(id) => msgRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
                 />
@@ -1019,6 +1180,71 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
       )}
 
 
+      
+      {actionMsg && !editing && !forwardOpen && (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={() => setActionMsg(null)}>
+          <div className="rounded-t-3xl bg-white px-4 pb-8 pt-3" onClick={(e) => e.stopPropagation()}>
+            <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gray-200" />
+            <div className="mb-3 flex justify-center gap-2">
+              {REACT_EMOJIS.map((e) => (
+                <button key={e} type="button" className="flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-xl active:scale-90" onClick={() => applyReact(e)}>
+                  {e}
+                </button>
+              ))}
+            </div>
+            <div className="divide-y divide-gray-100 overflow-hidden rounded-2xl bg-gray-50">
+              {actionMsg.mine && !actionMsg.deleted && (
+                <button type="button" className="flex w-full px-4 py-3.5 text-left font-bold" onClick={() => { setEditText(actionMsg.text || ''); setEditing(true) }}>Edit</button>
+              )}
+              <button type="button" className="flex w-full px-4 py-3.5 text-left font-bold" onClick={() => setForwardOpen(true)}>Forward</button>
+              {actionMsg.mine && !actionMsg.deleted && (
+                <button type="button" className="flex w-full px-4 py-3.5 text-left font-bold text-brand-red" onClick={() => void applyDelete()}>Delete for everyone</button>
+              )}
+              <button type="button" className="flex w-full px-4 py-3.5 text-left font-bold text-gray-500" onClick={() => setActionMsg(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editing && actionMsg && (
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40">
+          <div className="rounded-t-3xl bg-white p-4 pb-8">
+            <p className="mb-2 text-sm font-extrabold text-gray-500">Edit message</p>
+            <textarea value={editText} onChange={(e) => setEditText(e.target.value)} className="min-h-[80px] w-full rounded-2xl bg-gray-100 p-3 font-semibold outline-none" />
+            <div className="mt-3 flex gap-2">
+              <button type="button" className="flex-1 rounded-full bg-gray-100 py-3 font-extrabold" onClick={() => { setEditing(false); setActionMsg(null) }}>Cancel</button>
+              <button type="button" className="flex-1 rounded-full bg-brand-purple py-3 font-extrabold text-white" onClick={() => void applyEdit()}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {forwardOpen && actionMsg && (
+        <div className="absolute inset-0 z-50 flex flex-col bg-white">
+          <div className="flex items-center gap-2 border-b border-gray-100 px-3 pb-3 pt-[max(1rem,env(safe-area-inset-top))]">
+            <button type="button" onClick={() => { setForwardOpen(false); setActionMsg(null) }} className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-gray-100">✕</button>
+            <p className="text-lg font-black">Forward to…</p>
+          </div>
+          <ul className="flex-1 overflow-y-auto px-2 py-2">
+            {chats.filter((c) => c.conversationId && c.conversationId !== conversationId).map((c) => (
+              <li key={c.conversationId}>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left hover:bg-gray-50"
+                  onClick={() => void applyForward(c.conversationId!)}
+                >
+                  <Avatar contact={{ id: c.contactId, name: c.name || 'Chat', hue: ['#7B2CBF', '#6389EB'] }} size={44} />
+                  <span className="font-bold">{c.name || 'Chat'}</span>
+                </button>
+              </li>
+            ))}
+            {chats.filter((c) => c.conversationId && c.conversationId !== conversationId).length === 0 && (
+              <p className="px-4 py-10 text-center font-bold text-gray-400">No other chats yet</p>
+            )}
+          </ul>
+        </div>
+      )}
+
       {profileOpen && (
         <div className="absolute inset-0 z-40 flex flex-col bg-white">
           <div className="flex items-center gap-2 border-b border-gray-100 px-3 pb-3 pt-[max(1.25rem,env(safe-area-inset-top))]">
@@ -1034,7 +1260,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
             <h2 className="mt-4 text-2xl font-black text-ink">{c.name}</h2>
             {c.username ? <p className="mt-1 font-bold text-brand-purple">@{c.username}</p> : null}
             {c.phone ? <p className="mt-1 text-sm font-semibold text-gray-500">{c.phone}</p> : null}
-            <p className={`mt-2 min-h-[1.25rem] text-sm font-bold ${typing || peerOnline || c.online ? 'text-[#5C8A5E]' : 'text-gray-400'}`}>
+            <p className={`mt-2 min-h-[1.25rem] text-sm font-bold ${typing || peerOnline || c.online ? 'text-brand-blue' : 'text-gray-400'}`}>
               {typing
                 ? 'typing…'
                 : peerOnline || c.online
@@ -1163,6 +1389,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
         </button>
         <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPickImage} />
         <input
+          ref={inputRef}
           value={text}
           onChange={(e) => {
             setText(e.target.value)

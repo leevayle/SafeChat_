@@ -43,6 +43,7 @@ class MessageResponse(BaseModel):
     content: Optional[str] = None
     media_attachments: List[Dict[str, Any]] = []
     reply_to_message_id: Optional[str] = None
+    reply_to_text: Optional[str] = None
     forwarded_from: Optional[str] = None
     created_at: str
     updated_at: str

@@ -5,13 +5,13 @@ import {
   MoreVertical,
   Plus,
   X,
-  MessageCirclePlus,
-  UsersRound,
-  Contact,
-  Settings,
-  UserPlus,
-  Bell,
-  LifeBuoy,
+  MessageSquarePlus,
+  Users,
+  ContactRound,
+  Settings2,
+  UserRoundPlus,
+  BellRing,
+  Headphones,
   Clock,
 } from 'lucide-react'
 import { Wordmark } from '../components/Logo'
@@ -58,8 +58,18 @@ export function ChatsHome({
   /** Rows that already entered — receipt/state updates must not re-animate the whole row */
   const seenRows = useRef<Set<string>>(new Set())
 
+  // O(1) contact lookup — avoid .find() on every row / status
+  const contactMap = useMemo(() => {
+    const m = new Map<string, (typeof contacts)[0]>()
+    for (const c of contacts) {
+      if (c.id) m.set(c.id, c)
+      if (c.peerId) m.set(c.peerId, c)
+    }
+    return m
+  }, [contacts])
+
   const contactById = (id: string, fallback?: { name?: string; photo?: string | null; hue?: [string, string] }) => {
-    const hit = contacts.find((c) => c.id === id || c.peerId === id)
+    const hit = contactMap.get(id)
     if (hit) return hit
     return {
       id,
@@ -104,19 +114,20 @@ export function ChatsHome({
       const nextT = c.iso ? Date.parse(c.iso) : 0
       if (nextT >= prevT) byPeer.set(key, c)
     }
+    const qLower = q ? q.toLowerCase() : ''
     return Array.from(byPeer.values()).filter((c) => {
       const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
       if (
-        q &&
-        !ct.name.toLowerCase().includes(q.toLowerCase()) &&
-        !ct.username?.toLowerCase().includes(q.toLowerCase())
+        qLower &&
+        !ct.name.toLowerCase().includes(qLower) &&
+        !ct.username?.toLowerCase().includes(qLower)
       )
         return false
       if (filter === 'Unread') return c.unread > 0
       if (filter === 'Online') return ct.online
       return true
     })
-  }, [filter, q, chats, contacts])
+  }, [filter, q, chats, contactMap])
 
   const statusUsers = useMemo(() => {
     const byUser = new Map<string, any>()
@@ -127,9 +138,8 @@ export function ChatsHome({
         const t = Date.parse(s.expiresAt)
         if (!Number.isNaN(t) && t <= now) continue
       }
-      const contact = contacts.find((c) => c.id === s.userId || c.peerId === s.userId)
-      const existing = byUser.get(s.userId)
-      if (existing) continue
+      if (byUser.has(s.userId)) continue
+      const contact = contactMap.get(s.userId)
       byUser.set(s.userId, {
         id: s.userId,
         name: contact?.name || s.user?.name || 'Contact',
@@ -140,7 +150,7 @@ export function ChatsHome({
       })
     }
     return Array.from(byUser.values()).slice(0, 12)
-  }, [statusList, contacts, me])
+  }, [statusList, contactMap, me])
 
   return (
     <div className="relative flex h-full flex-col bg-white">
@@ -213,13 +223,13 @@ export function ChatsHome({
             >
               {(
                 [
-                  { label: 'New chat', fn: onNewChat, Icon: MessageCirclePlus },
-                  { label: 'New group', fn: onNewGroup, Icon: UsersRound },
-                  { label: 'Contacts', fn: onContacts, Icon: Contact },
-                  { label: 'Save requests', fn: onSaveRequests, Icon: UserPlus, badge: pendingCount },
-                  { label: 'Notifications', fn: onNotifications, Icon: Bell, badge: systemNotifCount },
-                  { label: 'Support', fn: onSupport, Icon: LifeBuoy },
-                  { label: 'Settings', fn: onSettings, Icon: Settings },
+                  { label: 'New chat', fn: onNewChat, Icon: MessageSquarePlus },
+                  { label: 'New group', fn: onNewGroup, Icon: Users },
+                  { label: 'Contacts', fn: onContacts, Icon: ContactRound },
+                  { label: 'Save requests', fn: onSaveRequests, Icon: UserRoundPlus, badge: pendingCount },
+                  { label: 'Notifications', fn: onNotifications, Icon: BellRing, badge: systemNotifCount },
+                  { label: 'Support', fn: onSupport, Icon: Headphones },
+                  { label: 'Settings', fn: onSettings, Icon: Settings2 },
                 ] as const
               ).map(({ label, fn, Icon, ...rest }, i, arr) => {
                 const badge = 'badge' in rest ? (rest as { badge?: number }).badge : 0
@@ -236,13 +246,15 @@ export function ChatsHome({
                       }}
                       className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left font-bold hover:bg-gray-100"
                     >
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-purple/10">
+                        <Icon size={16} className="text-brand-purple" strokeWidth={2.3} />
+                      </span>
                       <span className="min-w-0 flex-1">{label}</span>
                       {badge && badge > 0 ? (
-                        <span className="mr-1 min-w-5 rounded-full bg-brand-red px-1.5 text-center text-[11px] font-black text-white">
+                        <span className="min-w-5 rounded-full bg-brand-red px-1.5 text-center text-[11px] font-black text-white">
                           {badge > 9 ? '9+' : badge}
                         </span>
                       ) : null}
-                      <Icon size={18} className="shrink-0 text-brand-purple" strokeWidth={2.2} />
                     </button>
                   </li>
                 )

@@ -21,6 +21,7 @@ async def create_status(
         visibility=body.visibility,
         selected_viewer_ids=body.selected_viewer_ids,
         expires_in_hours=body.expires_in_hours,
+        background=getattr(body, "background", None) or "solid_1",
     )
     return success_response("Status created", status_obj)
 

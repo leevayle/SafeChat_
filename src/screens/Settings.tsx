@@ -1,25 +1,53 @@
 import { useRef, useState, useEffect, type ReactNode } from 'react'
-import { motion } from 'framer-motion'
-import { Pencil, User, Lock, Bell, MessageSquare, Database, Shield, Globe, HelpCircle, LogOut, Trash2, ChevronRight, Camera, Ban, Smartphone, Info, Palette } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import {
+  User, Lock, Bell, MessageSquare, Database, Shield, Globe, HelpCircle, LogOut,
+  Trash2, ChevronRight, Camera, Ban, Smartphone, Info, Palette, ArrowLeft,
+} from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { OptionList, PrimaryButton, ScreenHeader, Sheet, Toast, Toggle } from '../components/ui'
-import { FONT_SIZES, WALLPAPERS, useStore, type Settings as S } from '../store'
+import { FONT_SIZES, WALLPAPERS, WALLPAPER_KEYS, THEMES, useStore, type Settings as S } from '../store'
+import { api } from '../api'
 
 const WHO = ['Everyone', 'My contacts', 'Nobody']
+const themeLabelFromId = (id: string) =>
+  THEMES[id as keyof typeof THEMES]?.label || THEMES.purple.label
 
-function Section({ title, icon: Icon, children }: { title: string; icon: typeof User; children: ReactNode }) {
-  return (
-    <motion.section initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} className="mt-5">
-      <h3 className="mb-2 flex items-center gap-2 px-2 text-sm font-extrabold text-brand-purple"><Icon size={16} /> {title}</h3>
-      <div className="divide-y divide-gray-100 overflow-hidden rounded-3xl bg-white shadow-sm">{children}</div>
-    </motion.section>
-  )
-}
+type Page =
+  | 'home'
+  | 'profile'
+  | 'privacy'
+  | 'notifications'
+  | 'chats'
+  | 'storage'
+  | 'security'
+  | 'language'
+  | 'help'
+  | 'blocked'
 
-function Row({ label, hint, value, onClick, right, danger }: { label: string; hint?: string; value?: string; onClick?: () => void; right?: ReactNode; danger?: boolean }) {
+function Row({
+  label,
+  hint,
+  value,
+  onClick,
+  right,
+  danger,
+}: {
+  label: string
+  hint?: string
+  value?: string
+  onClick?: () => void
+  right?: ReactNode
+  danger?: boolean
+}) {
   const Tag = onClick ? 'button' : 'div'
   return (
-    <Tag onClick={onClick} className={`flex w-full items-center gap-3 px-5 py-3.5 text-left ${onClick ? 'transition-colors hover:bg-gray-50 active:bg-gray-100' : ''}`}>
+    <Tag
+      onClick={onClick}
+      className={`flex w-full items-center gap-3 px-5 py-3.5 text-left ${
+        onClick ? 'transition-colors hover:bg-gray-50 active:bg-gray-100' : ''
+      }`}
+    >
       <div className="min-w-0 flex-1">
         <p className={`font-bold ${danger ? 'text-brand-red' : ''}`}>{label}</p>
         {hint && <p className="text-xs font-semibold text-gray-400">{hint}</p>}
@@ -30,19 +58,51 @@ function Row({ label, hint, value, onClick, right, danger }: { label: string; hi
   )
 }
 
-export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: () => void }) {
+function Card({ children }: { children: ReactNode }) {
+  return (
+    <div className="divide-y divide-gray-100 overflow-hidden rounded-3xl bg-white shadow-sm">
+      {children}
+    </div>
+  )
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
+  return <h3 className="mb-2 px-2 text-sm font-extrabold text-brand-purple">{children}</h3>
+}
+
+export function Settings({
+  onBack,
+  onLogout,
+  onSupport,
+}: {
+  onBack: () => void
+  onLogout: () => void
+  onSupport?: () => void
+}) {
   const { settings: s, setSetting, saveProfile, contacts } = useStore()
+  const [page, setPage] = useState<Page>('home')
   const [picker, setPicker] = useState<{ title: string; options: string[]; key: keyof S } | null>(null)
-  const [edit, setEdit] = useState(false)
   const [confirm, setConfirm] = useState<'logout' | 'delete' | null>(null)
-  const [blockedOpen, setBlockedOpen] = useState(false)
+  const [deleteStep, setDeleteStep] = useState<'password' | 'phrase'>('password')
+  const [deletePassword, setDeletePassword] = useState('')
+  const [deletePhrase, setDeletePhrase] = useState('')
+  const [deletingAccount, setDeletingAccount] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [savingProfile, setSavingProfile] = useState(false)
-  const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'invalid' | 'own'>('idle')
+  const [draft, setDraft] = useState({ name: s.name, username: s.username, bio: s.bio })
+  const [usernameStatus, setUsernameStatus] = useState<
+    'idle' | 'checking' | 'available' | 'taken' | 'invalid' | 'own'
+  >('idle')
   const usernameCheckRef = useRef(0)
+  const file = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    if (!edit) return
+    if (page !== 'profile') return
+    setDraft({ name: s.name, username: s.username, bio: s.bio })
+  }, [page, s.name, s.username, s.bio])
+
+  useEffect(() => {
+    if (page !== 'profile') return
     const raw = draft.username.trim().toLowerCase()
     if (raw === (s.username || '').toLowerCase()) {
       setUsernameStatus('own')
@@ -69,211 +129,574 @@ export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: (
       }
     }, 400)
     return () => clearTimeout(t)
-  }, [draft.username, edit, s.username])
+  }, [draft.username, page, s.username])
 
-  const [draft, setDraft] = useState({ name: s.name, username: s.username, bio: s.bio })
-  const file = useRef<HTMLInputElement>(null)
+  const sel = (title: string, key: keyof S, options: string[]) => ({
+    value: String(s[key]),
+    onClick: () => setPicker({ title, key, options }),
+  })
 
-  const sel = (title: string, key: keyof S, options: string[]) => ({ value: String(s[key]), onClick: () => setPicker({ title, key, options }) })
-  const tog = (key: keyof S, label: string) => ({ right: <Toggle on={s[key] as boolean} onChange={(v) => setSetting(key, v as never)} label={label} /> })
+  const title =
+    page === 'home'
+      ? 'Settings'
+      : page === 'profile'
+        ? 'Profile'
+        : page === 'privacy'
+          ? 'Privacy'
+          : page === 'notifications'
+            ? 'Notifications'
+            : page === 'chats'
+              ? 'Chats'
+              : page === 'storage'
+                ? 'Storage'
+                : page === 'security'
+                  ? 'Security'
+                  : page === 'language'
+                    ? 'Language'
+                    : page === 'blocked'
+                      ? 'Blocked'
+                      : 'Help'
+
+  const goBack = () => {
+    if (page === 'home') onBack()
+    else setPage('home')
+  }
+
+  const canSaveProfile =
+    !savingProfile &&
+    draft.name.trim().length >= 2 &&
+    draft.username.length >= 3 &&
+    (usernameStatus === 'available' || usernameStatus === 'own')
 
   return (
-    <div className="relative flex h-full flex-col bg-gray-100">
-      <ScreenHeader title="Settings" onBack={onBack} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-5">
-        <motion.button initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} whileTap={{ scale: 0.98 }} onClick={() => { setDraft({ name: s.name, username: s.username, bio: s.bio }); setEdit(true) }} className="flex w-full items-center gap-4 rounded-3xl bg-white p-4 text-left shadow-sm">
-          {s.photo ? <img src={s.photo} alt="" className="h-16 w-16 rounded-full object-cover" /> : <Avatar contact={{ name: s.name, hue: ['#FF8C00', '#7B2CBF'], online: false }} size={64} />}
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-lg font-black">{s.name}</p>
-            <p className="truncate text-sm font-bold text-brand-purple">@{s.username}</p>
-            <p className="truncate text-sm font-semibold text-gray-500">{s.bio || 'Add a bio'}</p>
-          </div>
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-purple/10 text-brand-purple"><Pencil size={18} /></span>
-        </motion.button>
+    <div className="flex h-full flex-col bg-gray-50">
+      <ScreenHeader title={title} onBack={goBack} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-2">
+        <AnimatePresence mode="wait">
+          {page === 'home' && (
+            <motion.div
+              key="home"
+              initial={{ opacity: 0, x: -12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 12 }}
+              className="space-y-5"
+            >
+              <button
+                type="button"
+                onClick={() => setPage('profile')}
+                className="flex w-full items-center gap-4 rounded-3xl bg-white p-4 text-left shadow-sm"
+              >
+                <Avatar
+                  contact={{ id: 'me', name: s.name, photo: s.photo, hue: ['#7B2CBF', '#6389EB'] }}
+                  size={64}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-lg font-black text-ink">{s.name}</p>
+                  <p className="truncate text-sm font-bold text-brand-purple">@{s.username}</p>
+                  {s.bio ? <p className="mt-0.5 truncate text-xs font-semibold text-gray-400">{s.bio}</p> : null}
+                </div>
+                <ChevronRight size={20} className="text-gray-300" />
+              </button>
 
-        <Section title="Account" icon={User}>
-          <Row label="Phone number" value={s.phone} onClick={() => setToast('A code would be sent to verify a new number')} />
-          <Row label="Username" value={'@' + s.username} onClick={() => setEdit(true)} />
-          <Row label="Language" {...sel('App language', 'language', ['English', 'Kiswahili', 'Français', 'Español', '日本語'])} />
-        </Section>
+              <div>
+                <SectionLabel>Account</SectionLabel>
+                <Card>
+                  <Row label="Profile" hint="Name, username, bio, photo" onClick={() => setPage('profile')} />
+                  <Row label="Privacy" hint="Last seen, read receipts" onClick={() => setPage('privacy')} />
+                  <Row label="Security" hint="App lock" onClick={() => setPage('security')} />
+                </Card>
+              </div>
 
-        <Section title="Privacy" icon={Lock}>
-          <Row label="Last seen & online" {...sel('Who can see my last seen', 'lastSeen', WHO)} />
-          <Row label="Profile photo" {...sel('Who can see my profile photo', 'profilePhoto', WHO)} />
-          <Row label="About" {...sel('Who can see my bio', 'about', WHO)} />
-          <Row label="Add me to groups" {...sel('Who can add me to groups', 'groupsAdd', WHO)} />
-          <Row label="Read receipts" hint="Turn off to hide blue ticks. You won't see others' either." {...tog('readReceipts', 'Read receipts')} />
-          <Row label="Typing indicator" {...tog('typingIndicator', 'Typing indicator')} />
-          <Row label="Default disappearing messages" {...sel('Default message timer', 'disappearing', ['Off', '24 hours', '7 days', '90 days'])} />
-          <Row label="Blocked contacts" value={String(s.blocked.length)} onClick={() => setBlockedOpen(true)} />
-        </Section>
+              <div>
+                <SectionLabel>Preferences</SectionLabel>
+                <Card>
+                  <Row label="Notifications" onClick={() => setPage('notifications')} />
+                  <Row label="Chats" hint="Wallpaper, font size" onClick={() => setPage('chats')} />
+                  <Row label="Storage & data" onClick={() => setPage('storage')} />
+                  <Row label="Language" value={String(s.language || 'English')} onClick={() => setPage('language')} />
+                </Card>
+              </div>
 
-        <Section title="Security" icon={Shield}>
-          <Row label="App lock" hint="Require fingerprint or face to open SafeChat" {...tog('appLock', 'App lock')} />
-          <Row label="Two-step verification" hint="Extra PIN when registering your number" {...tog('twoStep', 'Two-step verification')} />
-          <Row label="Linked devices" value="1 active" onClick={() => setToast('This phone is your only linked device')} />
-          <Row label="End-to-end encryption" hint="Messages and calls are secured by default" right={<Lock size={18} className="text-green-500" />} />
-        </Section>
+              <div>
+                <SectionLabel>Support</SectionLabel>
+                <Card>
+                  <Row label="Help" onClick={() => setPage('help')} />
+                  <Row label="Blocked contacts" onClick={() => setPage('blocked')} />
+                </Card>
+              </div>
 
-        <Section title="Notifications" icon={Bell}>
-          <Row label="Message notifications" {...tog('msgNotif', 'Message notifications')} />
-          <Row label="Group notifications" {...tog('groupNotif', 'Group notifications')} />
-          <Row label="Call notifications" {...tog('callNotif', 'Call notifications')} />
-          <Row label="Show message previews" {...tog('previews', 'Message previews')} />
-          <Row label="Vibrate" {...tog('vibrate', 'Vibrate')} />
-          <Row label="Notification sound" {...sel('Notification sound', 'sound', ['Chime', 'Bubble', 'Pop', 'Silent'])} />
-        </Section>
+              <div>
+                <Card>
+                  <Row label="Log out" danger onClick={() => setConfirm('logout')} />
+                  <Row label="Delete account" danger onClick={() => setConfirm('delete')} />
+                </Card>
+              </div>
+            </motion.div>
+          )}
 
-        <Section title="Chats" icon={MessageSquare}>
-          <Row label="Enter key sends" hint="Off adds a new line instead" {...tog('enterIsSend', 'Enter sends')} />
-          <Row label="Font size" {...sel('Chat font size', 'fontSize', Object.keys(FONT_SIZES))} />
-          <div className="px-5 py-3.5">
-            <p className="flex items-center gap-2 font-bold"><Palette size={16} className="text-brand-purple" /> Chat wallpaper</p>
-            <div className="mt-3 flex gap-3">
-              {Object.entries(WALLPAPERS).map(([k, c]) => (
-                <button key={k} onClick={() => setSetting('wallpaper', k)} aria-label={k} className="flex flex-col items-center gap-1.5">
-                  <motion.span whileTap={{ scale: 0.9 }} animate={{ scale: s.wallpaper === k ? 1.1 : 1 }} className={`h-12 w-12 rounded-2xl ring-2 ring-offset-2 ${s.wallpaper === k ? 'ring-brand-purple' : 'ring-gray-200'}`} style={{ background: c }} />
-                  <span className="text-xs font-bold text-gray-500">{k}</span>
+          {page === 'profile' && (
+            <motion.div
+              key="profile"
+              initial={{ opacity: 0, x: 16 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -12 }}
+              className="space-y-4"
+            >
+              <div className="flex flex-col items-center rounded-3xl bg-white p-6 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => file.current?.click()}
+                  className="relative"
+                  aria-label="Change photo"
+                >
+                  <Avatar
+                    contact={{ id: 'me', name: draft.name, photo: s.photo, hue: ['#7B2CBF', '#6389EB'] }}
+                    size={96}
+                  />
+                  <span className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full bg-brand-purple text-white shadow">
+                    <Camera size={16} />
+                  </span>
                 </button>
-              ))}
-            </div>
-          </div>
-          <Row label="Clear all chats" danger onClick={() => setToast('Chat history cleared')} />
-        </Section>
+                <input
+                  ref={file}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0]
+                    if (!f) return
+                    const reader = new FileReader()
+                    reader.onload = async () => {
+                      try {
+                        await saveProfile({ photo: String(reader.result) })
+                        setToast('Photo updated')
+                      } catch {
+                        setToast('Could not update photo')
+                      }
+                    }
+                    reader.readAsDataURL(f)
+                  }}
+                />
+              </div>
 
-        <Section title="Storage & data" icon={Database}>
-          <div className="px-5 py-3.5">
-            <div className="flex justify-between text-sm font-bold"><span>Used on this device</span><span className="text-gray-400">482 MB</span></div>
-            <div className="mt-2 flex h-3 overflow-hidden rounded-full bg-gray-100">
-              {[['bg-brand-purple', 45], ['bg-brand-blue', 25], ['bg-brand-orange-2', 15]].map(([c, w], i) => <motion.span key={i} className={String(c)} initial={{ width: 0 }} animate={{ width: `${w}%` }} transition={{ delay: 0.3 + i * 0.1 }} />)}
-            </div>
-            <div className="mt-2 flex gap-4 text-xs font-bold text-gray-500">
-              <span>Photos 217 MB</span><span>Videos 120 MB</span><span>Docs 72 MB</span>
-            </div>
-          </div>
-          <Row label="Media auto-download" {...sel('Auto-download media', 'autoDownload', ['Wi-Fi only', 'Wi-Fi and mobile', 'Never'])} />
-          <Row label="Use less data for calls" {...tog('lowDataCalls', 'Low data calls')} />
-          <Row label="Clear cache" value="64 MB" onClick={() => setToast('Cache cleared')} />
-        </Section>
+              <Card>
+                <div className="space-y-3 px-5 py-4">
+                  <label className="block text-xs font-extrabold text-gray-500">
+                    Name
+                    <input
+                      value={draft.name}
+                      maxLength={30}
+                      onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                      className="mt-1.5 h-12 w-full rounded-2xl bg-gray-100 px-4 font-bold outline-none focus:ring-4 focus:ring-brand-purple/20"
+                    />
+                  </label>
+                  <label className="block text-xs font-extrabold text-gray-500">
+                    Username
+                    <input
+                      value={draft.username}
+                      maxLength={20}
+                      onChange={(e) =>
+                        setDraft({
+                          ...draft,
+                          username: e.target.value.replace(/\s/g, '').toLowerCase(),
+                        })
+                      }
+                      className="mt-1.5 h-12 w-full rounded-2xl bg-gray-100 px-4 font-bold outline-none focus:ring-4 focus:ring-brand-purple/20"
+                    />
+                  </label>
+                  <p
+                    className={`px-1 text-xs font-bold ${
+                      usernameStatus === 'available' || usernameStatus === 'own'
+                        ? 'text-[#5C8A5E]'
+                        : usernameStatus === 'taken' || usernameStatus === 'invalid'
+                          ? 'text-brand-red'
+                          : 'text-gray-400'
+                    }`}
+                  >
+                    {usernameStatus === 'checking' && 'Checking availability…'}
+                    {usernameStatus === 'available' && 'Username is available'}
+                    {usernameStatus === 'own' && 'This is your current username'}
+                    {usernameStatus === 'taken' && 'Username is taken'}
+                    {usernameStatus === 'invalid' && 'At least 3 characters, letters/numbers only'}
+                    {usernameStatus === 'idle' && 'Usernames are unique'}
+                  </p>
+                  <label className="block text-xs font-extrabold text-gray-500">
+                    Bio
+                    <textarea
+                      value={draft.bio || ''}
+                      maxLength={140}
+                      rows={3}
+                      onChange={(e) => setDraft({ ...draft, bio: e.target.value })}
+                      className="mt-1.5 w-full resize-none rounded-2xl bg-gray-100 px-4 py-3 font-semibold outline-none focus:ring-4 focus:ring-brand-purple/20"
+                    />
+                  </label>
+                  <PrimaryButton
+                    disabled={!canSaveProfile}
+                    onClick={async () => {
+                      setSavingProfile(true)
+                      try {
+                        await saveProfile({
+                          name: draft.name.trim(),
+                          username: draft.username.trim().toLowerCase(),
+                          bio: draft.bio || '',
+                        })
+                        setToast('Profile updated')
+                      } catch (e: any) {
+                        setToast(e?.message || 'Could not update profile')
+                      } finally {
+                        setSavingProfile(false)
+                      }
+                    }}
+                  >
+                    {savingProfile ? 'Updating…' : 'Save changes'}
+                  </PrimaryButton>
+                </div>
+              </Card>
+            </motion.div>
+          )}
 
-        <Section title="Help & about" icon={HelpCircle}>
-          <Row label="Help center" onClick={() => setToast('Opening help center')} />
-          <Row label="Invite friends" onClick={() => setToast('Invite link copied')} />
-          <Row label="Privacy policy" onClick={() => setToast('Opening privacy policy')} />
-          <Row label="Terms of service" onClick={() => setToast('Opening terms')} />
-          <Row label="App version" value="1.0.0" right={<Info size={16} className="text-gray-300" />} />
-        </Section>
+          {page === 'privacy' && (
+            <motion.div key="privacy" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
+              <SectionLabel>Who can see</SectionLabel>
+              <Card>
+                <Row label="Last seen" {...sel('Last seen', 'lastSeen', WHO)} />
+                <Row label="Profile photo" {...sel('Profile photo', 'profilePhoto', WHO)} />
+                <Row label="About" {...sel('About', 'about', WHO)} />
+                <Row
+                  label="Status"
+                  {...sel('Status', 'statusPrivacy', [
+                    'My contacts',
+                    'Contacts except…',
+                    'Only share with…',
+                  ])}
+                />
+              </Card>
+              <Card>
+                <Row
+                  label="Read receipts"
+                  hint="If off, you won't send or receive read receipts"
+                  right={
+                    <Toggle
+                      on={!!s.readReceipts}
+                      onChange={(v) => setSetting('readReceipts', v as never)}
+                      label="Read receipts"
+                    />
+                  }
+                />
+              </Card>
+            </motion.div>
+          )}
 
-        <div className="mt-5 divide-y divide-gray-100 overflow-hidden rounded-3xl bg-white shadow-sm">
-          <Row label="Log out" danger right={<LogOut size={18} className="text-brand-red" />} onClick={() => setConfirm('logout')} />
-          <Row label="Delete account" danger right={<Trash2 size={18} className="text-brand-red" />} onClick={() => setConfirm('delete')} />
-        </div>
-        <p className="mt-6 flex items-center justify-center gap-1.5 text-xs font-bold text-gray-400"><Smartphone size={12} /> SafeChat<span className="text-brand-blue">.</span> v1.0.0</p>
+          {page === 'notifications' && (
+            <motion.div key="notif" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
+              <Card>
+                <Row
+                  label="Message notifications"
+                  right={
+                    <Toggle
+                      on={!!s.msgNotif}
+                      onChange={(v) => setSetting('msgNotif', v as never)}
+                      label="Messages"
+                    />
+                  }
+                />
+                <Row
+                  label="Call notifications"
+                  right={
+                    <Toggle
+                      on={!!s.callNotif}
+                      onChange={(v) => setSetting('callNotif', v as never)}
+                      label="Calls"
+                    />
+                  }
+                />
+                <Row
+                  label="Status notifications"
+                  right={
+                    <Toggle
+                      on={!!s.groupNotif}
+                      onChange={(v) => setSetting('groupNotif', v as never)}
+                      label="Status"
+                    />
+                  }
+                />
+              </Card>
+            </motion.div>
+          )}
+
+          {page === 'chats' && (
+            <motion.div key="chats" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-5">
+              <Card>
+                <Row label="Font size" {...sel('Font size', 'fontSize', Object.keys(FONT_SIZES))} />
+                <Row
+                  label="Enter is send"
+                  right={
+                    <Toggle
+                      on={!!s.enterIsSend}
+                      onChange={(v) => setSetting('enterIsSend', v as never)}
+                      label="Enter send"
+                    />
+                  }
+                />
+                <Row
+                  label="Typing indicator"
+                  right={
+                    <Toggle
+                      on={!!s.typingIndicator}
+                      onChange={(v) => setSetting('typingIndicator', v as never)}
+                      label="Typing"
+                    />
+                  }
+                />
+              </Card>
+
+              <div>
+                <SectionLabel>Theme</SectionLabel>
+                <div className="grid grid-cols-2 gap-3">
+                  {Object.values(THEMES).map((t) => {
+                    const active = (s.theme || 'purple') === t.id
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setSetting('theme', t.id as never)}
+                        className={`overflow-hidden rounded-2xl border-2 bg-white text-left shadow-sm transition ${
+                          active ? 'border-brand-purple ring-2 ring-brand-purple/20' : 'border-transparent'
+                        }`}
+                      >
+                        <div
+                          className="flex h-16 items-end gap-1.5 p-3"
+                          style={{ background: `linear-gradient(135deg, ${t.soft}, #fff 70%)` }}
+                        >
+                          <span className="h-6 w-6 rounded-full shadow" style={{ background: t.primary }} />
+                          <span className="h-6 w-6 rounded-full shadow" style={{ background: t.accent }} />
+                          <span className="h-6 flex-1 rounded-full bg-white/80 shadow-sm" />
+                        </div>
+                        <p className="px-3 py-2 text-sm font-extrabold text-ink">{t.label}</p>
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="mt-2 px-1 text-xs font-semibold text-gray-400">
+                  Accent colors update across the app. The SafeChat logo stays the same.
+                </p>
+              </div>
+
+              <div>
+                <SectionLabel>Chat wallpaper</SectionLabel>
+                <div className="grid grid-cols-3 gap-2.5">
+                  {WALLPAPER_KEYS.map((key) => {
+                    const active = (s.wallpaper || 'Cloud') === key
+                    const bg = WALLPAPERS[key]
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setSetting('wallpaper', key as never)}
+                        className={`overflow-hidden rounded-2xl border-2 bg-white text-left shadow-sm transition ${
+                          active ? 'border-brand-purple ring-2 ring-brand-purple/20' : 'border-transparent'
+                        }`}
+                      >
+                        <div className="relative h-20 w-full" style={{ background: bg }}>
+                          <span className="absolute bottom-2 left-2 right-8 h-5 rounded-full bg-white/70 shadow-sm" />
+                          <span className="absolute bottom-2 right-2 h-5 w-5 rounded-full bg-white/90 shadow-sm" />
+                        </div>
+                        <p className="truncate px-2 py-1.5 text-center text-[11px] font-extrabold text-ink">{key}</p>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {page === 'storage' && (
+            <motion.div key="storage" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
+              <Card>
+                <Row label="Auto-download media" {...sel('Auto-download', 'autoDownload', ['Wi-Fi', 'Wi-Fi and cellular', 'Never'])} />
+                <Row label="Network usage" value="Normal" />
+              </Card>
+            </motion.div>
+          )}
+
+          {page === 'security' && (
+            <motion.div key="sec" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
+              <Card>
+                <Row
+                  label="App lock"
+                  hint="Require login when opening the app"
+                  right={
+                    <Toggle
+                      on={!!s.appLock}
+                      onChange={(v) => setSetting('appLock', v as never)}
+                      label="App lock"
+                    />
+                  }
+                />
+              </Card>
+            </motion.div>
+          )}
+
+          {page === 'language' && (
+            <motion.div key="lang" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
+              <Card>
+                <Row label="App language" {...sel('Language', 'language', ['English', 'Swahili', 'French'])} />
+              </Card>
+            </motion.div>
+          )}
+
+          {page === 'blocked' && (
+            <motion.div key="blocked" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
+              <Card>
+                {(contacts || []).filter((c: any) => c.blocked).length === 0 ? (
+                  <p className="px-5 py-8 text-center text-sm font-bold text-gray-400">No blocked contacts</p>
+                ) : (
+                  (contacts || [])
+                    .filter((c: any) => c.blocked)
+                    .map((c: any) => <Row key={c.id} label={c.name} value={c.username ? `@${c.username}` : undefined} />)
+                )}
+              </Card>
+            </motion.div>
+          )}
+
+          {page === 'help' && (
+            <motion.div key="help" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
+              <Card>
+                <Row label="FAQ" hint="Coming soon" />
+                <Row
+                  label="Contact support"
+                  hint="Open a support ticket"
+                  onClick={() => onSupport?.()}
+                />
+                <Row label="App version" value="1.0.0" />
+              </Card>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       <Sheet open={!!picker} onClose={() => setPicker(null)} title={picker?.title}>
-        {picker && <OptionList options={picker.options} value={String(s[picker.key])} onPick={(v) => { setSetting(picker.key, v as never); setPicker(null) }} />}
-      </Sheet>
-
-      <Sheet open={edit} onClose={() => setEdit(false)} title="Edit profile">
-        <div className="mb-5 flex justify-center">
-          <button onClick={() => file.current?.click()} className="relative" aria-label="Change photo">
-            {s.photo ? <img src={s.photo} alt="" className="h-24 w-24 rounded-full object-cover" /> : <Avatar contact={{ name: draft.name || '?', hue: ['#FF8C00', '#7B2CBF'], online: false }} size={96} />}
-            <span className="absolute bottom-0 right-0 flex h-9 w-9 items-center justify-center rounded-full bg-brand-orange-2 text-white ring-4 ring-white"><Camera size={16} /></span>
-          </button>
-          <input ref={file} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) { const reader = new FileReader(); reader.onload = () => { if (typeof reader.result === 'string') setSetting('photo', reader.result) }; reader.readAsDataURL(f) } }} />
-        </div>
-        <label className="mb-3 block text-sm font-extrabold text-gray-500">Name
-          <input
-            value={draft.name}
-            maxLength={30}
-            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-            className="mt-1.5 h-13 w-full rounded-full bg-gray-100 px-5 py-3 text-base font-bold text-ink outline-none focus:ring-4 focus:ring-brand-purple/25"
-          />
-        </label>
-        <label className="mb-1 block text-sm font-extrabold text-gray-500">Username
-          <input
-            value={draft.username}
-            maxLength={20}
-            onChange={(e) => {
-              const v = e.target.value.replace(/\s/g, '').toLowerCase()
-              setDraft({ ...draft, username: v })
-            }}
-            className="mt-1.5 h-13 w-full rounded-full bg-gray-100 px-5 py-3 text-base font-bold text-ink outline-none focus:ring-4 focus:ring-brand-purple/25"
-          />
-        </label>
-        <p
-          className={`mb-3 px-1 text-xs font-bold ${
-            usernameStatus === 'available' || usernameStatus === 'own'
-              ? 'text-[#5C8A5E]'
-              : usernameStatus === 'taken' || usernameStatus === 'invalid'
-                ? 'text-brand-red'
-                : 'text-gray-400'
-          }`}
-        >
-          {usernameStatus === 'checking' && 'Checking availability…'}
-          {usernameStatus === 'available' && 'Username is available'}
-          {usernameStatus === 'own' && 'This is your current username'}
-          {usernameStatus === 'taken' && 'Username is taken'}
-          {usernameStatus === 'invalid' && 'At least 3 characters, letters/numbers only'}
-          {usernameStatus === 'idle' && 'Usernames are unique'}
-        </p>
-        <label className="mb-5 block text-sm font-extrabold text-gray-500">Bio
-          <textarea value={draft.bio} maxLength={80} rows={2} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} className="mt-1.5 w-full resize-none rounded-3xl bg-gray-100 px-5 py-3 text-base font-semibold text-ink outline-none focus:ring-4 focus:ring-brand-purple/25" />
-        </label>
-        <PrimaryButton
-          disabled={savingProfile || draft.name.trim().length < 2 || draft.username.length < 3 || (usernameStatus !== 'available' && usernameStatus !== 'own')}
-          onClick={async () => {
-            if (savingProfile) return
-            setSavingProfile(true)
-            try {
-              await saveProfile({
-                name: draft.name.trim(),
-                username: draft.username.trim().toLowerCase(),
-                bio: draft.bio,
-                photo: s.photo,
-              })
-              setEdit(false)
-              setToast('Profile updated')
-            } catch (error) {
-              setToast(
-                error instanceof Error
-                  ? error.message
-                  : 'An error occurred. Try again later.',
-              )
-            } finally {
-              setSavingProfile(false)
+        {picker && (
+          <OptionList
+            options={picker.options}
+            value={
+              picker.key === 'theme'
+                ? themeLabelFromId(String(s.theme || 'purple'))
+                : String(s[picker.key])
             }
-          }}
-        >
-          {savingProfile ? 'Updating…' : 'Save changes'}
-        </PrimaryButton>
+            onPick={(o) => {
+              if (picker.key === 'theme') {
+                setSetting('theme', themeIdFromLabel(o) as never)
+              } else {
+                setSetting(picker.key, o as never)
+              }
+              setPicker(null)
+            }}
+          />
+        )}
       </Sheet>
 
-      <Sheet open={blockedOpen} onClose={() => setBlockedOpen(false)} title="Blocked contacts">
-        <p className="mb-3 text-sm font-semibold text-gray-500">Blocked contacts can't call or message you. Tap a contact to toggle.</p>
-        <ul className="space-y-1">
-          {contacts.map((c) => {
-            const b = s.blocked.includes(c.id)
-            return (
-              <li key={c.id}>
-                <button onClick={() => setSetting('blocked', b ? s.blocked.filter((x) => x !== c.id) : [...s.blocked, c.id])} className="flex w-full items-center gap-3 rounded-2xl px-2 py-2 hover:bg-gray-100">
-                  <Avatar contact={c} size={40} />
-                  <span className="flex-1 text-left font-bold">{c.name}</span>
-                  <span className={`flex items-center gap-1 rounded-full px-3 py-1 text-xs font-extrabold ${b ? 'bg-brand-red/10 text-brand-red' : 'bg-gray-100 text-gray-500'}`}><Ban size={12} />{b ? 'Blocked' : 'Block'}</span>
-                </button>
-              </li>
-            )
-          })}
-        </ul>
-      </Sheet>
-
-      <Sheet open={!!confirm} onClose={() => setConfirm(null)} title={confirm === 'logout' ? 'Log out?' : 'Delete account?'}>
-        <p className="mb-5 font-semibold text-gray-500">{confirm === 'logout' ? 'You can log back in with your phone number.' : 'This permanently deletes your profile, chats and groups. This cannot be undone.'}</p>
-        <div className="space-y-3">
-          <PrimaryButton danger onClick={onLogout}>{confirm === 'logout' ? 'Log out' : 'Delete my account'}</PrimaryButton>
-          <button onClick={() => setConfirm(null)} className="w-full rounded-full bg-gray-100 py-3.5 font-extrabold text-gray-600 hover:bg-gray-200">Cancel</button>
-        </div>
+      <Sheet
+        open={!!confirm}
+        onClose={() => {
+          setConfirm(null)
+          setDeleteStep('password')
+          setDeletePassword('')
+          setDeletePhrase('')
+        }}
+        title={confirm === 'logout' ? 'Log out?' : 'Delete account'}
+      >
+        {confirm === 'logout' ? (
+          <>
+            <p className="mb-4 text-sm font-semibold text-gray-500">
+              You can sign back in anytime with your number.
+            </p>
+            <PrimaryButton
+              danger
+              onClick={() => {
+                onLogout()
+                setConfirm(null)
+              }}
+            >
+              Log out
+            </PrimaryButton>
+          </>
+        ) : (
+          <>
+            <p className="mb-3 text-sm font-semibold text-gray-500">
+              This deactivates your account. You will be signed out on all devices.
+            </p>
+            {deleteStep === 'password' ? (
+              <>
+                <label className="mb-1 block text-xs font-extrabold text-gray-500">Password</label>
+                <input
+                  type="password"
+                  value={deletePassword}
+                  onChange={(e) => setDeletePassword(e.target.value)}
+                  placeholder="Enter your password"
+                  className="mb-4 h-12 w-full rounded-2xl bg-gray-100 px-4 font-semibold outline-none focus:ring-4 focus:ring-brand-red/15"
+                  autoFocus
+                />
+                <PrimaryButton
+                  danger
+                  disabled={!deletePassword || deletingAccount}
+                  onClick={async () => {
+                    if (!deletePassword) return
+                    setDeletingAccount(true)
+                    try {
+                      // Validate password by attempting deactivate path pre-check via login-style verify
+                      // Step 1 only advances UI after local non-empty; actual delete on phrase step
+                      setDeleteStep('phrase')
+                    } finally {
+                      setDeletingAccount(false)
+                    }
+                  }}
+                >
+                  Continue
+                </PrimaryButton>
+              </>
+            ) : (
+              <>
+                <p className="mb-2 text-sm font-semibold text-gray-500">
+                  Type <span className="font-black text-ink">delete my account permanently</span> to confirm.
+                </p>
+                <input
+                  value={deletePhrase}
+                  onChange={(e) => setDeletePhrase(e.target.value)}
+                  placeholder="delete my account permanently"
+                  className="mb-4 h-12 w-full rounded-2xl bg-gray-100 px-4 font-semibold outline-none focus:ring-4 focus:ring-brand-red/15"
+                  autoFocus
+                />
+                <PrimaryButton
+                  danger
+                  disabled={
+                    deletingAccount ||
+                    deletePhrase.trim().toLowerCase() !== 'delete my account permanently'
+                  }
+                  onClick={async () => {
+                    setDeletingAccount(true)
+                    try {
+                      await api.deactivateAccount(deletePassword)
+                      setConfirm(null)
+                      setToast('Account deleted')
+                      onLogout()
+                    } catch (e: any) {
+                      setToast(e?.message || 'Could not delete account')
+                      if (String(e?.message || '').toLowerCase().includes('password')) {
+                        setDeleteStep('password')
+                        setDeletePhrase('')
+                      }
+                    } finally {
+                      setDeletingAccount(false)
+                    }
+                  }}
+                >
+                  {deletingAccount ? 'Deleting…' : 'Delete permanently'}
+                </PrimaryButton>
+              </>
+            )}
+          </>
+        )}
       </Sheet>
 
       <Toast msg={toast} clear={() => setToast(null)} />

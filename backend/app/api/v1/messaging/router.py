@@ -66,6 +66,17 @@ async def delete_message(
     return success_response("Message deleted")
 
 
+@router.post("/{message_id}/forward")
+async def forward_message(
+    message_id: str,
+    body: dict,
+    user: dict = Depends(get_current_user),
+):
+    to_cid = (body or {}).get("conversation_id") or (body or {}).get("to_conversation_id")
+    msg = await MessagingService.forward_message(message_id, user["id"], to_cid)
+    return success_response("Message forwarded", msg)
+
+
 @router.post("/{message_id}/delivered")
 async def mark_delivered(
     message_id: str,
