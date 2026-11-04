@@ -4,10 +4,12 @@ import { Camera, User } from 'lucide-react'
 import { ProgressDots } from '../components/ProgressDots'
 import { PillButton } from '../components/PillButton'
 import { useStore } from '../store'
+import { api } from '../api'
 
 type Props = {
   phone: string
   countryCode: string
+  registrationToken: string
   onBack?: () => void
   /** Called immediately when user submits — parent shows setup screen */
   onSubmitStart?: () => void
@@ -17,7 +19,7 @@ type Props = {
   onError?: (message: string) => void
 }
 
-export function Profile({ phone, countryCode, onBack, onSubmitStart, onDone, onError }: Props) {
+export function Profile({ phone, countryCode, registrationToken, onBack, onSubmitStart, onDone, onError }: Props) {
   const { register } = useStore()
   const [photo, setPhoto] = useState<string | null>(null)
   const [sheet, setSheet] = useState(false)
@@ -28,19 +30,37 @@ export function Profile({ phone, countryCode, onBack, onSubmitStart, onDone, onE
   const [bio, setBio] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle')
   const gallery = useRef<HTMLInputElement>(null)
   const camera = useRef<HTMLInputElement>(null)
 
-  const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0]
-    if (f) setPhoto(URL.createObjectURL(f))
+  const pick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
     setSheet(false)
+    if (!file) return
+    if (!file.type.startsWith('image/')) { setError('Choose an image file.'); return }
+    if (file.size > 8 * 1024 * 1024) { setError('Choose an image smaller than 8 MB.'); return }
+    try {
+      const bitmap = await createImageBitmap(file)
+      const scale = Math.min(1, 512 / Math.max(bitmap.width, bitmap.height))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale))
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale))
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('Image processing is unavailable.')
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height)
+      setPhoto(canvas.toDataURL('image/jpeg', 0.78))
+      bitmap.close()
+      setError('')
+    } catch { setError('Could not read that image. Please choose another one.') }
   }
 
   const valid =
     username.trim().length >= 3 &&
     displayName.trim().length >= 1 &&
-    password.length >= 8
+    password.length >= 8 &&
+    usernameStatus !== 'taken' &&
+    usernameStatus !== 'checking'
 
   const save = async () => {
     if (!valid || busy) return
@@ -55,8 +75,9 @@ export function Profile({ phone, countryCode, onBack, onSubmitStart, onDone, onE
         name: displayName.trim(),
         password,
         email: email.trim() || undefined,
-        bio: bio.trim() || 'Hey there! I am using SafeChat.',
+        bio: bio.trim() || undefined,
         photo,
+        registrationToken,
       })
       onDone(user.username || displayName.trim())
     } catch (e: any) {
@@ -101,7 +122,7 @@ export function Profile({ phone, countryCode, onBack, onSubmitStart, onDone, onE
             </svg>
           </div>
         )}
-        <ProgressDots step={3} />
+        <ProgressDots step={4} total={4} />
       </div>
 
       <motion.h2
@@ -115,7 +136,7 @@ export function Profile({ phone, countryCode, onBack, onSubmitStart, onDone, onE
         <span className="text-brand-red">yourself!</span>
       </motion.h2>
       <p className="mt-1.5 text-sm font-semibold text-gray-500">
-        Username is required — it&apos;s how people find and save you on SafeChat.
+        Your phone is verified. Choose a username so people can find you without sharing your number.
       </p>
 
       <div className="mt-6 flex justify-center">
@@ -144,12 +165,22 @@ export function Profile({ phone, countryCode, onBack, onSubmitStart, onDone, onE
             <span className="mr-1 font-bold text-brand-purple">@</span>
             <input
               value={username}
-              onChange={(e) => setUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase())}
+              onChange={(e) => { setUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase()); setUsernameStatus('idle') }}
+              onBlur={async () => {
+                const value = username.trim().toLowerCase()
+                if (value.length < 3) return
+                setUsernameStatus('checking')
+                try { const result = await api.checkUsername(value); setUsernameStatus(result.available ? 'available' : 'taken') }
+                catch { setUsernameStatus('idle') }
+              }}
               placeholder="yourname"
               maxLength={32}
               className="h-full flex-1 bg-transparent text-[15px] font-semibold outline-none"
             />
           </div>
+          {usernameStatus === 'checking' && <p className="mt-1 px-3 text-[11px] font-semibold text-gray-400">Checking username…</p>}
+          {usernameStatus === 'available' && <p className="mt-1 px-3 text-[11px] font-semibold text-emerald-600">Username is available</p>}
+          {usernameStatus === 'taken' && <p className="mt-1 px-3 text-[11px] font-semibold text-brand-red">That username is already taken</p>}
         </div>
         <div>
           <label className="mb-1 block text-xs font-bold text-gray-500">Display name</label>
@@ -184,7 +215,7 @@ export function Profile({ phone, countryCode, onBack, onSubmitStart, onDone, onE
           />
         </div>
         <div>
-          <label className="mb-1 block text-xs font-bold text-gray-500">Bio</label>
+          <label className="mb-1 block text-xs font-bold text-gray-500">Bio (optional)</label>
           <input
             value={bio}
             onChange={(e) => setBio(e.target.value)}

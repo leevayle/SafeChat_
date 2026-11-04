@@ -4,6 +4,8 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Splash } from './screens/Splash'
 import { Welcome } from './screens/Welcome'
 import { Signup } from './screens/Signup'
+import { VerifyPhone } from './screens/VerifyPhone'
+import { api } from './api'
 import { Login } from './screens/Login'
 import { Loading } from './screens/Loading'
 import { Profile } from './screens/Profile'
@@ -27,7 +29,7 @@ import { StoreProvider, useStore } from './store'
 import { IncomingCall } from './components/IncomingCall'
 import { BottomNav, type Tab } from './components/BottomNav'
 
-type Stage = 'splash' | 'welcome' | 'signup' | 'login' | 'loading' | 'profile' | 'done' | 'app'
+type Stage = 'splash' | 'welcome' | 'signup' | 'verify' | 'login' | 'loading' | 'profile' | 'done' | 'app'
 type Call = { id: string; kind: 'audio' | 'video'; ringId?: string }
 type Overlay = 'newChat' | 'newGroup' | 'settings' | 'contacts' | 'saveRequests' | 'notifications' | 'support' | null
 
@@ -46,7 +48,9 @@ function Shell() {
   const [username, setUsername] = useState('')
   const [donePhase, setDonePhase] = useState<'setup' | 'success' | 'error'>('setup')
   const [doneError, setDoneError] = useState('')
-  const [pendingReg, setPendingReg] = useState<{ phone: string; countryCode: string } | null>(null)
+  const [pendingReg, setPendingReg] = useState<{ phone: string; countryCode: string; phoneNumber: string } | null>(null)
+  const [registrationToken, setRegistrationToken] = useState('')
+  const [developmentCode, setDevelopmentCode] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('chats')
   const [chat, setChat] = useState<string | null>(null)
   const [group, setGroup] = useState<string | null>(null)
@@ -152,14 +156,36 @@ function Shell() {
     setStage('welcome')
   }, [stage, ready, me, settings.appLock])
 
-  const afterPhone = (phone: string, countryCode: string) => {
-    setPendingReg({ phone, countryCode })
+  const buildPhoneNumber = (phone: string, countryCode: string) => {
+    const local = phone.replace(/\D/g, '').replace(/^0/, '')
+    return `${countryCode}${local}`.replace(/[^+\d]/g, '')
+  }
+
+  const afterPhone = async (phone: string, countryCode: string) => {
     setSubmitting(true)
-    setTimeout(() => setStage('loading'), 500)
-    setTimeout(() => {
-      setStage('profile')
+    try {
+      const phoneNumber = buildPhoneNumber(phone, countryCode)
+      const response = await api.sendPhoneCode(phoneNumber)
+      setPendingReg({ phone, countryCode, phoneNumber })
+      setDevelopmentCode(response.development_code || null)
+      setStage('verify')
+    } finally {
       setSubmitting(false)
-    }, 1800)
+    }
+  }
+
+  const verifyPhone = async (code: string) => {
+    if (!pendingReg) throw new Error('Enter your phone number again.')
+    const response = await api.verifyPhoneCode(pendingReg.phoneNumber, code)
+    setRegistrationToken(response.registration_token)
+    setStage('profile')
+  }
+
+  const resendPhoneCode = async () => {
+    if (!pendingReg) throw new Error('Enter your phone number again.')
+    const response = await api.sendPhoneCode(pendingReg.phoneNumber)
+    setDevelopmentCode(response.development_code || null)
+    return response.development_code || null
   }
 
   const goApp = () => {
@@ -226,11 +252,22 @@ function Shell() {
             <Signup loading={submitting} onSubmit={afterPhone} onLogin={() => setStage('login')} onBack={() => setStage('welcome')} />
           )}
           {stage === 'loading' && <Loading />}
+          {stage === 'verify' && pendingReg && (
+            <VerifyPhone
+              phoneNumber={pendingReg.phoneNumber}
+              developmentCode={developmentCode}
+              onVerify={verifyPhone}
+              onResend={resendPhoneCode}
+              onBack={() => setStage('signup')}
+              onEditNumber={() => setStage('signup')}
+            />
+          )}
           {stage === 'profile' && pendingReg && (
             <Profile
               phone={pendingReg.phone}
               countryCode={pendingReg.countryCode}
-              onBack={() => setStage('signup')}
+              registrationToken={registrationToken}
+              onBack={() => setStage('verify')}
               onSubmitStart={() => {
                 setDonePhase('setup')
                 setDoneError('')

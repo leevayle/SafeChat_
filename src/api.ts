@@ -329,24 +329,34 @@ export const api = {
       .then((r) => r.json())
       .then((j) => ({ ok: j.status === 'ok' || j.status === 'alive' })),
 
+  checkUsername: (username: string) => req<any>(`/api/v1/auth/username/check?username=${encodeURIComponent(username)}`),
+
+  sendPhoneCode: (phone_number: string) => req<any>('/api/v1/auth/phone/send-code', {
+    method: 'POST', body: JSON.stringify({ phone_number }),
+  }),
+
+  verifyPhoneCode: (phone_number: string, code: string) => req<any>('/api/v1/auth/phone/verify-code', {
+    method: 'POST', body: JSON.stringify({ phone_number, code }),
+  }),
+
   register: async (body: {
     username: string
     display_name: string
     password: string
+    phone_number: string
+    registration_token: string
     email?: string
-    phone_number?: string
   }) => {
     return req<any>('/api/v1/auth/register', {
-      method: 'POST',
-      body: JSON.stringify(body),
+      method: 'POST', body: JSON.stringify(body),
     })
   },
 
-  login: async (body: { username: string; password: string; device_name?: string }) => {
+  login: async (body: { phone_number: string; password: string; device_name?: string }) => {
     const data = await req<any>('/api/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify({
-        username: body.username,
+        phone_number: body.phone_number,
         password: body.password,
         device_name: body.device_name || 'Web',
       }),

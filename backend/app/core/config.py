@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
+    # Africa's Talking SMS (development mode never sends real messages)
+    SMS_MODE: str = "development"  # development | production
+    AFRICASTALKING_USERNAME: str = "sandbox"
+    AFRICASTALKING_API_KEY: Optional[str] = None
+    AFRICASTALKING_SENDER_ID: Optional[str] = None
+    OTP_EXPIRE_MINUTES: int = 5
+    OTP_RESEND_SECONDS: int = 60
+    OTP_MAX_ATTEMPTS: int = 5
+
     # MongoDB
     MONGODB_URI: str = "mongodb://localhost:27017"
     MONGODB_DB_NAME: str = "safechat"

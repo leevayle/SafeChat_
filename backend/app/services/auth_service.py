@@ -33,9 +33,26 @@ class AuthService:
     @staticmethod
     async def register(data: RegisterRequest) -> dict:
         db = get_database()
+        try:
+            registration = decode_token(data.registration_token)
+        except ValueError:
+            raise UnauthorizedError("Phone verification expired. Please verify your number again.")
+        if registration.get("type") != "registration" or registration.get("phone") != data.phone_number:
+            raise UnauthorizedError("Phone verification is invalid. Please verify your number again.")
+        otp_record = await db.phone_verifications.find_one({
+            "phone_number": data.phone_number,
+            "registration_jti": registration.get("jti"),
+            "verified": True,
+            "consumed": False,
+            "expires_at": {"$gt": datetime.now(timezone.utc)},
+        })
+        if not otp_record:
+            raise UnauthorizedError("Phone verification has expired or was already used.")
         existing = await db.users.find_one({"username": data.username})
         if existing:
             raise ConflictError("Username already taken")
+        if await db.users.find_one({"phone_number": data.phone_number}):
+            raise ConflictError("This phone number is already registered. Please log in.")
 
         if data.email:
             existing_email = await db.users.find_one({"email": data.email})
@@ -53,7 +70,7 @@ class AuthService:
             "bio": None,
             "account_role": AccountRole.USER.value,
             "account_status": AccountStatus.ACTIVE.value,
-            "verification_status": "unverified",
+            "verification_status": "verified",
             "created_at": now,
             "updated_at": now,
             "last_seen": now,
@@ -77,6 +94,7 @@ class AuthService:
         }
         result = await db.users.insert_one(user_doc)
         user_id = str(result.inserted_id)
+        await db.phone_verifications.update_one({"_id": otp_record["_id"], "consumed": False}, {"$set": {"consumed": True, "consumed_at": now}})
 
         # Activity log
         await db.user_activity_logs.insert_one(
@@ -103,7 +121,8 @@ class AuthService:
         request: Optional[Request] = None,
     ) -> Tuple[dict, str, str]:
         db = get_database()
-        user = await db.users.find_one({"username": data.username.lower().strip()})
+        identity = (data.phone_number or data.username or "").strip().lower()
+        user = await db.users.find_one({"phone_number": identity}) if data.phone_number else await db.users.find_one({"username": identity})
         if not user or not verify_password(data.password, user["password_hash"]):
             # Log failed attempt
             if user:
@@ -119,7 +138,7 @@ class AuthService:
                         "ip_address": request.client.host if request and request.client else None,
                     }
                 )
-            raise UnauthorizedError("Invalid username or password")
+            raise UnauthorizedError("Invalid phone number or password")
 
         status = user.get("account_status", AccountStatus.ACTIVE.value)
         if status in (

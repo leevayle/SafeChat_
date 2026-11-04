@@ -111,7 +111,7 @@ type Store = {
   patchStatusList: (fn: (list: any[]) => any[]) => void
   /** Optimistic upsert of a chat preview so ChatsHome updates instantly on send */
   upsertChatPreview: (preview: Partial<ChatPreview> & { contactId: string }) => void
-  login: (username: string, password: string) => Promise<ApiUser>
+  login: (phone: string, password: string) => Promise<ApiUser>
   register: (data: {
     phone: string
     countryCode: string
@@ -360,8 +360,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(id)
   }, [me, refreshChats, refreshStatus])
 
-  const login = async (username: string, password: string) => {
-    const { access_token, refresh_token, user } = await api.login({ username, password })
+  const login = async (phone: string, password: string) => {
+    const { access_token, refresh_token, user } = await api.login({ phone_number: phone, password })
     // UI-first: session + user immediately so the app can navigate
     setSession(access_token, refresh_token, user)
     applyUser(user)
@@ -388,32 +388,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     bio?: string
     email?: string
     photo?: string | null
+    registrationToken: string
   }) => {
+    const nationalNumber = data.phone.replace(/\D/g, '').replace(/^0/, '')
+    const phoneNumber = `${data.countryCode || ''}${nationalNumber}`.replace(/[^+\d]/g, '')
     await api.register({
       username: data.username,
       display_name: data.name || data.username,
       password: data.password,
-      phone_number: data.phone ? `${data.countryCode || ''}${data.phone}` : undefined,
+      phone_number: phoneNumber,
+      registration_token: data.registrationToken,
       email: data.email || undefined,
     })
-    // Auto-login after register — same UI-first pattern
+    // Auto-login after verified registration using the verified phone identity.
     const { access_token, refresh_token, user } = await api.login({
-      username: data.username,
+      phone_number: phoneNumber,
       password: data.password,
     })
     setSession(access_token, refresh_token, user)
     applyUser(user)
     setListsReady(false)
-    if (data.bio) {
+    if (data.bio || data.photo) {
       try {
-        await api.updateMe({ bio: data.bio })
-        const updatedUser = { ...user, bio: data.bio }
+        await api.updateMe({ bio: data.bio || undefined, photo: data.photo || undefined })
+        const updatedUser = { ...user, bio: data.bio || user.bio, photo: data.photo || user.photo }
         setSession(access_token, refresh_token, updatedUser)
         applyUser(updatedUser)
       } catch {
-        // Account creation/login succeeded; keep the entered bio locally if the
-        // optional profile update cannot be saved yet.
-        setSettings((prev) => ({ ...prev, bio: data.bio! }))
+        // Account creation remains successful if optional profile personalisation fails.
+        setSettings((prev) => ({ ...prev, bio: data.bio || prev.bio, photo: data.photo || prev.photo }))
       }
     }
     void Promise.all([refreshChats(), refreshContacts(), refreshGroups(), refreshStatus(), refreshCalls()])

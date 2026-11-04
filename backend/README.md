@@ -135,3 +135,26 @@ safechat-backend/
 
 Built for the SafeChat project (https://github.com/leevayle/SafeChat_).  
 Keep it free, simple, and inspired by WhatsApp / Signal / Telegram patterns without paid dependencies for core local development.
+
+## Phone verification (Africa's Talking)
+
+New registrations must verify an E.164 phone number before account creation. Configure:
+
+```env
+SMS_MODE=development
+AFRICASTALKING_USERNAME=sandbox
+AFRICASTALKING_API_KEY=
+AFRICASTALKING_SENDER_ID=
+OTP_EXPIRE_MINUTES=5
+OTP_RESEND_SECONDS=60
+OTP_MAX_ATTEMPTS=5
+```
+
+In development mode, SMS delivery is simulated and the generated OTP is returned only to the development client. Do not deploy with `APP_ENV=production` and `SMS_MODE=development`. For real delivery, set `SMS_MODE=production`, configure the Africa's Talking username/API key (and an approved sender ID if required), and use the correct account environment. The backend calls Africa's Talking's sandbox endpoint when the username is `sandbox`, otherwise its production endpoint.
+
+Registration endpoints:
+- `POST /api/v1/auth/phone/send-code` with `{ "phone_number": "+2547..." }`
+- `POST /api/v1/auth/phone/verify-code` with `{ "phone_number": "+2547...", "code": "123456" }`
+- `POST /api/v1/auth/register` requires the `registration_token` returned by verification.
+
+Codes expire after five minutes by default, have a 60-second resend cooldown and five verification attempts. OTP values are stored as keyed hashes. Existing users sign in with their phone number and password.

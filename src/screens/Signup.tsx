@@ -6,16 +6,17 @@ import { COUNTRIES, CountryPicker, type Country } from '../components/CountryPic
 
 type Props = {
   loading: boolean
-  onSubmit: (phone: string, countryCode: string) => void
+  onSubmit: (phone: string, countryCode: string) => Promise<void>
   onLogin: () => void
   onBack?: () => void
 }
 
 export function Signup({ loading, onSubmit, onLogin, onBack }: Props) {
-  const [country, setCountry] = useState<Country>(COUNTRIES[0])
+  const [country, setCountry] = useState<Country>(COUNTRIES.find((c) => c.code === '+254') || COUNTRIES[0])
   const [open, setOpen] = useState(false)
   const [phone, setPhone] = useState('')
-  const valid = phone.replace(/\D/g, '').length >= 7
+  const [error, setError] = useState('')
+  const valid = phone.replace(/\D/g, '').length >= 7 && phone.replace(/\D/g, '').length <= 12
 
   return (
     <div className="relative flex h-full flex-col items-center px-8 safe-pt safe-pb">
@@ -48,7 +49,7 @@ export function Signup({ loading, onSubmit, onLogin, onBack }: Props) {
           <span className="text-brand-red">On</span>{' '}
           <span className="text-brand-purple">board!</span>
         </motion.h2>
-        <ProgressDots step={2} className="mt-5" />
+        <ProgressDots step={2} total={4} className="mt-5" />
       </div>
 
       <motion.div
@@ -63,7 +64,7 @@ export function Signup({ loading, onSubmit, onLogin, onBack }: Props) {
             onClick={() => setOpen((o) => !o)}
             className="flex h-12 w-full items-center justify-between rounded-full border border-gray-200 bg-white px-5 text-[15px] font-semibold text-ink shadow-sm outline-none transition hover:bg-gray-50 focus-visible:ring-4 focus-visible:ring-brand-blue/25"
           >
-            <span>{country.code}</span>
+            <span className="flex items-center gap-2"><span className="text-xl">{country.flag}</span><span>{country.name} ({country.code})</span></span>
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="opacity-50">
               <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -85,6 +86,7 @@ export function Signup({ loading, onSubmit, onLogin, onBack }: Props) {
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
           placeholder="Phone number"
+          autoComplete="tel-national"
           className="h-12 w-full rounded-full border border-gray-200 bg-white px-5 text-center text-[15px] font-semibold text-ink shadow-sm outline-none placeholder:text-gray-400 focus:border-brand-purple/30 focus:ring-4 focus:ring-brand-purple/15"
         />
       </motion.div>
@@ -97,13 +99,19 @@ export function Signup({ loading, onSubmit, onLogin, onBack }: Props) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.3 }}
       >
+        <p className="px-2 text-center text-xs font-medium leading-relaxed text-gray-400">We’ll text you a one-time code to confirm this number. Message and data rates may apply.</p>
+        {error && <p role="alert" className="text-center text-xs font-bold text-brand-red">{error}</p>}
         <PillButton
           variant="orange"
           loading={loading}
-          disabled={!valid}
-          onClick={() => onSubmit(phone.replace(/\D/g, ''), country.code)}
+          disabled={!valid || loading}
+          onClick={async () => {
+            setError('')
+            try { await onSubmit(phone.replace(/\D/g, ''), country.code) }
+            catch (e: any) { setError(e?.message || 'Could not send your code. Please try again.') }
+          }}
         >
-          Sign me up!
+          Send verification code
         </PillButton>
         <button
           type="button"

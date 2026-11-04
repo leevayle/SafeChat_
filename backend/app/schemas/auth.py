@@ -9,7 +9,8 @@ class RegisterRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=8, max_length=128)
     email: Optional[EmailStr] = None
-    phone_number: Optional[str] = None
+    phone_number: str = Field(..., min_length=8, max_length=16)
+    registration_token: str = Field(..., min_length=20)
 
     @field_validator("username")
     @classmethod
@@ -30,7 +31,8 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str
+    username: Optional[str] = None
+    phone_number: Optional[str] = None
     password: str
     device_id: Optional[str] = None
     device_name: Optional[str] = None
@@ -61,3 +63,19 @@ class UserPublic(BaseModel):
     account_role: str
     account_status: str
     last_seen: Optional[str] = None
+
+
+class PhoneCodeRequest(BaseModel):
+    phone_number: str = Field(..., min_length=8, max_length=16)
+
+
+class PhoneVerifyRequest(BaseModel):
+    phone_number: str = Field(..., min_length=8, max_length=16)
+    code: str = Field(..., min_length=6, max_length=6)
+
+    @field_validator("code")
+    @classmethod
+    def code_digits(cls, value: str) -> str:
+        if not value.isdigit():
+            raise ValueError("Verification code must contain six digits")
+        return value

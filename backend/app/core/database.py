@@ -51,6 +51,12 @@ async def create_indexes() -> None:
     await database.users.create_index("account_status")
     await database.users.create_index("last_seen")
 
+    # phone verification records
+    await database.phone_verifications.create_index("phone_number")
+    await database.phone_verifications.create_index("expires_at", expireAfterSeconds=0)
+    await database.phone_verifications.create_index("registration_jti", sparse=True)
+    await database.phone_otp_ip_limits.create_index("ip_address", unique=True)
+
     # sessions
     await database.sessions.create_index("user_id")
     await database.sessions.create_index("token_hash", unique=True)

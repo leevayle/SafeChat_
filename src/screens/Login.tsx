@@ -6,20 +6,20 @@ import { useStore } from '../store'
 
 export function Login({ onBack, onSuccess }: { onBack: () => void; onSuccess: () => void }) {
   const { login } = useStore()
-  const [username, setUsername] = useState('')
+  const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   const submit = async () => {
-    if (!username.trim() || !password) {
-      setError('Enter username and password')
+    if (!phone.trim() || !password) {
+      setError('Enter your phone number and password')
       return
     }
     setLoading(true)
     setError('')
     try {
-      await login(username.trim(), password)
+      await login(phone.trim().replace(/[^+\d]/g, ''), password)
       onSuccess()
     } catch (e: any) {
       setError(e.message || 'Login failed')
@@ -48,20 +48,21 @@ export function Login({ onBack, onSuccess }: { onBack: () => void; onSuccess: ()
           Welcome <span className="text-brand-purple">back</span>
         </h2>
         <p className="mt-2 text-sm font-semibold text-gray-500">
-          Log in with your SafeChat username and password.
+          Log in with your verified phone number and password. Include your country code, for example +254.
         </p>
       </motion.div>
 
       <div className="mt-10 space-y-4">
         <div>
-          <label className="mb-1.5 block text-xs font-bold text-gray-500">Username</label>
+          <label className="mb-1.5 block text-xs font-bold text-gray-500">Phone number</label>
           <div className="flex h-12 items-center rounded-full bg-gray-100 px-4">
-            <span className="mr-1 font-bold text-brand-purple">@</span>
             <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value.replace(/\s/g, '').toLowerCase())}
-              placeholder="yourname"
-              autoComplete="username"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value.replace(/[^+\d\s()-]/g, ''))}
+              placeholder="+254 7XX XXX XXX"
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
               className="h-full flex-1 bg-transparent text-[15px] font-semibold outline-none"
             />
           </div>

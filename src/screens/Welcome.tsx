@@ -31,7 +31,8 @@ export function Welcome({
         >
           <LogoIcon size={112} />
           <Wordmark className="mt-5 text-[2.4rem] leading-none" />
-          <ProgressDots step={1} className="mt-6" />
+          <p className="mt-4 max-w-[260px] text-center text-sm font-semibold leading-relaxed text-gray-500">Your conversations. Your people. Your space.</p>
+          <ProgressDots step={1} total={4} className="mt-6" />
         </motion.div>
       </div>
 

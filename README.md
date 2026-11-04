@@ -38,3 +38,8 @@ Calls / typing / rings are soft-stubbed until backend WebSocket & signaling land
 ## Theme
 
 Brand colors and UI match the original SafeChat design (purple / orange / Nunito).
+
+
+## Phone-first onboarding
+
+New accounts follow this sequence: welcome → international phone number → SMS verification → profile setup → account. Development SMS mode displays the generated code in the verification screen. The backend is configured for Africa's Talking; switch the backend `SMS_MODE` to `production` and provide valid Africa's Talking credentials before enabling live SMS delivery. Existing users log in with their full international phone number and password.

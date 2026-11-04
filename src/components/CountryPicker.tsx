@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 
 export type Country = { name: string; code: string; flag: string }
@@ -208,6 +209,8 @@ type Props = {
 }
 
 export function CountryPicker({ open, selected, onSelect, onClose }: Props) {
+  const [query, setQuery] = useState('')
+  const filtered = useMemo(() => COUNTRIES.filter((c) => `${c.name} ${c.code}`.toLowerCase().includes(query.toLowerCase())), [query])
   return (
     <AnimatePresence>
       {open && (
@@ -219,15 +222,16 @@ export function CountryPicker({ open, selected, onSelect, onClose }: Props) {
             exit={{ opacity: 0 }}
             onClick={onClose}
           />
-          <motion.ul
-            role="listbox"
-            className="absolute left-0 right-0 top-full z-30 mt-2 max-h-56 origin-top overflow-y-auto rounded-2xl border border-gray-100 bg-white py-1 shadow-xl"
+          <motion.div
+            className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-xl"
             initial={{ opacity: 0, y: -6, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -6, scale: 0.96 }}
             transition={{ type: 'spring', stiffness: 400, damping: 28 }}
           >
-            {COUNTRIES.map((c, i) => {
+            <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search country or code" className="h-11 w-full border-b border-gray-100 px-4 text-sm font-medium outline-none" />
+            <ul role="listbox" className="max-h-56 overflow-y-auto py-1">
+            {filtered.map((c, i) => {
               const active = c.name === selected.name
               return (
                 <motion.li
@@ -248,7 +252,9 @@ export function CountryPicker({ open, selected, onSelect, onClose }: Props) {
                 </motion.li>
               )
             })}
-          </motion.ul>
+            {filtered.length === 0 && <li className="px-4 py-4 text-center text-sm text-gray-400">No countries found</li>}
+            </ul>
+          </motion.div>
         </>
       )}
     </AnimatePresence>

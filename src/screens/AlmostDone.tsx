@@ -85,7 +85,7 @@ export function AlmostDone({ name, phase, errorMessage, onEnter, onRetry }: Prop
         </div>
         <h2 className="mt-6 font-ui text-2xl font-black text-ink">You&apos;re all set</h2>
         <p className="mt-2 max-w-[260px] text-sm font-semibold text-gray-500">
-          Welcome{name ? `, ${name.split(' ')[0]}` : ''}. Your chats are end-to-end ready.
+          Welcome{name ? `, ${name.split(' ')[0]}` : ''}. Your SafeChat account is ready.
         </p>
         <div className="mt-10 w-full max-w-[260px]">
           <PillButton variant="orange" onClick={onEnter}>
