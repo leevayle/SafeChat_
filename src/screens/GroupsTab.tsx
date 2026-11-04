@@ -32,7 +32,7 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
 
   return (
     <div className="relative flex h-full flex-col">
-      <header className="flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 px-5 pt-[10px]">
+      <header className="sticky top-0 z-20 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 px-5 pt-[max(10px,env(safe-area-inset-top))] backdrop-blur">
         <BrandMark />
         <IconBtn label="Join with invite link" onClick={() => setJoin(true)}><Link2 size={22} /></IconBtn>
       </header>
@@ -79,7 +79,7 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
         {list.length === 0 && <p className="flex flex-col items-center gap-2 py-14 font-bold text-gray-400"><Users /> No groups found</p>}
       </div>
 
-      <motion.button initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', delay: 0.2 }} whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.9 }} onClick={onCreate} aria-label="New group" className="absolute bottom-24 right-5 z-[5] flex h-14 w-14 items-center justify-center rounded-full bg-linear-to-br from-brand-orange to-brand-orange-2 text-white shadow-xl shadow-brand-orange-2/40">
+      <motion.button initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', delay: 0.2 }} whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.9 }} onClick={onCreate} aria-label="New group" className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 z-[5] flex h-14 w-14 items-center justify-center rounded-full bg-linear-to-br from-brand-orange to-brand-orange-2 text-white shadow-xl shadow-brand-orange-2/40">
         <Users size={24} />
       </motion.button>
 

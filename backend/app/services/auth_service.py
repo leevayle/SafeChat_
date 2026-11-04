@@ -33,44 +33,39 @@ class AuthService:
     @staticmethod
     async def register(data: RegisterRequest) -> dict:
         db = get_database()
-        try:
-            registration = decode_token(data.registration_token)
-        except ValueError:
-            raise UnauthorizedError("Phone verification expired. Please verify your number again.")
-        if registration.get("type") != "registration" or registration.get("phone") != data.phone_number:
-            raise UnauthorizedError("Phone verification is invalid. Please verify your number again.")
-        otp_record = await db.phone_verifications.find_one({
-            "phone_number": data.phone_number,
-            "registration_jti": registration.get("jti"),
-            "verified": True,
-            "consumed": False,
-            "expires_at": {"$gt": datetime.now(timezone.utc)},
-        })
-        if not otp_record:
-            raise UnauthorizedError("Phone verification has expired or was already used.")
-        existing = await db.users.find_one({"username": data.username})
+        username = data.username.lower().strip()
+        existing = await db.users.find_one({"username": username})
         if existing:
             raise ConflictError("Username already taken")
-        if await db.users.find_one({"phone_number": data.phone_number}):
-            raise ConflictError("This phone number is already registered. Please log in.")
 
         if data.email:
-            existing_email = await db.users.find_one({"email": data.email})
+            email_norm = data.email.lower().strip()
+            existing_email = await db.users.find_one({"email": email_norm})
             if existing_email:
                 raise ConflictError("Email already registered")
+        else:
+            email_norm = None
+
+        phone = (data.phone_number or "").strip() or None
+        if phone:
+            existing_phone = await db.users.find_one({"phone_number": phone})
+            if existing_phone:
+                raise ConflictError("Phone number already registered")
 
         now = datetime.now(timezone.utc)
+        photo = getattr(data, "profile_photo", None)
+        bio = getattr(data, "bio", None)
         user_doc = {
-            "username": data.username,
-            "display_name": data.display_name,
-            "email": data.email,
-            "phone_number": data.phone_number,
+            "username": username,
+            "display_name": data.display_name.strip(),
+            "email": email_norm,
+            "phone_number": phone,
             "password_hash": hash_password(data.password),
-            "profile_photo": None,
-            "bio": None,
+            "profile_photo": photo,
+            "bio": (bio.strip() if isinstance(bio, str) and bio.strip() else None),
             "account_role": AccountRole.USER.value,
             "account_status": AccountStatus.ACTIVE.value,
-            "verification_status": "verified",
+            "verification_status": "unverified",
             "created_at": now,
             "updated_at": now,
             "last_seen": now,
@@ -94,7 +89,6 @@ class AuthService:
         }
         result = await db.users.insert_one(user_doc)
         user_id = str(result.inserted_id)
-        await db.phone_verifications.update_one({"_id": otp_record["_id"], "consumed": False}, {"$set": {"consumed": True, "consumed_at": now}})
 
         # Activity log
         await db.user_activity_logs.insert_one(
@@ -111,8 +105,8 @@ class AuthService:
 
         return {
             "id": user_id,
-            "username": data.username,
-            "display_name": data.display_name,
+            "username": username,
+            "display_name": data.display_name.strip(),
         }
 
     @staticmethod
@@ -121,8 +115,15 @@ class AuthService:
         request: Optional[Request] = None,
     ) -> Tuple[dict, str, str]:
         db = get_database()
-        identity = (data.phone_number or data.username or "").strip().lower()
-        user = await db.users.find_one({"phone_number": identity}) if data.phone_number else await db.users.find_one({"username": identity})
+        user = None
+        if getattr(data, "username", None):
+            user = await db.users.find_one({"username": data.username.lower().strip()})
+        if user is None and getattr(data, "phone_number", None):
+            phone = data.phone_number.strip()
+            user = await db.users.find_one({"phone_number": phone})
+            # also try without leading +
+            if user is None and phone.startswith("+"):
+                user = await db.users.find_one({"phone_number": phone[1:]})
         if not user or not verify_password(data.password, user["password_hash"]):
             # Log failed attempt
             if user:
@@ -138,7 +139,7 @@ class AuthService:
                         "ip_address": request.client.host if request and request.client else None,
                     }
                 )
-            raise UnauthorizedError("Invalid phone number or password")
+            raise UnauthorizedError("Invalid username or password")
 
         status = user.get("account_status", AccountStatus.ACTIVE.value)
         if status in (

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Search,
@@ -12,13 +12,13 @@ import {
   UserPlus,
   Bell,
   LifeBuoy,
+  Clock,
 } from 'lucide-react'
 import { Wordmark } from '../components/Logo'
 import { Avatar } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
 import { ChatsHomeSkeleton } from '../components/ChatsHomeSkeleton'
 import { useStore } from '../store'
-import { api } from '../api'
 
 const FILTERS = ['All chats', 'Unread', 'Online',] as const
 type Filter = (typeof FILTERS)[number]
@@ -46,31 +46,17 @@ export function ChatsHome({
   onNotifications,
   onSupport,
 }: Props) {
-  const { chats, contacts, statusList, me, listsReady } = useStore()
+  const { chats, contacts, statusList, me, listsReady, saveRequestPending } = useStore()
+  /** System-only: save requests etc. Chat unreads live on the bottom nav. */
+  const systemNotifCount = saveRequestPending
   const [filter, setFilter] = useState<Filter>('All chats')
   const [searching, setSearching] = useState(false)
   const [q, setQ] = useState('')
   const [menu, setMenu] = useState(false)
-  const [pendingCount, setPendingCount] = useState(0)
+  const pendingCount = saveRequestPending
   const showSkeleton = !listsReady
-
-  useEffect(() => {
-    let alive = true
-    const tick = async () => {
-      try {
-        const { requests } = await api.incomingContactRequests()
-        if (alive) setPendingCount((requests || []).filter((r) => r.status === 'pending').length)
-      } catch {
-        /* offline / not authed */
-      }
-    }
-    tick()
-    const id = setInterval(tick, 15000)
-    return () => {
-      alive = false
-      clearInterval(id)
-    }
-  }, [])
+  /** Rows that already entered — receipt/state updates must not re-animate the whole row */
+  const seenRows = useRef<Set<string>>(new Set())
 
   const contactById = (id: string, fallback?: { name?: string; photo?: string | null; hue?: [string, string] }) => {
     const hit = contacts.find((c) => c.id === id || c.peerId === id)
@@ -158,7 +144,7 @@ export function ChatsHome({
 
   return (
     <div className="relative flex h-full flex-col bg-white">
-      <header className="relative flex min-h-16 shrink-0 items-center justify-between border-b pb-3 border-gray-200 px-5 pt-[20px]">
+      <header className="sticky top-0 z-20 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 pb-3 px-5 pt-[20px] backdrop-blur">
         <div
           className={`flex w-full items-center transition-all duration-200 ease-out  ${
             searching ? 'opacity-100 ' : 'opacity-100 '
@@ -194,7 +180,12 @@ export function ChatsHome({
                   <Search size={22} />
                 </IconBtn>
                 <IconBtn label="Menu" onClick={() => setMenu((m) => !m)}>
-                  <MoreVertical size={22} />
+                  <span className="relative">
+                    <MoreVertical size={22} />
+                    {systemNotifCount > 0 ? (
+                      <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-brand-red ring-2 ring-white" />
+                    ) : null}
+                  </span>
                 </IconBtn>
               </div>
             </div>
@@ -223,7 +214,7 @@ export function ChatsHome({
                     { label: 'New group', fn: onNewGroup, Icon: UsersRound },
                     { label: 'Contacts', fn: onContacts, Icon: Contact },
                     { label: 'Save requests', fn: onSaveRequests, Icon: UserPlus, badge: pendingCount },
-                    { label: 'Notifications', fn: onNotifications, Icon: Bell },
+                    { label: 'Notifications', fn: onNotifications, Icon: Bell, badge: systemNotifCount },
                     { label: 'Support', fn: onSupport, Icon: LifeBuoy },
                     { label: 'Settings', fn: onSettings, Icon: Settings },
                   ] as const
@@ -313,12 +304,15 @@ export function ChatsHome({
               {list.map((c, i) => {
                 const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
                 const meta = statusMeta[c.contactId]
+                const rowKey = c.conversationId || c.contactId
+                const isNewRow = !seenRows.current.has(rowKey)
+                if (isNewRow) seenRows.current.add(rowKey)
                 return (
                   <motion.li
-                    key={c.conversationId || c.contactId}
-                    initial={{ opacity: 0, y: 10 }}
+                    key={rowKey}
+                    initial={isNewRow ? { opacity: 0, y: 10 } : false}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.03 }}
+                    transition={isNewRow ? { delay: Math.min(i, 8) * 0.03 } : { duration: 0 }}
                   >
                     <button
                       type="button"
@@ -357,12 +351,20 @@ export function ChatsHome({
                             <span className="text-xs font-bold text-gray-400">{c.time}</span>
                             {c.mine && (
                               <span
-                                className={`text-[11px] font-black leading-none ${
+                                className={`inline-flex items-center text-[11px] font-black leading-none ${
                                   c.state === 'read' ? 'text-brand-blue' : 'text-gray-400'
                                 }`}
                                 title={c.state || 'sent'}
                               >
-                                {c.state === 'sent' || !c.state ? '✓' : '✓✓'}
+                                {c.state === 'pending' ? (
+                                  <Clock size={12} strokeWidth={2.5} className="opacity-70" aria-label="Sending" />
+                                ) : c.state === 'failed' ? (
+                                  '!'
+                                ) : c.state === 'sent' || !c.state ? (
+                                  '✓'
+                                ) : (
+                                  '✓✓'
+                                )}
                               </span>
                             )}
                           </div>
@@ -394,7 +396,7 @@ export function ChatsHome({
         whileHover={{ scale: 1.06 }}
         whileTap={{ scale: 0.94 }}
         onClick={onNewChat}
-        className="absolute bottom-24 right-5 z-10 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white shadow-[0_10px_28px_-6px_rgba(123,44,191,0.55)]"
+        className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white shadow-[0_10px_28px_-6px_rgba(123,44,191,0.55)]"
       >
         <Plus size={26} strokeWidth={2.4} />
       </motion.button>

@@ -7,6 +7,8 @@ import { useStore } from '../store'
 type Props = {
   contactId: string
   kind: 'audio' | 'video'
+  peerName?: string | null
+  peerUsername?: string | null
   onAccept: () => void
   onDecline: () => void
 }
@@ -48,16 +50,23 @@ function useRingtone(active: boolean) {
   }, [active])
 }
 
-export function IncomingCall({ contactId, kind, onAccept, onDecline }: Props) {
+export function IncomingCall({ contactId, kind, peerName, peerUsername, onAccept, onDecline }: Props) {
   const { contacts } = useStore()
-  const c =
-    contacts.find((x) => x.id === contactId) || {
+  const found = contacts.find((x) => x.id === contactId)
+  const label =
+    peerName ||
+    found?.name ||
+    (peerUsername ? `@${peerUsername.replace(/^@/, '')}` : null) ||
+    found?.username ||
+    'Incoming call'
+  const c = found || {
       id: contactId,
-      name: contactId,
+      name: label,
       hue: ['#7B2CBF', '#6389EB'] as [string, string],
       online: true,
       photo: null,
     }
+  c.name = label
   useRingtone(true)
 
   return (

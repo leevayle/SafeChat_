@@ -8,7 +8,20 @@ import {
   useState,
   type ReactNode,
 } from 'react'
-import { api, clearSession, getStoredUser, setSession, type ApiUser, type ApiContact, type ChatPreview, saveStoredUser } from './api'
+import {
+  api,
+  clearSession,
+  getStoredUser,
+  setSession,
+  hasAccessToken,
+  isSessionDead,
+  markSessionDead,
+  markSessionAlive,
+  type ApiUser,
+  type ApiContact,
+  type ChatPreview,
+  saveStoredUser,
+} from './api'
 
 export type Settings = {
   name: string
@@ -88,8 +101,10 @@ const defaultSettings: Settings = {
 
 type Store = {
   ready: boolean
-  /** True after first chats/contacts/status hydrate completes (or fails) */
+  /** True after chats home can render (first chats hydrate done) */
   listsReady: boolean
+  /** True after access token proved valid (or just logged in) — gates background polls */
+  sessionOk: boolean
   me: ApiUser | null
   settings: Settings
   setSetting: <K extends keyof Settings>(k: K, v: Settings[K]) => void
@@ -99,6 +114,8 @@ type Store = {
   groups: any[]
   statusList: any[]
   calls: any[]
+  /** Pending incoming save/contact requests (home badge) */
+  saveRequestPending: number
   refreshChats: () => Promise<void>
   refreshContacts: () => Promise<void>
   toast: string | null
@@ -107,6 +124,7 @@ type Store = {
   refreshGroups: () => Promise<void>
   refreshStatus: () => Promise<void>
   refreshCalls: () => Promise<void>
+  refreshSaveRequests: () => Promise<void>
   /** Optimistic local updates to status feed (UI-first) */
   patchStatusList: (fn: (list: any[]) => any[]) => void
   /** Optimistic upsert of a chat preview so ChatsHome updates instantly on send */
@@ -140,7 +158,10 @@ export function stamp() {
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false)
   const [listsReady, setListsReady] = useState(false)
-  const [me, setMe] = useState<ApiUser | null>(getStoredUser())
+  const [sessionOk, setSessionOk] = useState(false)
+  const [me, setMe] = useState<ApiUser | null>(() =>
+    hasAccessToken() ? getStoredUser() : null,
+  )
   const [settings, setSettings] = useState<Settings>(() => {
     try {
       const raw = localStorage.getItem('sc_settings')
@@ -155,6 +176,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [groups, setGroups] = useState<any[]>([])
   const [statusList, setStatusList] = useState<any[]>([])
   const [calls, setCalls] = useState<any[]>([])
+  const [saveRequestPending, setSaveRequestPending] = useState(0)
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const clearToast = useCallback(() => {
@@ -198,42 +220,66 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  const refreshChats = useCallback(async () => {
+  const wipeSession = useCallback(() => {
     try {
-      const { chats: c } = await api.chats()
-      setChats((prev) => (JSON.stringify(prev) === JSON.stringify(c) ? prev : c))
+      markSessionDead()
     } catch {
-      /* offline seed ok */
+      clearSession()
     }
+    setMe(null)
+    setSessionOk(false)
+    setChats([])
+    setContacts([])
+    setGroups([])
+    setStatusList([])
+    setCalls([])
+    setSaveRequestPending(0)
+    setListsReady(true)
   }, [])
 
+  const refreshChats = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
+    try {
+      const { chats: c } = await api.chats()
+      setChats((prev) => (prev.length === c.length && JSON.stringify(prev) === JSON.stringify(c) ? prev : c))
+    } catch (e: any) {
+      if ((e as any)?.status === 401 || String(e?.message || '').toLowerCase().includes('unauthorized')) {
+        wipeSession()
+      }
+    }
+  }, [wipeSession])
+
   const refreshContacts = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
     try {
       const { contacts: c } = await api.contacts()
-      setContacts((prev) => (JSON.stringify(prev) === JSON.stringify(c) ? prev : c))
+      setContacts((prev) => (prev.length === c.length && JSON.stringify(prev) === JSON.stringify(c) ? prev : c))
     } catch {
       /* */
     }
   }, [])
 
   const refreshGroups = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
     try {
       const { groups: g } = await api.groups()
-      setGroups((prev) => (JSON.stringify(prev) === JSON.stringify(g) ? prev : g))
+      setGroups((prev) => (prev.length === g.length && JSON.stringify(prev) === JSON.stringify(g) ? prev : g))
     } catch {
       /* */
     }
   }, [])
 
   const refreshStatus = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
     try {
       const { status } = await api.status()
       const now = Date.now()
-      // Drop expired; keep chronological order (oldest → newest)
       const active = (status || [])
         .filter((s: any) => {
           if (!s?.expiresAt) return true
-          const t = Date.parse(s.expiresAt)
+          let exp = String(s.expiresAt)
+          if (/^\d{4}-\d{2}-\d{2}T/.test(exp) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(exp)) exp += 'Z'
+          const t = Date.parse(exp)
           return Number.isNaN(t) || t > now
         })
         .slice()
@@ -242,11 +288,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const tb = b.createdAt ? Date.parse(b.createdAt) : 0
           return ta - tb
         })
-      setStatusList((prev) => (JSON.stringify(prev) === JSON.stringify(active) ? prev : active))
-    } catch {
-      /* */
+      setStatusList((prev) =>
+        prev.length === active.length && JSON.stringify(prev) === JSON.stringify(active) ? prev : active,
+      )
+    } catch (e: any) {
+      if ((e as any)?.status === 401) wipeSession()
     }
-  }, [])
+  }, [wipeSession])
+
+  const refreshSaveRequests = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
+    try {
+      const { requests } = await api.incomingContactRequests()
+      const n = (requests || []).filter((r: any) => r.status === 'pending').length
+      setSaveRequestPending(n)
+    } catch (e: any) {
+      if ((e as any)?.status === 401) wipeSession()
+    }
+  }, [wipeSession])
 
   const patchStatusList = useCallback((fn: (list: any[]) => any[]) => {
     setStatusList((prev) => fn(prev))
@@ -269,18 +328,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             hour12: false,
           })
         if (idx >= 0) {
-          const next = [...prev]
-          next[idx] = {
-            ...next[idx],
+          const cur = prev[idx]
+          const nextLast = preview.last ?? cur.last
+          const contentChanged = nextLast !== cur.last || (preview.iso && preview.iso !== cur.iso)
+          const updated: ChatPreview = {
+            ...cur,
             ...preview,
-            last: preview.last ?? next[idx].last,
-            time: timeLabel,
-            iso: nowIso,
-            unread: preview.unread ?? 0,
-            mine: preview.mine ?? true,
-            state: preview.state ?? next[idx].state ?? 'sent',
+            last: nextLast,
+            time: contentChanged ? timeLabel : preview.time || cur.time,
+            iso: contentChanged ? nowIso : preview.iso || cur.iso,
+            unread: preview.unread !== undefined ? preview.unread : cur.unread,
+            mine: preview.mine ?? cur.mine ?? true,
+            state: preview.state ?? cur.state ?? 'sent',
           }
-          // Bump to top
+          // Receipt-only: patch in place (no reorder / re-animation)
+          if (!contentChanged && idx === 0) {
+            const next = [...prev]
+            next[0] = updated
+            return next
+          }
+          if (!contentChanged) {
+            const next = [...prev]
+            next[idx] = updated
+            return next
+          }
+          // New message content → bump to top
+          const next = [...prev]
+          next[idx] = updated
           const [item] = next.splice(idx, 1)
           return [item, ...next]
         }
@@ -307,75 +381,272 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
 
   const refreshCalls = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
     try {
       const { calls: c } = await api.calls()
-      setCalls((prev) => (JSON.stringify(prev) === JSON.stringify(c) ? prev : c))
-    } catch {
-      /* */
+      setCalls(c || [])
+    } catch (e: any) {
+      if ((e as any)?.status === 401) wipeSession()
     }
-  }, [])
+  }, [wipeSession])
+
+  /**
+   * Ordered hydrate after auth is known-good:
+   * chats → listsReady → calls → statuses → groups → save requests → contacts
+   * (notifications stay on-demand when the screen opens)
+   */
+  const hydrateAfterAuth = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) {
+      setListsReady(true)
+      return
+    }
+    // 1. Chats — critical path for home
+    await refreshChats()
+    if (isSessionDead()) {
+      setListsReady(true)
+      return
+    }
+    setListsReady(true)
+    setSessionOk(true)
+
+    // 2–6 sequential so we never stampede the API and order matches priority
+    await refreshCalls()
+    if (isSessionDead()) return
+    await refreshStatus()
+    if (isSessionDead()) return
+    await refreshGroups()
+    if (isSessionDead()) return
+    await refreshSaveRequests()
+    if (isSessionDead()) return
+    await refreshContacts()
+  }, [refreshChats, refreshCalls, refreshStatus, refreshGroups, refreshSaveRequests, refreshContacts])
 
   const bootStarted = useRef(false)
   useEffect(() => {
     if (bootStarted.current) return
     bootStarted.current = true
     const boot = async () => {
-      const stored = getStoredUser()
-      if (!stored) {
+      const token = hasAccessToken()
+      const stored = token ? getStoredUser() : null
+
+      // Stale user blob without tokens → clean slate
+      if (!token) {
+        if (getStoredUser()) clearSession()
+        setMe(null)
+        setSessionOk(false)
         setReady(true)
         setListsReady(true)
         return
       }
-      try {
-        const { user, settings: s } = await api.me()
-        const access = localStorage.getItem('sc_access') || localStorage.getItem('sc_token') || ''
-        const refresh = localStorage.getItem('sc_refresh') || ''
-        setSession(access, refresh, user)
-        applyUser(user, s as Record<string, unknown>)
-        await Promise.all([
-          refreshChats(),
-          refreshContacts(),
-          refreshGroups(),
-          refreshStatus(),
-          refreshCalls(),
-        ])
-      } catch {
-        clearSession()
-        setMe(null)
-      } finally {
-        setReady(true)
-        setListsReady(true)
-      }
+
+      if (stored) applyUser(stored)
+      setReady(true)
+
+      // Prove the token with the first real data call (chats), not a separate /auth/me
+      // Soft /auth/me only once, in parallel with ordered hydrate, for profile freshness
+      void (async () => {
+        try {
+          const { user, settings: s } = await api.me()
+          if (isSessionDead()) return
+          const access = localStorage.getItem('sc_access') || localStorage.getItem('sc_token') || ''
+          const refresh = localStorage.getItem('sc_refresh') || ''
+          setSession(access, refresh, user)
+          applyUser(user, s as Record<string, unknown>)
+          setSessionOk(true)
+        } catch (e: any) {
+          if ((e as any)?.status === 401 || String(e?.message || '').toLowerCase().includes('unauthorized')) {
+            wipeSession()
+          }
+        }
+      })()
+
+      await hydrateAfterAuth()
     }
     boot()
-  }, [applyUser, refreshChats, refreshContacts, refreshGroups, refreshStatus, refreshCalls])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
-  // background poll — only while logged in, no full UI reset
+  // Global auth-failed from api layer (permanent 401 after refresh fail)
   useEffect(() => {
-    if (!me) return
-    const id = setInterval(() => {
-      refreshChats()
-      refreshStatus()
-    }, 8000)
-    return () => clearInterval(id)
-  }, [me, refreshChats, refreshStatus])
+    const onFail = () => wipeSession()
+    window.addEventListener('sc:auth-failed', onFail)
+    return () => window.removeEventListener('sc:auth-failed', onFail)
+  }, [wipeSession])
 
-  const login = async (phone: string, password: string) => {
-    const { access_token, refresh_token, user } = await api.login({ phone_number: phone, password })
-    // UI-first: session + user immediately so the app can navigate
+  // Background poll — only when session is proven OK; never /auth/me
+  useEffect(() => {
+    if (!sessionOk || !me || !hasAccessToken() || isSessionDead()) return
+    let alive = true
+    const id = setInterval(() => {
+      if (!alive || !sessionOk || !hasAccessToken() || isSessionDead()) return
+      void refreshChats()
+      void refreshStatus()
+    }, 25000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [sessionOk, me, refreshChats, refreshStatus])
+
+  // Lighter poll for save-request badge
+  useEffect(() => {
+    if (!sessionOk || !me || !hasAccessToken() || isSessionDead()) return
+    let alive = true
+    const id = setInterval(() => {
+      if (!alive || !sessionOk || !hasAccessToken() || isSessionDead()) return
+      void refreshSaveRequests()
+    }, 60000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [sessionOk, me, refreshSaveRequests])
+
+  // Realtime WS — live messages + receipt ticks (no full re-fetch)
+  useEffect(() => {
+    if (!sessionOk || !me || !hasAccessToken() || isSessionDead()) {
+      void import('./realtime').then((m) => m.disconnectRealtime())
+      return
+    }
+    let stopped = false
+    const myId = me.id
+    void import('./realtime').then(({ connectRealtime, disconnectRealtime }) => {
+      if (stopped) return
+      connectRealtime({
+        onMessage: (cid, m) => {
+          if (!m?.id) return
+          const mine = String(m.from) === String(myId)
+          // Recipient: ack delivered BEFORE UI render — fire and forget
+          if (!mine) {
+            void api.markDelivered(m.id).catch(() => {})
+          }
+          const previewText = m.text || (m.image ? '📷 Photo' : '')
+          const iso = m.time || new Date().toISOString()
+          const timeLabel = new Date(iso).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false,
+          })
+          // Patch home preview by conversationId (stable contactId from existing row)
+          setChats((prev) => {
+            const idx = prev.findIndex((c) => c.conversationId === cid)
+            if (idx >= 0) {
+              const cur = prev[idx]
+              const updated = {
+                ...cur,
+                last: previewText,
+                time: timeLabel,
+                iso,
+                mine,
+                state: mine ? ((m.state as any) || 'sent') : cur.state,
+                unread: mine ? 0 : (cur.unread || 0) + 1,
+              }
+              const next = [...prev]
+              next.splice(idx, 1)
+              return [updated, ...next]
+            }
+            if (mine) return prev
+            // Unknown thread — create a lightweight preview from sender id
+            return [
+              {
+                contactId: String(m.from),
+                conversationId: cid,
+                name: undefined,
+                last: previewText,
+                time: timeLabel,
+                iso,
+                unread: 1,
+                mine: false,
+                state: undefined,
+              },
+              ...prev,
+            ]
+          })
+          try {
+            window.dispatchEvent(new CustomEvent('sc:rt-msg', { detail: { cid, m, mine } }))
+          } catch {
+            /* */
+          }
+        },
+        onReceipt: (cid, messageId, s) => {
+          const state =
+            s === 'read' ? 'read' : s === 'delivered' ? 'delivered' : s === 'sent' ? 'sent' : s
+          // Patch home-row ticks when this is the latest message in that chat
+          setChats((prev) => {
+            const idx = prev.findIndex((c) => c.conversationId === cid)
+            if (idx < 0) return prev
+            const row = prev[idx]
+            // Only bump receipt on own last message
+            if (!row.mine) return prev
+            const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 }
+            const nextRank = rank[state] ?? 0
+            const curRank = rank[row.state || 'sent'] ?? 1
+            if (nextRank <= curRank) return prev
+            const next = [...prev]
+            next[idx] = { ...row, state: state as any }
+            return next
+          })
+          try {
+            window.dispatchEvent(
+              new CustomEvent('sc:rt-rcpt', { detail: { cid, id: messageId, s: state } }),
+            )
+          } catch {
+            /* */
+          }
+        },
+        onAck: (payload) => {
+          try {
+            window.dispatchEvent(new CustomEvent('sc:rt-ack', { detail: payload }))
+          } catch {
+            /* */
+          }
+        },
+        onCall: (packet) => {
+          try {
+            window.dispatchEvent(new CustomEvent('sc:rt-call', { detail: packet }))
+          } catch {
+            /* */
+          }
+        },
+        onTyping: (peerId, typing) => {
+          try {
+            window.dispatchEvent(
+              new CustomEvent('sc:rt-typing', { detail: { peerId, typing } }),
+            )
+          } catch {
+            /* */
+          }
+        },
+        onPresence: (peerId, online, lastSeen) => {
+          setContacts((prev) =>
+            prev.map((c) =>
+              c.id === peerId || c.peerId === peerId
+                ? { ...c, online, lastSeen: lastSeen ?? c.lastSeen }
+                : c,
+            ),
+          )
+        },
+      })
+    })
+    return () => {
+      stopped = true
+      void import('./realtime').then((m) => m.disconnectRealtime())
+    }
+  }, [sessionOk, me, upsertChatPreview])
+
+  const login = async (identity: string, password: string) => {
+    const raw = identity.trim()
+    const looksPhone = raw.startsWith('+') || /^\d{7,15}$/.test(raw.replace(/[\s-]/g, ''))
+    const session = looksPhone
+      ? await api.login({ phone_number: raw.replace(/[^\d+]/g, ''), password })
+      : await api.login({ username: raw.replace(/^@/, '').toLowerCase(), password })
+    const { access_token, refresh_token, user } = session
+    markSessionAlive()
     setSession(access_token, refresh_token, user)
     applyUser(user)
+    setSessionOk(true)
     setListsReady(false)
-    // Background: hydrate lists without blocking the login screen
-    void Promise.all([
-      refreshChats(),
-      refreshContacts(),
-      refreshGroups(),
-      refreshStatus(),
-      refreshCalls(),
-    ])
-      .catch(() => {})
-      .finally(() => setListsReady(true))
+    void hydrateAfterAuth()
     return user
   }
 
@@ -397,31 +668,53 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       display_name: data.name || data.username,
       password: data.password,
       phone_number: phoneNumber,
-      registration_token: data.registrationToken,
       email: data.email || undefined,
+      bio: data.bio || undefined,
+      profile_photo: data.photo || undefined,
     })
-    // Auto-login after verified registration using the verified phone identity.
-    const { access_token, refresh_token, user } = await api.login({
-      phone_number: phoneNumber,
-      password: data.password,
-    })
-    setSession(access_token, refresh_token, user)
-    applyUser(user)
-    setListsReady(false)
-    if (data.bio || data.photo) {
+    // Auto-login with username (always works); phone also supported on backend
+    let access_token = ''
+    let refresh_token = ''
+    let user: ApiUser
+    try {
+      const session = await api.login({
+        username: data.username,
+        password: data.password,
+      })
+      access_token = session.access_token
+      refresh_token = session.refresh_token
+      user = session.user
+    } catch {
+      const session = await api.login({
+        phone_number: phoneNumber,
+        password: data.password,
+      })
+      access_token = session.access_token
+      refresh_token = session.refresh_token
+      user = session.user
+    }
+    // Ensure photo/bio applied (in case register ignored large photo)
+    if (data.photo || data.bio) {
       try {
-        await api.updateMe({ bio: data.bio || undefined, photo: data.photo || undefined })
-        const updatedUser = { ...user, bio: data.bio || user.bio, photo: data.photo || user.photo }
-        setSession(access_token, refresh_token, updatedUser)
-        applyUser(updatedUser)
+        await api.updateMe({
+          bio: data.bio || undefined,
+          photo: data.photo || undefined,
+        })
+        user = {
+          ...user,
+          bio: data.bio || user.bio,
+          photo: data.photo || user.photo,
+        }
       } catch {
-        // Account creation remains successful if optional profile personalisation fails.
-        setSettings((prev) => ({ ...prev, bio: data.bio || prev.bio, photo: data.photo || prev.photo }))
+        /* optional */
       }
     }
-    void Promise.all([refreshChats(), refreshContacts(), refreshGroups(), refreshStatus(), refreshCalls()])
-      .catch(() => {})
-      .finally(() => setListsReady(true))
+    markSessionAlive()
+    setSession(access_token, refresh_token, user)
+    applyUser(user)
+    setSessionOk(true)
+    setListsReady(false)
+    void hydrateAfterAuth()
     return user
   }
 
@@ -431,15 +724,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       /* */
     }
+    try {
+      const { disconnectRealtime } = await import('./realtime')
+      disconnectRealtime()
+    } catch {
+      /* */
+    }
     // Clear auth tokens/user but keep device preferences (appLock etc.) in sc_settings
     // so a later login on this device still knows the user's lock preference.
     clearSession()
     setMe(null)
+    setSessionOk(false)
     setChats([])
     setGroups([])
     setContacts([])
     setStatusList([])
     setCalls([])
+    setSaveRequestPending(0)
     setListsReady(true)
     // Reset profile fields in memory; re-load device prefs from localStorage if present
     try {
@@ -534,6 +835,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     () => ({
       ready,
       listsReady,
+      sessionOk,
       me,
       settings,
       setSetting,
@@ -543,6 +845,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       groups,
       statusList,
       calls,
+      saveRequestPending,
       refreshChats,
       refreshContacts,
       toast,
@@ -551,6 +854,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshGroups,
       refreshStatus,
       refreshCalls,
+      refreshSaveRequests,
       patchStatusList,
       upsertChatPreview,
       login,
@@ -565,6 +869,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [
       ready,
       listsReady,
+      sessionOk,
       me,
       settings,
       contacts,
@@ -572,6 +877,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       groups,
       statusList,
       calls,
+      saveRequestPending,
       setSetting,
       saveProfile,
       refreshChats,
@@ -582,6 +888,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshGroups,
       refreshStatus,
       refreshCalls,
+      refreshSaveRequests,
       patchStatusList,
       upsertChatPreview,
       login,

@@ -26,9 +26,9 @@ class GroupService:
         db = get_database()
         member_ids = [creator_id]
         if member_usernames:
-            for uname in member_usernames:
-                u = await db.users.find_one({"username": uname.lower().strip()})
-                if u:
+            unames = [u.lower().strip() for u in member_usernames if u]
+            if unames:
+                async for u in db.users.find({"username": {"$in": unames}}, {"_id": 1}):
                     uid = str(u["_id"])
                     if uid not in member_ids:
                         member_ids.append(uid)
@@ -146,11 +146,11 @@ class GroupService:
             raise ForbiddenError("Not a member")
 
         new_ids = []
-        for uname in usernames:
-            u = await db.users.find_one({"username": uname.lower().strip()})
-            if u:
+        unames = [u.lower().strip() for u in usernames if u]
+        if unames:
+            async for u in db.users.find({"username": {"$in": unames}}, {"_id": 1}):
                 uid = str(u["_id"])
-                if uid not in group["member_ids"]:
+                if uid not in group["member_ids"] and uid not in new_ids:
                     new_ids.append(uid)
 
         if not new_ids:

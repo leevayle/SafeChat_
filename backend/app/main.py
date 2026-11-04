@@ -14,6 +14,8 @@ from app.api.v1.conversations.router import router as conversations_router
 from app.api.v1.messaging.router import router as messaging_router
 from app.api.v1.groups.router import router as groups_router
 from app.api.v1.statuses.router import router as statuses_router
+from app.api.v1.calls.router import router as calls_router
+from app.websocket.router import router as ws_router
 import logging
 
 setup_logging()
@@ -100,6 +102,8 @@ app.include_router(conversations_router, prefix=settings.API_V1_PREFIX)
 app.include_router(messaging_router, prefix=settings.API_V1_PREFIX)
 app.include_router(groups_router, prefix=settings.API_V1_PREFIX)
 app.include_router(statuses_router, prefix=settings.API_V1_PREFIX)
+app.include_router(calls_router, prefix=settings.API_V1_PREFIX)
+app.include_router(ws_router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/")

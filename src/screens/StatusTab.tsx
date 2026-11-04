@@ -7,6 +7,7 @@ import { StatusRing } from '../components/StatusRing'
 import { api } from '../api'
 import { useStore } from '../store'
 import { PillButton } from '../components/PillButton'
+import { parseUtc } from '../time'
 
 const API_ORIGIN = import.meta.env.VITE_API_URL || ''
 function mediaUrl(path?: string | null) {
@@ -33,8 +34,8 @@ export function StatusTab({ onOpenStatus }: Props) {
 
   const isActive = (s: any) => {
     if (!s?.expiresAt) return true
-    const t = Date.parse(s.expiresAt)
-    return Number.isNaN(t) || t > Date.now()
+    const d = parseUtc(s.expiresAt)
+    return !d || d.getTime() > Date.now()
   }
   const mine = statusList.filter((s) => s.userId === me?.id && isActive(s))
   const others = statusList.filter((s) => s.userId !== me?.id && isActive(s))
@@ -128,7 +129,7 @@ export function StatusTab({ onOpenStatus }: Props) {
 
   return (
     <div className="relative h-full overflow-y-auto pb-24">
-      <header className="flex min-h-16 items-center justify-between border-b border-gray-200 px-5 pt-[10px]">
+      <header className="sticky top-0 z-20 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 px-5 pt-[max(10px,env(safe-area-inset-top))] backdrop-blur">
         <BrandMark />
         <button
           type="button"

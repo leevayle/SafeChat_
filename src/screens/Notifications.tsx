@@ -50,20 +50,7 @@ export function Notifications({ onClose, onOpenSaveRequests, onOpenChat }: Props
         } catch {
           /* offline */
         }
-        for (const c of chats) {
-          if (c.unread > 0 && c.contactId) {
-            notifs.push({
-              id: `chat-${c.contactId}`,
-              type: 'message',
-              title: c.name || 'Chat',
-              body: c.last || 'New message',
-              time: c.iso || '',
-              unread: true,
-              contactId: c.contactId,
-              conversationId: c.conversationId,
-            })
-          }
-        }
+        // Chat unreads show on the Chats tab badge — not here
         if (!notifs.length) {
           notifs.push({
             id: 'sys-1',

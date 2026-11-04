@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { Splash } from './screens/Splash'
 import { Welcome } from './screens/Welcome'
 import { Signup } from './screens/Signup'
-import { VerifyPhone } from './screens/VerifyPhone'
+
 import { api } from './api'
 import { Login } from './screens/Login'
 import { Loading } from './screens/Loading'
@@ -30,7 +30,7 @@ import { IncomingCall } from './components/IncomingCall'
 import { BottomNav, type Tab } from './components/BottomNav'
 
 type Stage = 'splash' | 'welcome' | 'signup' | 'verify' | 'login' | 'loading' | 'profile' | 'done' | 'app'
-type Call = { id: string; kind: 'audio' | 'video'; ringId?: string }
+type Call = { id: string; kind: 'audio' | 'video'; ringId?: string; remoteOfferSdp?: string; peerName?: string; peerUsername?: string }
 type Overlay = 'newChat' | 'newGroup' | 'settings' | 'contacts' | 'saveRequests' | 'notifications' | 'support' | null
 
 export default function App() {
@@ -42,7 +42,9 @@ export default function App() {
 }
 
 function Shell() {
-  const { ready, me, logout, contacts, toast, clearToast, settings } = useStore()
+  const { ready, me, logout, contacts, toast, clearToast, settings, chats, groups, calls } = useStore()
+  const chatUnread = (chats || []).reduce((n, c) => n + (c.unread > 0 ? 1 : 0), 0)
+  const groupUnread = (groups || []).reduce((n, g: any) => n + (g.unread > 0 ? 1 : 0), 0)
   const [stage, setStage] = useState<Stage>('splash')
   const [submitting, setSubmitting] = useState(false)
   const [username, setUsername] = useState('')
@@ -63,50 +65,78 @@ function Shell() {
   const chatRef = useRef<string | null>(null)
   chatRef.current = chat
 
-  /** Show call UI immediately; ring in background — never auto-navigate away */
+  /** Show call UI immediately; signaling runs over the persistent WebSocket */
   const placeCall = useCallback(async (id: string, kind: 'audio' | 'video') => {
-    // Open call screen right away so UI never "clears"
     setCall({ id, kind })
-    try {
-      const { api } = await import('./api')
-      const { ring } = await api.ring(id, kind)
-      setCall((prev) =>
-        prev && prev.id === id ? { ...prev, ringId: ring?.id } : prev,
-      )
-      api.logCall({ to: id, kind, status: 'outgoing', duration: '0:00' }).catch(() => {})
-    } catch {
-      /* stay on call screen even if network fails */
-    }
   }, [])
 
-  // Incoming rings — never steal focus from an active call
+  // Incoming call signaling via WebSocket (ring + SDP offer)
   useEffect(() => {
-    if (stage !== 'app' || call) return
-    let alive = true
-    const tick = async () => {
-      try {
-        const { api } = await import('./api')
-        const { incoming: rings } = await api.incomingRings()
-        if (!alive || !rings?.length) return
-        const r = rings[0]
-        if (r?.from) {
-          setIncoming((prev) =>
-            prev?.ringId === r.id
-              ? prev
-              : { id: r.from, kind: r.kind === 'video' ? 'video' : 'audio', ringId: r.id },
-          )
-        }
-      } catch {
-        /* */
+    if (stage !== 'app' || !me) return
+    const onCall = (ev: Event) => {
+      const p = (ev as CustomEvent).detail as {
+        a: string
+        from?: string
+        callId?: string
+        kind?: string
+        sdp?: string
+        fromName?: string
+        fromUsername?: string
+      }
+      if (!p?.from) return
+      if (p.a === 'ring') {
+        setIncoming((prev) =>
+          prev?.ringId === p.callId
+            ? {
+                ...prev,
+                peerName: p.fromName || prev.peerName,
+                peerUsername: p.fromUsername || prev.peerUsername,
+              }
+            : {
+                id: p.from!,
+                kind: p.kind === 'video' ? 'video' : 'audio',
+                ringId: p.callId,
+                peerName: p.fromName,
+                peerUsername: p.fromUsername,
+              },
+        )
+      } else if (p.a === 'offer' && p.sdp) {
+        setIncoming((prev) => {
+          if (prev && prev.id === p.from) {
+            return {
+              ...prev,
+              ringId: p.callId || prev.ringId,
+              remoteOfferSdp: p.sdp,
+              peerName: p.fromName || prev.peerName,
+              peerUsername: p.fromUsername || prev.peerUsername,
+            }
+          }
+          // Offer before ring UI — still show incoming
+          return {
+            id: p.from!,
+            kind: p.kind === 'video' ? 'video' : 'audio',
+            ringId: p.callId,
+            remoteOfferSdp: p.sdp,
+            peerName: p.fromName,
+            peerUsername: p.fromUsername,
+          }
+        })
+        setCall((prev) =>
+          prev && prev.id === p.from
+            ? {
+                ...prev,
+                ringId: p.callId || prev.ringId,
+                remoteOfferSdp: p.sdp,
+                peerName: p.fromName || prev.peerName,
+                peerUsername: p.fromUsername || prev.peerUsername,
+              }
+            : prev,
+        )
       }
     }
-    tick()
-    const id = setInterval(tick, 2500)
-    return () => {
-      alive = false
-      clearInterval(id)
-    }
-  }, [stage, call])
+    window.addEventListener('sc:rt-call', onCall)
+    return () => window.removeEventListener('sc:rt-call', onCall)
+  }, [stage, me])
 
   /** Device session helpers — localStorage is the source of truth for "has logged in on this device" */
   const readDeviceSession = () => {
@@ -161,31 +191,19 @@ function Shell() {
     return `${countryCode}${local}`.replace(/[^+\d]/g, '')
   }
 
+  /** Phone only — no OTP. Continue straight to profile details. */
   const afterPhone = async (phone: string, countryCode: string) => {
     setSubmitting(true)
     try {
       const phoneNumber = buildPhoneNumber(phone, countryCode)
-      const response = await api.sendPhoneCode(phoneNumber)
       setPendingReg({ phone, countryCode, phoneNumber })
-      setDevelopmentCode(response.development_code || null)
-      setStage('verify')
+      // No verification for now — empty token; backend ignores extra fields
+      setRegistrationToken('')
+      setDevelopmentCode(null)
+      setStage('profile')
     } finally {
       setSubmitting(false)
     }
-  }
-
-  const verifyPhone = async (code: string) => {
-    if (!pendingReg) throw new Error('Enter your phone number again.')
-    const response = await api.verifyPhoneCode(pendingReg.phoneNumber, code)
-    setRegistrationToken(response.registration_token)
-    setStage('profile')
-  }
-
-  const resendPhoneCode = async () => {
-    if (!pendingReg) throw new Error('Enter your phone number again.')
-    const response = await api.sendPhoneCode(pendingReg.phoneNumber)
-    setDevelopmentCode(response.development_code || null)
-    return response.development_code || null
   }
 
   const goApp = () => {
@@ -252,22 +270,12 @@ function Shell() {
             <Signup loading={submitting} onSubmit={afterPhone} onLogin={() => setStage('login')} onBack={() => setStage('welcome')} />
           )}
           {stage === 'loading' && <Loading />}
-          {stage === 'verify' && pendingReg && (
-            <VerifyPhone
-              phoneNumber={pendingReg.phoneNumber}
-              developmentCode={developmentCode}
-              onVerify={verifyPhone}
-              onResend={resendPhoneCode}
-              onBack={() => setStage('signup')}
-              onEditNumber={() => setStage('signup')}
-            />
-          )}
           {stage === 'profile' && pendingReg && (
             <Profile
               phone={pendingReg.phone}
               countryCode={pendingReg.countryCode}
-              registrationToken={registrationToken}
-              onBack={() => setStage('verify')}
+              registrationToken={registrationToken || 'dev-skip-verify'}
+              onBack={() => setStage('signup')}
               onSubmitStart={() => {
                 setDonePhase('setup')
                 setDoneError('')
@@ -337,7 +345,7 @@ function Shell() {
             />
           </div>
           {!chat && !group && !call && !overlay && !statusUser && (
-            <BottomNav tab={tab} onChange={setTab} />
+            <BottomNav tab={tab} onChange={setTab} badges={{ chats: chatUnread, groups: groupUnread }} />
           )}
         </div>
 
@@ -348,6 +356,7 @@ function Shell() {
               contactId={chat}
               onBack={() => setChat(null)}
               onCall={(kind) => placeCall(chat, kind)}
+              onOpenCalls={() => { setChat(null); setTab('calls') }}
             />
           </div>
         )}
@@ -456,7 +465,14 @@ function Shell() {
 
         {statusUser && (
           <div className="absolute inset-0 z-[28]">
-            <StatusViewer userId={statusUser} onClose={() => setStatusUser(null)} />
+            <StatusViewer
+              userId={statusUser}
+              onClose={() => setStatusUser(null)}
+              onReplyToStatus={(peerId) => {
+                setStatusUser(null)
+                setChat(peerId)
+              }}
+            />
           </div>
         )}
 
@@ -467,6 +483,9 @@ function Shell() {
               contactId={call.id}
               kind={call.kind}
               ringId={call.ringId}
+              remoteOfferSdp={call.remoteOfferSdp}
+              peerName={call.peerName}
+              peerUsername={call.peerUsername}
               onEnd={() => setCall(null)}
             />
           </div>
@@ -476,27 +495,33 @@ function Shell() {
           <IncomingCall
             contactId={incoming.id}
             kind={incoming.kind}
+            peerName={(incoming as any).peerName}
+            peerUsername={(incoming as any).peerUsername}
             onDecline={async () => {
-              if (incoming.ringId) {
-                try {
-                  const { api } = await import('./api')
-                  await api.answerRing(incoming.ringId, 'declined')
-                } catch {
-                  /* */
+              try {
+                const { wsCall, isRealtimeOpen } = await import('./realtime')
+                if (isRealtimeOpen() && incoming.ringId) {
+                  wsCall({
+                    a: 'hangup',
+                    to: incoming.id,
+                    callId: incoming.ringId,
+                    reason: 'declined',
+                  })
                 }
+              } catch {
+                /* */
               }
               setIncoming(null)
             }}
             onAccept={async () => {
-              if (incoming.ringId) {
-                try {
-                  const { api } = await import('./api')
-                  await api.answerRing(incoming.ringId, 'accepted')
-                } catch {
-                  /* */
-                }
-              }
-              setCall({ id: incoming.id, kind: incoming.kind, ringId: incoming.ringId })
+              setCall({
+                id: incoming.id,
+                kind: incoming.kind,
+                ringId: incoming.ringId,
+                remoteOfferSdp: (incoming as any).remoteOfferSdp,
+                peerName: (incoming as any).peerName,
+                peerUsername: (incoming as any).peerUsername,
+              })
               setIncoming(null)
             }}
           />

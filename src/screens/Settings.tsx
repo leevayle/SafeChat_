@@ -37,6 +37,7 @@ export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: (
   const [confirm, setConfirm] = useState<'logout' | 'delete' | null>(null)
   const [blockedOpen, setBlockedOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [savingProfile, setSavingProfile] = useState(false)
   const [draft, setDraft] = useState({ name: s.name, username: s.username, bio: s.bio })
   const file = useRef<HTMLInputElement>(null)
 
@@ -157,15 +158,33 @@ export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: (
         <label className="mb-5 block text-sm font-extrabold text-gray-500">Bio
           <textarea value={draft.bio} maxLength={80} rows={2} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} className="mt-1.5 w-full resize-none rounded-3xl bg-gray-100 px-5 py-3 text-base font-semibold text-ink outline-none focus:ring-4 focus:ring-brand-purple/25" />
         </label>
-        <PrimaryButton disabled={draft.name.trim().length < 2 || draft.username.length < 3} onClick={async () => {
-          try {
-            await saveProfile({ name: draft.name.trim(), username: draft.username.trim().toLowerCase(), bio: draft.bio, photo: s.photo })
-            setEdit(false)
-            setToast('Profile updated')
-          } catch (error) {
-            setToast(error instanceof Error ? error.message : 'Could not update profile')
-          }
-        }}>Save changes</PrimaryButton>
+        <PrimaryButton
+          disabled={savingProfile || draft.name.trim().length < 2 || draft.username.length < 3}
+          onClick={async () => {
+            if (savingProfile) return
+            setSavingProfile(true)
+            try {
+              await saveProfile({
+                name: draft.name.trim(),
+                username: draft.username.trim().toLowerCase(),
+                bio: draft.bio,
+                photo: s.photo,
+              })
+              setEdit(false)
+              setToast('Profile updated')
+            } catch (error) {
+              setToast(
+                error instanceof Error
+                  ? error.message
+                  : 'An error occurred. Try again later.',
+              )
+            } finally {
+              setSavingProfile(false)
+            }
+          }}
+        >
+          {savingProfile ? 'Updating…' : 'Save changes'}
+        </PrimaryButton>
       </Sheet>
 
       <Sheet open={blockedOpen} onClose={() => setBlockedOpen(false)} title="Blocked contacts">

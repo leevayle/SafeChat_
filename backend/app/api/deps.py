@@ -1,9 +1,9 @@
 """FastAPI dependencies for authentication and authorization."""
 from typing import Optional
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.services.auth_service import AuthService
-from app.core.exceptions import UnauthorizedError, AccountRestrictedError, ForbiddenError
+from app.core.exceptions import UnauthorizedError, ForbiddenError
 from app.core.permissions import has_min_role, Role, has_permission, Permission
 
 security = HTTPBearer(auto_error=False)
@@ -14,19 +14,8 @@ async def get_current_user(
 ) -> dict:
     if not credentials or not credentials.credentials:
         raise UnauthorizedError("Authentication required")
-    try:
-        user = await AuthService.get_user_from_access_token(credentials.credentials)
-        return user
-    except (UnauthorizedError, AccountRestrictedError) as e:
-        raise HTTPException(
-            status_code=e.status_code,
-            detail={
-                "success": False,
-                "message": e.message,
-                "error_code": e.error_code,
-                "details": e.details,
-            },
-        )
+    # AppException subclasses bubble to the global handler (correct status + body)
+    return await AuthService.get_user_from_access_token(credentials.credentials)
 
 
 async def get_current_active_user(

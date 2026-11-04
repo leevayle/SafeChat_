@@ -87,6 +87,11 @@ export function Profile({ phone, countryCode, registrationToken, onBack, onSubmi
         'Could not create account. Check your details and try again.'
       setError(msg)
       setBusy(false)
+      if (/username.*taken|already taken|already registered/i.test(msg)) {
+        setUsernameStatus('taken')
+        // Stay on this form so the user can pick another username
+        return
+      }
       onError?.(msg)
     }
   }
@@ -122,7 +127,7 @@ export function Profile({ phone, countryCode, registrationToken, onBack, onSubmi
             </svg>
           </div>
         )}
-        <ProgressDots step={4} total={4} />
+        <ProgressDots step={2} total={3} />
       </div>
 
       <motion.h2
@@ -136,7 +141,7 @@ export function Profile({ phone, countryCode, registrationToken, onBack, onSubmi
         <span className="text-brand-red">yourself!</span>
       </motion.h2>
       <p className="mt-1.5 text-sm font-semibold text-gray-500">
-        Your phone is verified. Choose a username so people can find you without sharing your number.
+        Choose a unique username so friends can find you. You can add a photo and bio now or later.
       </p>
 
       <div className="mt-6 flex justify-center">
@@ -167,11 +172,19 @@ export function Profile({ phone, countryCode, registrationToken, onBack, onSubmi
               value={username}
               onChange={(e) => { setUsername(e.target.value.replace(/[^a-zA-Z0-9_]/g, '').toLowerCase()); setUsernameStatus('idle') }}
               onBlur={async () => {
-                const value = username.trim().toLowerCase()
-                if (value.length < 3) return
+                const value = username.trim().toLowerCase().replace(/^@/, '')
+                if (value.length < 3) {
+                  setUsernameStatus('idle')
+                  return
+                }
                 setUsernameStatus('checking')
-                try { const result = await api.checkUsername(value); setUsernameStatus(result.available ? 'available' : 'taken') }
-                catch { setUsernameStatus('idle') }
+                try {
+                  const result = await api.checkUsername(value)
+                  setUsernameStatus(result.available ? 'available' : 'taken')
+                } catch {
+                  // If check endpoint is down, do not block signup — server still validates
+                  setUsernameStatus('idle')
+                }
               }}
               placeholder="yourname"
               maxLength={32}

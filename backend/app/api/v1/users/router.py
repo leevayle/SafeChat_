@@ -1,32 +1,41 @@
 """User profile endpoints."""
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, field_validator
-import re
+from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 from bson import ObjectId
 from datetime import datetime, timezone
 from app.api.deps import get_current_user
 from app.core.database import get_database
-from app.core.exceptions import success_response, NotFoundError, ValidationError, ConflictError
+from app.core.exceptions import success_response, NotFoundError, ValidationError
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
 
+@router.get("/presence/{user_id}")
+async def user_presence(user_id: str, user: dict = Depends(get_current_user)):
+    """Online flag (live WS) + last_seen timestamp."""
+    from app.websocket.manager import manager
+    db = get_database()
+    online = manager.is_online(user_id)
+    last_seen = None
+    if ObjectId.is_valid(user_id):
+        doc = await db.users.find_one({"_id": ObjectId(user_id)}, {"last_seen": 1})
+        if doc and doc.get("last_seen"):
+            ls = doc["last_seen"]
+            last_seen = ls.isoformat() if hasattr(ls, "isoformat") else str(ls)
+            if isinstance(last_seen, str) and "T" in last_seen and not last_seen.endswith("Z") and "+" not in last_seen[10:]:
+                last_seen = last_seen + "Z"
+    return success_response(
+        "Presence",
+        {"user_id": user_id, "online": online, "last_seen": last_seen},
+    )
+
+
+
 class ProfileUpdate(BaseModel):
     display_name: Optional[str] = Field(None, min_length=1, max_length=64)
-    username: Optional[str] = Field(None, min_length=3, max_length=32)
     bio: Optional[str] = Field(None, max_length=256)
     profile_photo: Optional[str] = None
-
-    @field_validator('username')
-    @classmethod
-    def validate_username(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return value
-        value = value.strip().lower()
-        if not re.fullmatch(r'[a-z0-9_]{3,32}', value):
-            raise ValueError('Username must be 3-32 chars, lowercase letters, numbers, underscores only')
-        return value
 
 
 class PrivacySettingsUpdate(BaseModel):
@@ -80,15 +89,8 @@ async def update_my_profile(
     }
     if not updates:
         return success_response("Nothing to update")
-    db = get_database()
-    if 'username' in updates:
-        existing = await db.users.find_one({
-            'username': updates['username'],
-            '_id': {'$ne': ObjectId(user['id'])},
-        })
-        if existing:
-            raise ConflictError('That username is already taken')
     updates["updated_at"] = datetime.now(timezone.utc)
+    db = get_database()
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": updates})
     await db.user_activity_logs.insert_one(
         {

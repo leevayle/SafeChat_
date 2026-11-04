@@ -14,6 +14,7 @@ export type ApiUser = {
   bio: string
   photo: string | null
   online: boolean
+  lastSeen?: string | null
   hue: [string, string]
   createdAt?: string
   email?: string | null
@@ -32,6 +33,7 @@ export type ApiContact = {
   note: string
   photo: string | null
   online: boolean
+  lastSeen?: string | null
   hue: [string, string]
   pinned?: boolean
   favourite?: boolean
@@ -41,6 +43,8 @@ export type ApiContact = {
 
 export type ApiMsg = {
   id: string
+  /** Stable UI key so optimistic → server id swap does not remount/re-animate the bubble */
+  clientKey?: string
   from: string
   to: string
   text: string
@@ -52,6 +56,17 @@ export type ApiMsg = {
   conversationId?: string
   messageType?: string
   edited?: boolean
+  replyToId?: string | null
+  replyToText?: string | null
+  /** Encoded status reply preview */
+  statusReply?: { preview: string; time?: string } | null
+  /** Inline call log row in chat */
+  callLog?: {
+    kind: 'audio' | 'video'
+    direction: string
+    status: string
+    duration?: string
+  } | null
 }
 
 export type ChatPreview = {
@@ -91,7 +106,35 @@ function refreshToken() {
   return localStorage.getItem('sc_refresh') || ''
 }
 
+/** True when an access token is present (does not validate server-side). */
+export function hasAccessToken(): boolean {
+  return !!accessToken()
+}
+
+/** Set after a permanent 401 so callers stop firing protected requests. */
+let sessionDead = false
+
+export function isSessionDead(): boolean {
+  return sessionDead
+}
+
+export function markSessionAlive() {
+  sessionDead = false
+}
+
+export function markSessionDead() {
+  if (sessionDead) return
+  sessionDead = true
+  clearSession()
+  try {
+    window.dispatchEvent(new CustomEvent('sc:auth-failed'))
+  } catch {
+    /* ignore */
+  }
+}
+
 export function setSession(access: string, refresh: string, user: ApiUser) {
+  sessionDead = false
   localStorage.setItem('sc_access', access)
   localStorage.setItem('sc_refresh', refresh)
   localStorage.setItem('sc_token', access)
@@ -107,6 +150,16 @@ export function clearSession() {
   localStorage.removeItem('sc_refresh')
   localStorage.removeItem('sc_token')
   localStorage.removeItem('sc_user')
+}
+
+function isPublicAuthPath(path: string) {
+  return (
+    path.includes('/auth/login') ||
+    path.includes('/auth/register') ||
+    path.includes('/auth/refresh') ||
+    path.includes('/auth/phone/') ||
+    path.includes('/auth/username/')
+  )
 }
 
 export function getStoredUser(): ApiUser | null {
@@ -129,6 +182,7 @@ function mapUser(u: any): ApiUser {
     bio: u.bio || '',
     photo: u.profile_photo ?? u.photo ?? null,
     online: !!u.online,
+    lastSeen: u.last_seen || u.lastSeen || null,
     hue: hueFor(id || u.username || 'x'),
     createdAt: u.created_at || u.createdAt,
     email: u.email,
@@ -150,18 +204,23 @@ function mapContact(c: any): ApiContact {
     note: c.note || '',
     photo: c.profile_photo ?? c.photo ?? null,
     online: !!c.online,
+    lastSeen: c.last_seen || c.lastSeen || null,
     hue: hueFor(peerId || c.username || 'x'),
     createdAt: c.created_at,
   }
 }
 
 function mapMessage(m: any, meId?: string): ApiMsg {
-  const created = m.created_at || m.time || ''
+  let created = String(m.created_at || m.time || '')
+  // Treat naive backend timestamps as UTC
+  if (created && /^\d{4}-\d{2}-\d{2}T/.test(created) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(created)) {
+    created = created + 'Z'
+  }
   let timeLabel = ''
   try {
     const d = new Date(created)
     if (!isNaN(d.getTime())) {
-      timeLabel = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      timeLabel = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
     }
   } catch { /* */ }
   const from = String(m.sender_id || m.from || '')
@@ -173,11 +232,18 @@ function mapMessage(m: any, meId?: string): ApiMsg {
     null
   let state: ApiMsg['state'] = (m.delivery_status as any) || 'sent'
   if (state !== 'sent' && state !== 'delivered' && state !== 'read') state = 'sent'
+  let text = String(m.content ?? m.text ?? '')
+  let statusReply: ApiMsg['statusReply'] = null
+  const sr = text.match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)⟦\/⟧([\s\S]*)$/)
+  if (sr) {
+    statusReply = { preview: sr[1], time: sr[2] || undefined }
+    text = sr[3]
+  }
   return {
     id: String(m.id || m._id),
     from,
     to: String(m.to || ''),
-    text: m.content ?? m.text ?? '',
+    text,
     image,
     time: created,
     timeLabel,
@@ -186,6 +252,9 @@ function mapMessage(m: any, meId?: string): ApiMsg {
     conversationId: m.conversation_id,
     messageType: m.message_type,
     edited: !!m.edited,
+    replyToId: m.reply_to_message_id || m.replyToId || null,
+    replyToText: m.reply_to_text || m.replyToText || null,
+    statusReply: statusReply || m.status_reply || null,
   }
 }
 
@@ -288,6 +357,7 @@ async function tryRefresh(): Promise<boolean> {
       localStorage.setItem('sc_access', (data as any).access_token)
       localStorage.setItem('sc_token', (data as any).access_token)
       if ((data as any).refresh_token) localStorage.setItem('sc_refresh', (data as any).refresh_token)
+      sessionDead = false
       return true
     }
   } catch { /* */ }
@@ -295,6 +365,22 @@ async function tryRefresh(): Promise<boolean> {
 }
 
 async function req<T = any>(path: string, opts: RequestInit = {}, retried = false): Promise<T> {
+  const publicPath = isPublicAuthPath(path)
+
+  // Hard stop: dead session or missing token → never hit the network for protected routes
+  if (!publicPath) {
+    if (sessionDead) {
+      const err = new Error('Unauthorized')
+      ;(err as any).status = 401
+      throw err
+    }
+    if (!accessToken()) {
+      const err = new Error('Unauthorized')
+      ;(err as any).status = 401
+      throw err
+    }
+  }
+
   const headers: Record<string, string> = {
     ...(opts.headers as Record<string, string>),
   }
@@ -307,14 +393,23 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
   const res = await fetch(`${BASE}${path}`, { ...opts, headers })
   const body: BackendEnvelope = await res.json().catch(() => ({} as BackendEnvelope))
 
-  if (res.status === 401 && !retried && !path.includes('/auth/login') && !path.includes('/auth/register')) {
-    const ok = await tryRefresh()
-    if (ok) return req(path, opts, true)
+  if (res.status === 401 && !publicPath) {
+    if (!retried) {
+      const ok = await tryRefresh()
+      if (ok) return req(path, opts, true)
+    }
+    // Refresh failed or already retried → kill session so polls stop
+    markSessionDead()
+    const err = new Error(body.message || 'Unauthorized')
+    ;(err as any).status = 401
+    throw err
   }
 
   if (!res.ok || body.success === false) {
     const msg = body.message || (body as any).error || res.statusText || 'Request failed'
-    throw new Error(msg)
+    const err = new Error(msg)
+    ;(err as any).status = res.status
+    throw err
   }
   return (body.data !== undefined ? body.data : body) as T
 }
@@ -329,7 +424,12 @@ export const api = {
       .then((r) => r.json())
       .then((j) => ({ ok: j.status === 'ok' || j.status === 'alive' })),
 
-  checkUsername: (username: string) => req<any>(`/api/v1/auth/username/check?username=${encodeURIComponent(username)}`),
+  checkUsername: async (username: string) => {
+    const data = await req<any>(`/api/v1/auth/username/check?username=${encodeURIComponent(username)}`)
+    // support { available } or nested
+    const available = data?.available ?? data?.data?.available ?? false
+    return { available: !!available }
+  },
 
   sendPhoneCode: (phone_number: string) => req<any>('/api/v1/auth/phone/send-code', {
     method: 'POST', body: JSON.stringify({ phone_number }),
@@ -344,22 +444,41 @@ export const api = {
     display_name: string
     password: string
     phone_number: string
-    registration_token: string
+    registration_token?: string
     email?: string
+    profile_photo?: string | null
+    bio?: string
   }) => {
+    const payload: Record<string, unknown> = {
+      username: body.username,
+      display_name: body.display_name,
+      password: body.password,
+      phone_number: body.phone_number,
+    }
+    if (body.email) payload.email = body.email
+    if (body.bio) payload.bio = body.bio
+    if (body.profile_photo) payload.profile_photo = body.profile_photo
     return req<any>('/api/v1/auth/register', {
-      method: 'POST', body: JSON.stringify(body),
+      method: 'POST',
+      body: JSON.stringify(payload),
     })
   },
 
-  login: async (body: { phone_number: string; password: string; device_name?: string }) => {
+  login: async (body: {
+    phone_number?: string
+    username?: string
+    password: string
+    device_name?: string
+  }) => {
+    const payload: Record<string, unknown> = {
+      password: body.password,
+      device_name: body.device_name || 'Web',
+    }
+    if (body.username) payload.username = body.username
+    if (body.phone_number) payload.phone_number = body.phone_number
     const data = await req<any>('/api/v1/auth/login', {
       method: 'POST',
-      body: JSON.stringify({
-        phone_number: body.phone_number,
-        password: body.password,
-        device_name: body.device_name || 'Web',
-      }),
+      body: JSON.stringify(payload),
     })
     const user = mapUser(data.user || data)
     return {
@@ -550,13 +669,26 @@ export const api = {
     return { messages: list.map((m: any) => mapMessage(m, mid)) }
   },
 
-  send: async (conversationId: string, text: string, image?: string | null) => {
+  send: async (
+    conversationId: string,
+    text: string,
+    image?: string | null,
+    opts?: { replyToId?: string; statusReply?: { preview: string; time?: string } },
+  ) => {
+    let content = text || (image ? '' : '')
+    if (opts?.statusReply) {
+      // Encode status reply so peers can render the tag without schema changes
+      content = `⟦status⟧${opts.statusReply.preview || ''}⟦t⟧${opts.statusReply.time || ''}⟦/⟧${content}`
+    }
     const payload: Record<string, unknown> = {
-      content: text || (image ? '' : ''),
+      content,
       message_type: image ? 'image' : 'text',
     }
     if (image) {
       payload.media_attachments = [{ type: 'image', url: image }]
+    }
+    if (opts?.replyToId) {
+      payload.reply_to_message_id = opts.replyToId
     }
     const msg = await req<any>(`/api/v1/messages/conversations/${conversationId}`, {
       method: 'POST',
@@ -567,6 +699,12 @@ export const api = {
 
   markRead: async (conversationId: string) => {
     await req(`/api/v1/messages/conversations/${conversationId}/read`, { method: 'POST' })
+    return { ok: true }
+  },
+
+  /** Fire-and-forget friendly: peer had the payload ready to paint */
+  markDelivered: async (messageId: string) => {
+    await req(`/api/v1/messages/${messageId}/delivered`, { method: 'POST' })
     return { ok: true }
   },
 
@@ -679,14 +817,90 @@ export const api = {
         name: v.display_name || v.username || 'User',
         photo: v.profile_photo ?? null,
         viewedAt: v.viewed_at || null,
+        liked: !!v.liked,
       })),
     }
   },
 
-  calls: async () => ({ calls: [] as any[] }),
-  logCall: async (_body: any) => ({ call: null }),
-  setTyping: async (_contactId: string) => ({}),
+  likeStatus: async (id: string) => {
+    return req<any>(`/api/v1/statuses/${id}/like`, { method: 'POST' })
+  },
+
+  calls: async () => {
+    const data = await req<any>('/api/v1/calls')
+    const list = data?.calls || data || []
+    return {
+      calls: (Array.isArray(list) ? list : []).map((c: any) => ({
+        id: String(c.id || c._id),
+        contactId: String(c.contactId || c.peer_id || ''),
+        name: c.name || c.username || 'Unknown',
+        username: c.username || '',
+        phone: c.show_phone || c.phone ? (c.phone || '') : '',
+        showPhone: !!(c.show_phone || c.phone),
+        photo: c.photo || null,
+        kind: c.kind === 'video' ? 'video' : 'audio',
+        direction: c.direction || 'out',
+        status: c.status || 'completed',
+        duration: c.duration_seconds
+          ? `${Math.floor(c.duration_seconds / 60)}:${String(c.duration_seconds % 60).padStart(2, '0')}`
+          : '0:00',
+        duration_seconds: c.duration_seconds || 0,
+        time: (() => {
+          const iso = c.created_at || c.time
+          if (!iso) return ''
+          let s = String(iso)
+          if (/^\d{4}-\d{2}-\d{2}T/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z'
+          const d = new Date(s)
+          if (Number.isNaN(d.getTime())) return ''
+          const now = new Date()
+          const sameDay = d.toDateString() === now.toDateString()
+          if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+          return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+        })(),
+        ago: c.created_at || c.time,
+      })),
+    }
+  },
+  logCall: async (body: {
+    peer_id: string
+    kind: 'audio' | 'video' | string
+    direction?: string
+    status?: string
+    duration_seconds?: number
+    call_id?: string
+  }) => {
+    return req<any>('/api/v1/calls', {
+      method: 'POST',
+      body: JSON.stringify({
+        peer_id: body.peer_id,
+        kind: body.kind === 'video' ? 'video' : 'audio',
+        direction: body.direction || 'out',
+        status: body.status || 'completed',
+        duration_seconds: body.duration_seconds || 0,
+        call_id: body.call_id,
+      }),
+    })
+  },
+  setTyping: async (contactId: string) => {
+    try {
+      const { wsTyping } = await import('./realtime')
+      wsTyping(contactId, true)
+    } catch { /* */ }
+    return {}
+  },
   getTyping: async (_contactId: string) => ({ typing: false }),
+  /** Lightweight presence for a user id */
+  presence: async (userId: string) => {
+    try {
+      const data = await req<any>(`/api/v1/users/presence/${encodeURIComponent(userId)}`)
+      return {
+        online: !!data?.online,
+        lastSeen: data?.last_seen || data?.lastSeen || null,
+      }
+    } catch {
+      return { online: false, lastSeen: null }
+    }
+  },
   ring: async (_to: string, _kind: 'audio' | 'video') => ({ ring: null }),
   incomingRings: async () => ({ incoming: [] as any[] }),
   answerRing: async (_id: string, _status: 'accepted' | 'declined') => ({}),

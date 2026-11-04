@@ -1,6 +1,6 @@
 """Auth request/response schemas."""
 from typing import Optional
-from pydantic import BaseModel, Field, EmailStr, field_validator
+from pydantic import BaseModel, Field, EmailStr, field_validator, model_validator
 import re
 
 
@@ -9,8 +9,9 @@ class RegisterRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=8, max_length=128)
     email: Optional[EmailStr] = None
-    phone_number: str = Field(..., min_length=8, max_length=16)
-    registration_token: str = Field(..., min_length=20)
+    phone_number: Optional[str] = None
+    profile_photo: Optional[str] = None
+    bio: Optional[str] = None
 
     @field_validator("username")
     @classmethod
@@ -31,18 +32,18 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
+    """Accept username or phone_number (E.164) plus password."""
     username: Optional[str] = None
     phone_number: Optional[str] = None
     password: str
     device_id: Optional[str] = None
     device_name: Optional[str] = None
 
-
-class TokenResponse(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-    expires_in: int
+    @model_validator(mode="after")
+    def need_identity(self):
+        if not (self.username or self.phone_number):
+            raise ValueError("username or phone_number is required")
+        return self
 
 
 class RefreshRequest(BaseModel):
@@ -63,19 +64,3 @@ class UserPublic(BaseModel):
     account_role: str
     account_status: str
     last_seen: Optional[str] = None
-
-
-class PhoneCodeRequest(BaseModel):
-    phone_number: str = Field(..., min_length=8, max_length=16)
-
-
-class PhoneVerifyRequest(BaseModel):
-    phone_number: str = Field(..., min_length=8, max_length=16)
-    code: str = Field(..., min_length=6, max_length=6)
-
-    @field_validator("code")
-    @classmethod
-    def code_digits(cls, value: str) -> str:
-        if not value.isdigit():
-            raise ValueError("Verification code must contain six digits")
-        return value

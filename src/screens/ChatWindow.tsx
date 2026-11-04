@@ -2,10 +2,12 @@ import { useEffect, useRef, useState, memo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowLeft, Phone, Video, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
-import { api, type ApiMsg } from '../api'
+import { api, hasAccessToken, type ApiMsg } from '../api'
+import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
+import { isRealtimeOpen, wsSendMessage, wsReceipt } from '../realtime'
 import { FONT_SIZES, WALLPAPERS, useStore } from '../store'
 
-type Props = { contactId: string; onBack: () => void; onCall: (kind: 'audio' | 'video') => void }
+type Props = { contactId: string; onBack: () => void; onCall: (kind: 'audio' | 'video') => void; onOpenCalls?: () => void }
 
 const EMOJIS = [
   '😀','😁','😂','🤣','😃','😄','😅','😆','😉','😊','😋','😎','😍','😘','🥰','😗','😙','😚',
@@ -37,8 +39,228 @@ function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
-function ChatWindowInner({ contactId, onBack, onCall }: Props) {
-  const { settings, contacts, chats, me, refreshChats, showToast, upsertChatPreview } = useStore()
+const STATE_RANK: Record<string, number> = {
+  pending: 0,
+  failed: 0,
+  sent: 1,
+  delivered: 2,
+  read: 3,
+}
+
+function rankState(s?: string) {
+  return STATE_RANK[s || ''] ?? 0
+}
+
+function sameMsgList(a: ApiMsg[], b: ApiMsg[]) {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]
+    const y = b[i]
+    if (
+      x.id !== y.id ||
+      x.clientKey !== y.clientKey ||
+      x.state !== y.state ||
+      x.text !== y.text ||
+      x.image !== y.image ||
+      x.mine !== y.mine
+    )
+      return false
+  }
+  return true
+}
+
+/** Receipt ticks only — isolated so state changes never re-animate the bubble */
+const ReceiptTicks = memo(function ReceiptTicks({
+  state,
+  readReceipts,
+  mine,
+}: {
+  state?: ApiMsg['state']
+  readReceipts: boolean
+  mine: boolean
+}) {
+  if (!mine) return null
+  if (state === 'pending') {
+    return <Clock size={13} strokeWidth={2.5} className="opacity-80" aria-label="Sending" />
+  }
+  if (state === 'failed') {
+    return (
+      <RotateCcw
+        size={13}
+        strokeWidth={2.5}
+        className="text-red-200"
+        aria-label="Failed — tap to retry"
+      />
+    )
+  }
+  if (state === 'sent') {
+    return <Check size={14} strokeWidth={2.5} aria-label="Sent" />
+  }
+  if (state === 'delivered') {
+    return <CheckCheck size={14} strokeWidth={2.5} className="opacity-90" aria-label="Delivered" />
+  }
+  return (
+    <CheckCheck
+      size={14}
+      strokeWidth={2.5}
+      className={readReceipts ? 'text-sky-300' : 'opacity-90'}
+      aria-label="Read"
+    />
+  )
+})
+
+type BubbleProps = {
+  m: ApiMsg
+  mine: boolean
+  readReceipts: boolean
+  animateIn: boolean
+  onRetry: (m: ApiMsg) => void
+  onReply?: (m: ApiMsg) => void
+  onOpenCalls?: () => void
+  onJumpTo?: (id: string) => void
+}
+
+/** One mount animation only; later receipt updates re-render ticks in place */
+const MessageBubble = memo(function MessageBubble({
+  m,
+  mine,
+  readReceipts,
+  animateIn,
+  onRetry,
+  onReply,
+  onOpenCalls,
+  onJumpTo,
+}: BubbleProps) {
+  const startX = useRef(0)
+  const startY = useRef(0)
+  const [dx, setDx] = useState(0)
+
+  if (m.callLog) {
+    const label =
+      m.callLog.status === 'missed'
+        ? 'Missed call'
+        : m.callLog.direction === 'in'
+          ? 'Incoming call'
+          : 'Outgoing call'
+    const detail = [
+      m.callLog.kind === 'video' ? 'Video' : 'Voice',
+      m.callLog.duration,
+      m.timeLabel,
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    return (
+      <div className="flex justify-center py-1">
+        <button
+          type="button"
+          onClick={() => onOpenCalls?.()}
+          className="flex items-center gap-2 rounded-full bg-gray-100 px-3.5 py-1.5 text-[12px] font-bold text-gray-600 ring-1 ring-gray-200/80"
+        >
+          <span>{label}</span>
+          <span className="text-gray-400">·</span>
+          <span>{detail}</span>
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <motion.div
+      initial={animateIn ? { opacity: 0, y: 16, scale: 0.92 } : false}
+      animate={{ opacity: 1, y: 0, scale: 1, x: dx }}
+      transition={animateIn ? { type: 'spring', stiffness: 380, damping: 30 } : { duration: 0 }}
+      style={{ touchAction: 'pan-y' }}
+      onTouchStart={(e) => {
+        startX.current = e.touches[0].clientX
+        startY.current = e.touches[0].clientY
+      }}
+      onTouchMove={(e) => {
+        const d = e.touches[0].clientX - startX.current
+        const dy = Math.abs(e.touches[0].clientY - startY.current)
+        if (d > 8 && d > dy * 1.2) {
+          // horizontal reply gesture — don't fight vertical scroll
+          setDx(Math.min(56, d * 0.4))
+        }
+      }}
+      onTouchEnd={() => {
+        if (dx > 28) onReply?.(m)
+        setDx(0)
+      }}
+      className={`flex ${mine ? 'justify-end' : 'justify-start'}`}
+    >
+      <div
+        role={mine && m.state === 'failed' ? 'button' : undefined}
+        tabIndex={mine && m.state === 'failed' ? 0 : undefined}
+        onClick={() => {
+          if (mine && m.state === 'failed') onRetry(m)
+        }}
+        className={`max-w-[78%] overflow-hidden shadow-sm ${
+          mine
+            ? 'rounded-3xl rounded-br-md bg-gradient-to-br from-brand-magenta to-brand-purple text-white'
+            : 'rounded-3xl rounded-bl-md bg-white text-ink'
+        } ${mine && m.state === 'failed' ? 'ring-2 ring-red-300/80' : ''}`}
+      >
+        {m.statusReply && (
+          <button
+            type="button"
+            className={`mx-2 mt-2 w-[calc(100%-1rem)] rounded-xl px-3 py-1.5 text-left text-[12px] font-semibold ${
+              mine ? 'bg-white/15 text-white/90' : 'bg-gray-100 text-gray-600'
+            }`}
+          >
+            <span className="block text-[10px] font-black uppercase tracking-wide opacity-70">Status</span>
+            <span className="line-clamp-2">{m.statusReply.preview}</span>
+            {m.statusReply.time ? (
+              <span className="mt-0.5 block text-[10px] opacity-60">{m.statusReply.time}</span>
+            ) : null}
+          </button>
+        )}
+        {(m.replyToId || m.replyToText) && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              if (m.replyToId) onJumpTo?.(m.replyToId)
+            }}
+            className={`mx-2 mt-2 flex w-[calc(100%-1rem)] gap-2 rounded-xl border-l-4 px-2.5 py-1.5 text-left text-[12px] font-semibold ${
+              mine
+                ? 'border-white/70 bg-white/15 text-white/90'
+                : 'border-brand-purple bg-gray-50 text-gray-600'
+            }`}
+          >
+            <span className="line-clamp-2">{m.replyToText || 'Original message'}</span>
+          </button>
+        )}
+        {m.image && (
+          <img
+            src={mediaUrl(m.image)}
+            alt=""
+            className="max-h-56 w-full object-cover"
+            loading="lazy"
+          />
+        )}
+        {m.text && m.text !== '📷 Photo' && (
+          <p className="px-4 pt-2.5 font-semibold leading-snug">{m.text}</p>
+        )}
+        <p
+          className={`flex items-center justify-end gap-1 px-4 pb-2 pt-1 text-[11px] font-bold ${
+            mine ? 'text-white/75' : 'text-gray-400'
+          }`}
+        >
+          {m.timeLabel ||
+            new Date(m.time).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            })}
+          <ReceiptTicks state={m.state} readReceipts={readReceipts} mine={mine} />
+        </p>
+      </div>
+    </motion.div>
+  )
+})
+
+function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
+  const { settings, contacts, chats, me, showToast, upsertChatPreview } = useStore()
   // Resolve peer from contacts, or from an existing chat preview (notifications may pass contactId)
   const chatPreview =
     chats.find(
@@ -82,10 +304,17 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
   const [emoji, setEmoji] = useState(false)
   const [loading, setLoading] = useState(true)
   const [pendingImage, setPendingImage] = useState<string | null>(null)
+  const [replyTo, setReplyTo] = useState<ApiMsg | null>(null)
+  const [profileOpen, setProfileOpen] = useState(false)
+  const [peerOnline, setPeerOnline] = useState(false)
+  const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null)
+  const [statusReply, setStatusReply] = useState<{ preview: string; time?: string } | null>(null)
+  const msgRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const end = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const convRef = useRef<string | null>(knownConv)
   const ensurePromise = useRef<Promise<string | null> | null>(null)
+  const animatedKeys = useRef<Set<string>>(new Set())
   convRef.current = conversationId
 
   const ensureConversation = async (): Promise<string | null> => {
@@ -143,12 +372,62 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
       const cid = await ensureConversation()
       if (!cid) return
       const { messages } = await api.messages(cid)
+      // Incoming messages we just pulled: ack delivered before/while painting (no await)
+      for (const m of messages) {
+        const mine = m.mine ?? m.from === me?.id
+        if (!mine && m.id && !String(m.id).startsWith('local-')) {
+          void api.markDelivered(m.id).catch(() => {})
+        }
+      }
       setMsgs((prev) => {
-        // Keep optimistic local-only messages until server echoes them
-        const serverIds = new Set(messages.map((m) => m.id))
-        const pending = prev.filter((m) => m.id.startsWith('local-') && !serverIds.has(m.id))
-        const merged = [...messages, ...pending]
-        if (JSON.stringify(prev) === JSON.stringify(merged)) return prev
+        // Preserve clientKey / pending state across polls so bubbles never remount
+        const prevById = new Map(prev.map((m) => [m.id, m]))
+        const prevByKey = new Map(
+          prev.filter((m) => m.clientKey).map((m) => [m.clientKey as string, m]),
+        )
+        const claimedKeys = new Set<string>()
+        const mapped = messages.map((sm) => {
+          const prior = prevById.get(sm.id)
+          if (prior?.clientKey) {
+            claimedKeys.add(prior.clientKey)
+            return {
+              ...sm,
+              clientKey: prior.clientKey,
+              mine: prior.mine ?? sm.mine,
+              // Prefer higher delivery state from either side
+              state: rankState(sm.state) >= rankState(prior.state) ? sm.state : prior.state,
+            }
+          }
+          // Match optimistic local by same body + mine flag
+          const match = prev.find(
+            (p) =>
+              p.id.startsWith('local-') &&
+              p.clientKey &&
+              !claimedKeys.has(p.clientKey) &&
+              (p.mine ?? true) &&
+              p.text === sm.text &&
+              (!!p.image === !!sm.image),
+          )
+          if (match?.clientKey) {
+            claimedKeys.add(match.clientKey)
+            return {
+              ...sm,
+              clientKey: match.clientKey,
+              mine: true,
+              state: rankState(sm.state) >= rankState(match.state) ? sm.state : match.state,
+            }
+          }
+          return { ...sm, clientKey: sm.clientKey || sm.id }
+        })
+        const stillPending = prev.filter(
+          (m) =>
+            m.id.startsWith('local-') &&
+            m.clientKey &&
+            !claimedKeys.has(m.clientKey) &&
+            (m.state === 'pending' || m.state === 'failed'),
+        )
+        const merged = [...mapped, ...stillPending]
+        if (sameMsgList(prev, merged)) return prev
         return merged
       })
       api.markRead(cid).catch(() => {})
@@ -162,38 +441,177 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
   useEffect(() => {
     setLoading(true)
     setMsgs([])
+    animatedKeys.current = new Set()
     setConversationId(knownConv)
     convRef.current = knownConv
+    // Instant blue ticks for the sender: as soon as this chat surface is open,
+    // mark read — do not wait for message history to finish loading.
+    if (knownConv && hasAccessToken()) {
+      void api.markRead(knownConv).catch(() => {})
+      wsReceipt({ conversationId: knownConv, messageId: 'all', state: 'read' })
+      // Clear unread badge on home immediately
+      upsertChatPreview({
+        contactId: peerId,
+        conversationId: knownConv,
+        unread: 0,
+      })
+    }
+    if (!hasAccessToken()) {
+      setLoading(false)
+      return
+    }
     load(false)
-    const t = setInterval(() => load(true), 3000)
+    const t = setInterval(() => {
+      if (hasAccessToken()) load(true)
+    }, 12000)
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId])
 
+  // Live message + receipt packets for the open conversation
+  useEffect(() => {
+    const onMsg = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail as {
+        cid: string
+        m: {
+          id: string
+          from: string
+          text?: string
+          time?: string
+          image?: string | null
+          state?: string
+        }
+        mine?: boolean
+      }
+      if (!detail?.cid || !detail?.m?.id) return
+      const openCid = convRef.current
+      if (!openCid || detail.cid !== openCid) return
+      const mine = detail.mine ?? detail.m.from === me?.id
+      const incoming = {
+        id: detail.m.id,
+        clientKey: detail.m.id,
+        from: detail.m.from,
+        to: contactId,
+        text: detail.m.text || (detail.m.image ? '📷 Photo' : ''),
+        image: detail.m.image || null,
+        time: detail.m.time || new Date().toISOString(),
+        timeLabel: new Date(detail.m.time || Date.now()).toLocaleTimeString([], {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        }),
+        state: (detail.m.state as any) || (mine ? 'sent' : undefined),
+        mine,
+      }
+      // Delivered was already fired in the store handler before this event.
+      setMsgs((prev) => {
+        if (prev.some((x) => x.id === incoming.id || x.clientKey === incoming.id)) return prev
+        return [...prev, incoming as any]
+      })
+      if (!mine && openCid) {
+        void api.markRead(openCid).catch(() => {})
+      }
+    }
+    const onRcpt = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail as { cid: string; id: string; s: string }
+      if (!detail?.id) return
+      const openCid = convRef.current
+      if (detail.cid && openCid && detail.cid !== openCid) return
+      const nextState = detail.s as any
+      setMsgs((prev) => {
+        let changed = false
+        const next = prev.map((x) => {
+          if (x.id !== detail.id && x.clientKey !== detail.id) return x
+          const rank: Record<string, number> = {
+            pending: 0,
+            failed: 0,
+            sent: 1,
+            delivered: 2,
+            read: 3,
+          }
+          if ((rank[nextState || ''] ?? 0) <= (rank[x.state || ''] ?? 0)) return x
+          changed = true
+          return { ...x, state: nextState }
+        })
+        return changed ? next : prev
+      })
+    }
+    const onAck = (ev: Event) => {
+      const detail = (ev as CustomEvent).detail as {
+        ck?: string
+        ok: boolean
+        id?: string
+        s?: string
+        ts?: string
+      }
+      if (!detail?.ck) return
+      if (!detail.ok) {
+        setMsgs((prev) =>
+          prev.map((x) =>
+            x.clientKey === detail.ck || x.id === detail.ck ? { ...x, state: 'failed' } : x,
+          ),
+        )
+        return
+      }
+      setMsgs((prev) =>
+        prev.map((x) =>
+          x.clientKey === detail.ck || x.id === detail.ck
+            ? {
+                ...x,
+                id: detail.id || x.id,
+                clientKey: x.clientKey || detail.ck,
+                state: (detail.s as any) || 'sent',
+                time: detail.ts || x.time,
+                timeLabel: detail.ts ? formatLocalTime(detail.ts) : x.timeLabel,
+              }
+            : x,
+        ),
+      )
+      upsertChatPreview({
+        contactId: peerId,
+        conversationId: convRef.current || undefined,
+        state: (detail.s as any) || 'sent',
+        mine: true,
+      })
+    }
+    window.addEventListener('sc:rt-msg', onMsg)
+    window.addEventListener('sc:rt-rcpt', onRcpt)
+    window.addEventListener('sc:rt-ack', onAck)
+    return () => {
+      window.removeEventListener('sc:rt-msg', onMsg)
+      window.removeEventListener('sc:rt-rcpt', onRcpt)
+      window.removeEventListener('sc:rt-ack', onAck)
+    }
+  }, [contactId, me?.id, peerId, upsertChatPreview])
 
   useEffect(() => {
     let last = 0
     const onType = () => {
+      if (!hasAccessToken()) return
       const now = Date.now()
       if (now - last < 1200) return
       last = now
       if (settings.typingIndicator) api.setTyping(contactId).catch(() => {})
     }
-    // exposed via input onChange below
     ;(window as any).__sc_type = onType
-    return () => { delete (window as any).__sc_type }
+    return () => {
+      delete (window as any).__sc_type
+    }
   }, [contactId, settings.typingIndicator])
 
   useEffect(() => {
-    if (!settings.typingIndicator) return
+    if (!settings.typingIndicator || !hasAccessToken()) return
     const tick = async () => {
+      if (!hasAccessToken()) return
       try {
         const { typing: t } = await api.getTyping(contactId)
         setTyping(t)
-      } catch { /* */ }
+      } catch {
+        /* */
+      }
     }
     tick()
-    const id = setInterval(tick, 1500)
+    const id = setInterval(tick, 2500)
     return () => clearInterval(id)
   }, [contactId, settings.typingIndicator])
 
@@ -201,7 +619,12 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
     end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [msgs.length, pendingImage])
 
-  const deliverMessage = async (localId: string, body: string, img: string | null) => {
+  const deliverMessage = async (
+    localId: string,
+    body: string,
+    img: string | null,
+    opts?: { replyToId?: string; statusReply?: { preview: string; time?: string } },
+  ) => {
     try {
       const cid = await ensureConversation()
       if (!cid) {
@@ -223,11 +646,34 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
         setConversationId(cid)
         convRef.current = cid
       }
-      const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img)
+      // Prefer persistent WebSocket (no new HTTP handshake)
+      const usedWs = isRealtimeOpen() && wsSendMessage({
+        conversationId: cid,
+        text: body || '',
+        clientKey: localId,
+        image: img,
+      })
+      if (usedWs) {
+        // Ack arrives via sc:rt-ack / store onAck → updates ticks to sent
+        // Optimistic already shows pending; WS ack will flip to sent
+        return
+      }
+      const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img, opts)
       setMsgs((m) =>
-        m.map((x) => (x.id === localId ? { ...message, mine: true, state: message.state || 'sent' } : x)),
+        m.map((x) =>
+          x.id === localId || x.clientKey === localId
+            ? {
+                ...x,
+                ...message,
+                id: message.id || x.id,
+                clientKey: x.clientKey || localId,
+                mine: true,
+                state: message.state || 'sent',
+                timeLabel: message.timeLabel || x.timeLabel,
+              }
+            : x,
+        ),
       )
-      // Keep chats home in sync with delivered state
       upsertChatPreview({
         contactId: (c as any).peerId || contactId,
         conversationId: cid,
@@ -237,10 +683,9 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
         name: c.name,
         photo: c.photo,
         hue: c.hue,
-        iso: message.time || new Date().toISOString(),
+        iso: message.time || utcNowIso(),
         time: message.timeLabel,
       })
-      refreshChats().catch(() => {})
     } catch (e: any) {
       setMsgs((m) => m.map((x) => (x.id === localId ? { ...x, state: 'failed' } : x)))
       upsertChatPreview({
@@ -262,20 +707,21 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
     if (!t && !pendingImage) return
     const body = t
     const img = pendingImage
+    const replySnap = replyTo
+    const statusSnap = statusReply
     setText('')
     setPendingImage(null)
     setEmoji(false)
+    setReplyTo(null)
+    setStatusReply(null)
 
     const localId = `local-${Date.now()}`
-    const nowIso = new Date().toISOString()
-    const timeLabel = new Date().toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    })
+    const nowIso = utcNowIso()
+    const timeLabel = formatLocalTime(nowIso)
     const previewText = body || (img ? '📷 Photo' : '')
     const optimistic: ApiMsg = {
       id: localId,
+      clientKey: localId,
       from: me?.id || '',
       to: contactId,
       text: previewText,
@@ -284,6 +730,9 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
       timeLabel,
       state: 'pending',
       mine: true,
+      replyToId: replySnap?.id,
+      replyToText: replySnap?.text || (replySnap?.image ? '📷 Photo' : undefined),
+      statusReply: statusSnap,
     }
     // UI first — message window + chats home at the same time
     setMsgs((m) => [...m, optimistic])
@@ -301,14 +750,20 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
       hue: c.hue,
     })
     // Backend later
-    void deliverMessage(localId, body, img)
+    void deliverMessage(localId, body, img, {
+      replyToId: replySnap?.id,
+      statusReply: statusSnap || undefined,
+    })
   }
 
   const retryFailed = (m: ApiMsg) => {
     if (m.state !== 'failed') return
-    setMsgs((list) => list.map((x) => (x.id === m.id ? { ...x, state: 'pending' } : x)))
+    const key = m.clientKey || m.id
+    setMsgs((list) =>
+      list.map((x) => (x.id === m.id || x.clientKey === key ? { ...x, state: 'pending' } : x)),
+    )
     showToast('Retrying…')
-    void deliverMessage(m.id, m.text === '📷 Photo' ? '' : m.text, m.image || null)
+    void deliverMessage(key, m.text === '📷 Photo' ? '' : m.text, m.image || null)
   }
 
   const onPickImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -319,6 +774,109 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
     const data = await fileToDataUrl(f)
     setPendingImage(data)
   }
+
+
+
+  // Presence for this peer
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      try {
+        const p = await api.presence(contactId)
+        if (!alive) return
+        setPeerOnline(!!p.online)
+        setPeerLastSeen(p.lastSeen || null)
+      } catch {
+        /* */
+      }
+    }
+    load()
+    const id = setInterval(load, 30000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [contactId])
+
+  // Live typing + presence from WS
+  useEffect(() => {
+    const onTyping = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as { peerId?: string; typing?: boolean }
+      if (d?.peerId === contactId) setTyping(!!d.typing)
+    }
+    const onPresence = (ev: Event) => {
+      // contacts store updates; also local
+      const d = (ev as CustomEvent).detail as {
+        peerId?: string
+        online?: boolean
+        lastSeen?: string | null
+      }
+      // detail from store dispatch uses peerId
+    }
+    window.addEventListener('sc:rt-typing', onTyping)
+    return () => window.removeEventListener('sc:rt-typing', onTyping)
+  }, [contactId])
+
+  // Status swipe-up reply hands off via sessionStorage
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('sc_status_reply')
+      if (!raw) return
+      const data = JSON.parse(raw) as { peerId?: string; preview?: string; time?: string }
+      sessionStorage.removeItem('sc_status_reply')
+      if (data.peerId && data.peerId === contactId) {
+        setStatusReply({ preview: data.preview || 'Status', time: data.time })
+      }
+    } catch {
+      /* */
+    }
+  }, [contactId])
+
+  // Merge call history for this peer into the timeline
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const { calls } = await api.calls()
+        if (!alive) return
+        const peerCalls = (calls || []).filter((c: any) => c.contactId === contactId)
+        if (!peerCalls.length) return
+        setMsgs((prev) => {
+          const existing = new Set(prev.filter((m) => m.callLog).map((m) => m.id))
+          const extra: ApiMsg[] = peerCalls
+            .filter((c: any) => !existing.has(`call-${c.id}`))
+            .map((c: any) => ({
+              id: `call-${c.id}`,
+              clientKey: `call-${c.id}`,
+              from: '',
+              to: contactId,
+              text: '',
+              time: c.ago || c.time || '',
+              timeLabel: c.time || '',
+              mine: c.direction === 'out',
+              callLog: {
+                kind: c.kind === 'video' ? 'video' : 'audio',
+                direction: c.direction || 'out',
+                status: c.status || 'completed',
+                duration: c.duration,
+              },
+            }))
+          if (!extra.length) return prev
+          const merged = [...prev, ...extra].sort((a, b) => {
+            const ta = Date.parse(a.time) || 0
+            const tb = Date.parse(b.time) || 0
+            return ta - tb
+          })
+          return merged
+        })
+      } catch {
+        /* */
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [contactId])
 
   return (
     <div className="flex h-full flex-col" style={{ background: WALLPAPERS[settings.wallpaper] || '#F3F4F6' }}>
@@ -331,13 +889,23 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
         >
           <ArrowLeft size={22} />
         </button>
-        <Avatar contact={c} size={44} />
-        <div className="ml-2 min-w-0 flex-1">
-          <p className="truncate font-extrabold leading-tight">{c.name}</p>
-          <p className={`text-xs font-bold ${c.online ? 'text-green-500' : 'text-gray-400'}`}>
-            {typing ? 'typing…' : c.online ? 'Online' : 'Last seen recently'}
-          </p>
-        </div>
+        <button
+          type="button"
+          onClick={() => setProfileOpen(true)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <Avatar contact={{ ...c, online: peerOnline || c.online }} size={44} />
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-extrabold leading-tight">{c.name}</p>
+            <p className={`text-xs font-bold ${typing || peerOnline || c.online ? 'text-[#5C8A5E]' : 'text-gray-400'}`}>
+              {typing
+                ? 'typing…'
+                : peerOnline || c.online
+                  ? 'Online'
+                  : formatLastSeen(peerLastSeen || (c as any).lastSeen)}
+            </p>
+          </div>
+        </button>
         <button
           type="button"
           aria-label="Voice call"
@@ -372,71 +940,28 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
         <AnimatePresence initial={false}>
           {msgs.map((m) => {
             const mine = m.mine ?? m.from === me?.id
+            const key = m.clientKey || m.id
+            const animateIn = !animatedKeys.current.has(key)
+            if (animateIn) animatedKeys.current.add(key)
             return (
-              <motion.div
-                key={m.id}
-                layout
-                initial={{ opacity: 0, y: 16, scale: 0.92 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                className={`flex ${mine ? 'justify-end' : 'justify-start'}`}
+              <div
+                key={key}
+                ref={(el) => {
+                  msgRefs.current[m.id] = el
+                  if (m.clientKey) msgRefs.current[m.clientKey] = el
+                }}
               >
-                <div
-                  role={mine && m.state === 'failed' ? 'button' : undefined}
-                  tabIndex={mine && m.state === 'failed' ? 0 : undefined}
-                  onClick={() => {
-                    if (mine && m.state === 'failed') retryFailed(m)
-                  }}
-                  className={`max-w-[78%] overflow-hidden shadow-sm ${
-                    mine
-                      ? 'rounded-3xl rounded-br-md bg-gradient-to-br from-brand-magenta to-brand-purple text-white'
-                      : 'rounded-3xl rounded-bl-md bg-white text-ink'
-                  } ${mine && m.state === 'failed' ? 'ring-2 ring-red-300/80' : ''}`}
-                >
-                  {m.image && (
-                    <img
-                      src={mediaUrl(m.image)}
-                      alt=""
-                      className="max-h-56 w-full object-cover"
-                      loading="lazy"
-                    />
-                  )}
-                  {m.text && m.text !== '📷 Photo' && (
-                    <p className="px-4 pt-2.5 font-semibold leading-snug">{m.text}</p>
-                  )}
-                  <p
-                    className={`flex items-center justify-end gap-1 px-4 pb-2 pt-1 text-[11px] font-bold ${
-                      mine ? 'text-white/75' : 'text-gray-400'
-                    }`}
-                  >
-                    {m.timeLabel ||
-                      new Date(m.time).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                        hour12: false,
-                      })}
-                    {mine &&
-                      (m.state === 'pending' ? (
-                        <Clock size={13} strokeWidth={2.5} className="opacity-80" aria-label="Sending" />
-                      ) : m.state === 'failed' ? (
-                        <RotateCcw size={13} strokeWidth={2.5} className="text-red-200" aria-label="Failed — tap to retry" />
-                      ) : m.state === 'sent' ? (
-                        <Check size={14} strokeWidth={2.5} aria-label="Sent" />
-                      ) : m.state === 'delivered' ? (
-                        <CheckCheck size={14} strokeWidth={2.5} className="opacity-90" aria-label="Delivered" />
-                      ) : (
-                        <CheckCheck
-                          size={14}
-                          strokeWidth={2.5}
-                          className={
-                            settings.readReceipts !== false ? 'text-sky-300' : 'opacity-90'
-                          }
-                          aria-label="Read"
-                        />
-                      ))}
-                  </p>
-                </div>
-              </motion.div>
+                <MessageBubble
+                  m={m}
+                  mine={!!mine}
+                  readReceipts={settings.readReceipts !== false}
+                  animateIn={animateIn}
+                  onRetry={retryFailed}
+                  onReply={(msg) => setReplyTo(msg)}
+                  onOpenCalls={onOpenCalls}
+                  onJumpTo={(id) => msgRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                />
+              </div>
             )
           })}
           {typing && (
@@ -476,6 +1001,37 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
         </div>
       )}
 
+
+      {profileOpen && (
+        <div className="absolute inset-0 z-40 flex flex-col bg-white">
+          <div className="flex items-center gap-2 border-b border-gray-100 px-3 pb-3 pt-[max(1.25rem,env(safe-area-inset-top))]">
+            <button type="button" onClick={() => setProfileOpen(false)} className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-gray-100" aria-label="Back">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round"/></svg>
+            </button>
+            <p className="text-lg font-black">Contact info</p>
+          </div>
+          <div className="flex flex-1 flex-col items-center overflow-y-auto px-6 pt-8">
+            <Avatar contact={{ ...c, online: peerOnline || c.online }} size={112} />
+            <h2 className="mt-4 text-2xl font-black text-ink">{c.name}</h2>
+            {c.username ? <p className="mt-1 font-bold text-brand-purple">@{c.username}</p> : null}
+            {c.phone ? <p className="mt-1 text-sm font-semibold text-gray-500">{c.phone}</p> : null}
+            <p className={`mt-2 text-sm font-bold ${peerOnline || c.online ? 'text-[#5C8A5E]' : 'text-gray-400'}`}>
+              {peerOnline || c.online ? 'Online' : formatLastSeen(peerLastSeen || (c as any).lastSeen)}
+            </p>
+            {c.bio ? (
+              <div className="mt-6 w-full rounded-2xl bg-gray-50 px-4 py-3">
+                <p className="text-xs font-black uppercase tracking-wide text-gray-400">Bio</p>
+                <p className="mt-1 text-sm font-semibold text-ink">{c.bio}</p>
+              </div>
+            ) : null}
+            <div className="mt-8 flex w-full gap-3">
+              <button type="button" onClick={() => { setProfileOpen(false); onCall('audio') }} className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-brand-purple/10 py-3.5 font-bold text-brand-purple">Audio</button>
+              <button type="button" onClick={() => { setProfileOpen(false); onCall('video') }} className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-brand-purple/10 py-3.5 font-bold text-brand-purple">Video</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {emoji && (
         <div className="max-h-40 overflow-y-auto bg-gray-50 px-3 py-2">
           <div className="grid grid-cols-8 gap-1">
@@ -493,7 +1049,34 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
         </div>
       )}
 
-      <div className="flex items-center gap-1.5 bg-white px-2 py-3 safe-pb">
+      <div className="shrink-0 border-t border-gray-100 bg-white safe-pb">
+        {(replyTo || statusReply) && (
+          <div className="flex items-start gap-2 border-b border-gray-100 px-3 py-2.5">
+            <div className="min-w-0 flex-1 border-l-4 border-brand-purple pl-2.5">
+              <p className="text-[11px] font-black uppercase tracking-wide text-brand-purple">
+                {statusReply ? 'Status reply' : 'Replying'}
+              </p>
+              <p className="line-clamp-2 text-xs font-semibold text-gray-600">
+                {statusReply?.preview || replyTo?.text || (replyTo?.image ? '📷 Photo' : '')}
+              </p>
+              {statusReply?.time ? (
+                <p className="mt-0.5 text-[10px] font-bold text-gray-400">{statusReply.time}</p>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="mt-0.5 flex h-7 w-7 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100"
+              onClick={() => {
+                setReplyTo(null)
+                setStatusReply(null)
+              }}
+              aria-label="Cancel reply"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+        <div className="flex items-center gap-1.5 px-2 py-3">
         <button
           type="button"
           onClick={() => setEmoji((e) => !e)}
@@ -533,6 +1116,7 @@ function ChatWindowInner({ contactId, onBack, onCall }: Props) {
         >
           <Send size={18} />
         </button>
+        </div>
       </div>
     </div>
   )

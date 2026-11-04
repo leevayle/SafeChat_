@@ -18,6 +18,7 @@ const HOLD_MS = 220 // longer than this = pause only, no navigation on release
 type Props = {
   userId: string
   onClose: () => void
+  onReplyToStatus?: (peerId: string) => void
 }
 
 function loadLikes(): Record<string, boolean> {
@@ -52,9 +53,9 @@ function saveMuted(ids: string[]) {
   }
 }
 
-type ViewerRow = { id: string; username: string; name: string; photo: string | null; viewedAt: string | null }
+type ViewerRow = { id: string; username: string; name: string; photo: string | null; viewedAt: string | null; liked?: boolean }
 
-export function StatusViewer({ userId, onClose }: Props) {
+export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
   const { statusList, refreshStatus, showToast, patchStatusList, me } = useStore()
   // Only non-expired statuses for this user, oldest first (play order)
   const items = statusList
@@ -76,6 +77,8 @@ export function StatusViewer({ userId, onClose }: Props) {
   const [muted, setMuted] = useState(() => loadMuted().includes(userId))
   const [likes, setLikes] = useState<Record<string, boolean>>(() => loadLikes())
   const [viewersOpen, setViewersOpen] = useState(false)
+  const swipeStartY = useRef(0)
+  const [swipeDy, setSwipeDy] = useState(0)
   const [viewers, setViewers] = useState<ViewerRow[]>([])
   const [viewersLoading, setViewersLoading] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -121,13 +124,13 @@ export function StatusViewer({ userId, onClose }: Props) {
     }
   }, [])
 
-  // Register view once per status — mark viewed in UI immediately, backend later
+  // Register view only for OTHER people's statuses — never for your own
   useEffect(() => {
     if (!current?.id || !me?.id) return
+    if (isOwner) return
     if (viewedRef.current.has(current.id)) return
     viewedRef.current.add(current.id)
 
-    // UI first: mark this status as viewed so rings update instantly
     const already =
       Array.isArray(current.views) && current.views.includes(me.id)
     if (!already) {
@@ -147,14 +150,11 @@ export function StatusViewer({ userId, onClose }: Props) {
       )
     }
 
-    // Backend later
     api
       .viewStatus(current.id)
       .then(() => refreshStatus().catch(() => {}))
-      .catch(() => {
-        /* keep optimistic view; next refresh will reconcile */
-      })
-  }, [current?.id, me?.id, patchStatusList, refreshStatus])
+      .catch(() => {})
+  }, [current?.id, current?.views, isOwner, me?.id, patchStatusList, refreshStatus])
 
   // Single active progress bar
   useEffect(() => {
@@ -269,7 +269,9 @@ export function StatusViewer({ userId, onClose }: Props) {
   const toggleLike = (e: React.MouseEvent) => {
     e.stopPropagation()
     if (!current) return
+    if (isOwner) return
     const next = { ...likes, [current.id]: !likes[current.id] }
+    void api.likeStatus(current.id).catch(() => {})
     setLikes(next)
     saveLikes(next)
   }
@@ -291,12 +293,44 @@ export function StatusViewer({ userId, onClose }: Props) {
     hue: ['#7B2CBF', '#6389EB'] as [string, string],
   }
 
+  const commitStatusReply = () => {
+    if (isOwner) return
+    const preview = current?.text || (current?.image ? '📷 Status' : 'Status')
+    let time = ''
+    try {
+      if (current?.createdAt) {
+        let s = String(current.createdAt)
+        if (/^\d{4}-\d{2}-\d{2}T/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z'
+        time = new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      }
+    } catch { /* */ }
+    try {
+      sessionStorage.setItem(
+        'sc_status_reply',
+        JSON.stringify({ peerId: userId, preview, time }),
+      )
+    } catch { /* */ }
+    onClose()
+    onReplyToStatus?.(userId)
+  }
+
   return (
     <div
       className="relative flex h-full flex-col select-none bg-gradient-to-b from-[#2a1a3a] to-ink text-white"
       onContextMenu={(e) => e.preventDefault()}
       onPointerUp={onPressEnd}
       onPointerCancel={onPressEnd}
+      onTouchStart={(e) => {
+        swipeStartY.current = e.touches[0].clientY
+      }}
+      onTouchMove={(e) => {
+        const dy = swipeStartY.current - e.touches[0].clientY
+        if (dy > 0) setSwipeDy(Math.min(80, dy))
+      }}
+      onTouchEnd={() => {
+        if (swipeDy > 48 && !isOwner) commitStatusReply()
+        setSwipeDy(0)
+      }}
     >
       {/* progress: completed full, current partial, future empty */}
       <div className="flex gap-1 px-3 pt-3 safe-pt">
@@ -423,6 +457,17 @@ export function StatusViewer({ userId, onClose }: Props) {
         )}
       </div>
 
+      {!isOwner && (
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-24 z-20 flex flex-col items-center"
+          style={{ opacity: 0.45 + swipeDy / 120, transform: `translateY(${-swipeDy * 0.3}px)` }}
+        >
+          <div className="rounded-full bg-white/15 px-4 py-1.5 text-xs font-bold text-white/90 backdrop-blur">
+            Swipe up to reply
+          </div>
+        </div>
+      )}
+
       {/* Owner viewers sheet */}
       <AnimatePresence>
         {viewersOpen && (
@@ -476,6 +521,9 @@ export function StatusViewer({ userId, onClose }: Props) {
                             <p className="truncate text-xs font-semibold text-gray-400">@{v.username}</p>
                           ) : null}
                         </div>
+                        {v.liked ? (
+                          <Heart size={18} className="shrink-0 text-brand-red" fill="currentColor" />
+                        ) : null}
                       </li>
                     ))}
                   </ul>

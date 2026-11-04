@@ -15,6 +15,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def _utc_iso(v):
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return v if v.endswith("Z") or "+" in v[10:] else (v + "Z" if "T" in v else v)
+    if getattr(v, "tzinfo", None) is None:
+        v = v.replace(tzinfo=timezone.utc)
+    return v.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 
 class MessagingService:
     @staticmethod
@@ -198,7 +208,18 @@ class MessagingService:
                 "metadata": {"conversation_id": conversation_id},
             }
         )
-        return await MessagingService._serialize_message(msg)
+        serialized = await MessagingService._serialize_message(msg)
+        # Live push to other participants (minimal packet)
+        try:
+            from app.websocket.manager import manager, packet_msg
+            await manager.send_users(
+                list(conv.get("participant_ids") or []),
+                packet_msg(conversation_id, serialized),
+                exclude=sender_id,
+            )
+        except Exception:
+            logger.debug("ws fan-out failed for msg %s", msg_id, exc_info=True)
+        return serialized
 
     @staticmethod
     async def get_messages(
@@ -302,7 +323,30 @@ class MessagingService:
         await db.message_receipts.update_one(
             {"message_id": message_id, "user_id": user_id},
             {"$set": {"delivered_at": now}},
+            upsert=True,
         )
+        # Promote aggregate status if not already read
+        msg = await db.messages.find_one({"_id": ObjectId(message_id)})
+        if not msg:
+            return
+        current = msg.get("delivery_status")
+        if current != DeliveryStatus.READ.value:
+            await db.messages.update_one(
+                {"_id": ObjectId(message_id)},
+                {"$set": {"delivery_status": DeliveryStatus.DELIVERED.value, "updated_at": now}},
+            )
+        # Notify sender only
+        try:
+            from app.websocket.manager import manager, packet_rcpt
+            sender_id = msg.get("sender_id")
+            conv_id = msg.get("conversation_id")
+            if sender_id and sender_id != user_id and conv_id:
+                await manager.send_user(
+                    sender_id,
+                    packet_rcpt(conv_id, message_id, DeliveryStatus.DELIVERED.value),
+                )
+        except Exception:
+            logger.debug("ws delivered notify failed for %s", message_id, exc_info=True)
 
     @staticmethod
     async def mark_read(conversation_id: str, user_id: str, up_to_message_id: Optional[str] = None) -> int:
@@ -339,6 +383,23 @@ class MessagingService:
                         {"_id": {"$in": oids}, "sender_id": {"$ne": user_id}},
                         {"$set": {"delivery_status": DeliveryStatus.READ.value}},
                     )
+                    # Live receipt packets to each distinct sender
+                    try:
+                        from app.websocket.manager import manager, packet_rcpt
+                        async for m in db.messages.find(
+                            {"_id": {"$in": oids}, "sender_id": {"$ne": user_id}},
+                            {"sender_id": 1, "conversation_id": 1},
+                        ):
+                            sid = m.get("sender_id")
+                            cid = m.get("conversation_id") or conversation_id
+                            mid = str(m["_id"])
+                            if sid:
+                                await manager.send_user(
+                                    sid,
+                                    packet_rcpt(cid, mid, DeliveryStatus.READ.value),
+                                )
+                    except Exception:
+                        logger.debug("ws read notify failed", exc_info=True)
         return result.modified_count
 
     @staticmethod
@@ -412,7 +473,7 @@ class MessagingService:
             "media_attachments": msg.get("media_attachments") or [],
             "reply_to_message_id": msg.get("reply_to_message_id"),
             "forwarded_from": msg.get("forwarded_from"),
-            "created_at": msg["created_at"].isoformat() if msg.get("created_at") else None,
+            "created_at": _utc_iso(msg.get("created_at")),
             "updated_at": msg["updated_at"].isoformat() if msg.get("updated_at") else None,
             "deleted_at": msg["deleted_at"].isoformat() if msg.get("deleted_at") else None,
             "delivery_status": status,

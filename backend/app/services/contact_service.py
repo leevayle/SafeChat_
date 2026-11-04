@@ -1,6 +1,6 @@
-"""Contact management service."""
+"""Contact management service — optimized with batched user lookups."""
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from bson import ObjectId
 from app.core.database import get_database
 from app.core.exceptions import (
@@ -15,9 +15,43 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+async def _users_by_ids(db, ids: List[str]) -> Dict[str, dict]:
+    """Batch-load users by string ids. Returns map id -> user doc."""
+    oids = [ObjectId(i) for i in ids if i and ObjectId.is_valid(i)]
+    if not oids:
+        return {}
+    out: Dict[str, dict] = {}
+    async for u in db.users.find(
+        {"_id": {"$in": oids}},
+        {
+            "username": 1,
+            "display_name": 1,
+            "profile_photo": 1,
+            "phone_number": 1,
+            "phone": 1,
+            "bio": 1,
+        },
+    ):
+        out[str(u["_id"])] = u
+    return out
+
+
+def _iso(dt) -> Optional[str]:
+    if not dt:
+        return None
+    if getattr(dt, "tzinfo", None):
+        return dt.isoformat().replace("+00:00", "Z")
+    return dt.isoformat() + "Z"
+
+
 class ContactService:
     @staticmethod
-    async def send_request(from_user_id: str, to_username: str, message: Optional[str] = None, share_phone: bool = False) -> dict:
+    async def send_request(
+        from_user_id: str,
+        to_username: str,
+        message: Optional[str] = None,
+        share_phone: bool = False,
+    ) -> dict:
         db = get_database()
         target = await db.users.find_one({"username": to_username.lower().strip()})
         if not target:
@@ -26,21 +60,18 @@ class ContactService:
         if to_user_id == from_user_id:
             raise ValidationError("Cannot send contact request to yourself")
 
-        # Already contacts?
         existing = await db.contacts.find_one(
             {"owner_user_id": from_user_id, "contact_user_id": to_user_id}
         )
         if existing and existing.get("contact_status") == ContactStatus.ACCEPTED.value:
             raise ConflictError("Already in contacts")
 
-        # Blocked?
         blocked = await db.blocked_users.find_one(
             {"blocker_id": to_user_id, "blocked_id": from_user_id}
         )
         if blocked:
             raise ForbiddenError("Cannot send request")
 
-        # Existing pending request
         existing_req = await db.contact_requests.find_one(
             {
                 "from_user_id": from_user_id,
@@ -51,7 +82,6 @@ class ContactService:
         if existing_req:
             raise ConflictError("Request already pending")
 
-        # Reverse pending?
         reverse = await db.contact_requests.find_one(
             {
                 "from_user_id": to_user_id,
@@ -60,7 +90,6 @@ class ContactService:
             }
         )
         if reverse:
-            # Auto-accept mutual
             return await ContactService.accept_request(str(reverse["_id"]), from_user_id)
 
         now = datetime.now(timezone.utc)
@@ -90,7 +119,7 @@ class ContactService:
             "from_user_id": from_user_id,
             "to_user_id": to_user_id,
             "status": ContactRequestStatus.PENDING.value,
-            "created_at": now.isoformat().replace("+00:00", "Z"),
+            "created_at": _iso(now),
         }
 
     @staticmethod
@@ -112,23 +141,22 @@ class ContactService:
             {"$set": {"status": ContactRequestStatus.ACCEPTED.value, "updated_at": now}},
         )
 
-        # Resolve phones: requester may opt to share their number
-        from_user = await db.users.find_one({"_id": ObjectId(req["from_user_id"])})
-        to_user = await db.users.find_one({"_id": ObjectId(req["to_user_id"])})
+        from_user = await db.users.find_one(
+            {"_id": ObjectId(req["from_user_id"])},
+            {"phone_number": 1, "phone": 1},
+        )
         share_phone = bool(req.get("share_phone"))
         from_phone = (
             (from_user.get("phone_number") or from_user.get("phone") or "")
             if from_user and share_phone
             else ""
         )
-        # Accepter's phone is not auto-shared unless they had sent a mutual request with share
 
-        # Create bidirectional contacts
         for owner, contact, peer_phone in (
             (req["from_user_id"], req["to_user_id"], ""),
             (req["to_user_id"], req["from_user_id"], from_phone),
         ):
-            set_fields = {
+            set_fields: Dict[str, Any] = {
                 "contact_status": ContactStatus.ACCEPTED.value,
                 "updated_at": now,
             }
@@ -184,12 +212,25 @@ class ContactService:
     @staticmethod
     async def list_contacts(user_id: str) -> List[dict]:
         db = get_database()
-        cursor = db.contacts.find(
-            {"owner_user_id": user_id, "contact_status": ContactStatus.ACCEPTED.value}
-        ).sort("created_at", -1)
+        contacts = (
+            await db.contacts.find(
+                {
+                    "owner_user_id": user_id,
+                    "contact_status": ContactStatus.ACCEPTED.value,
+                }
+            )
+            .sort("created_at", -1)
+            .to_list(length=500)
+        )
+        if not contacts:
+            return []
+
+        peer_ids = [c["contact_user_id"] for c in contacts]
+        users = await _users_by_ids(db, peer_ids)
+
         results = []
-        async for c in cursor:
-            contact_user = await db.users.find_one({"_id": ObjectId(c["contact_user_id"])})
+        for c in contacts:
+            contact_user = users.get(c["contact_user_id"])
             if not contact_user:
                 continue
             phone = (
@@ -208,7 +249,7 @@ class ContactService:
                     "phone_number": phone,
                     "nickname": c.get("nickname"),
                     "contact_status": c["contact_status"],
-                    "created_at": c["created_at"].isoformat() if c.get("created_at") else None,
+                    "created_at": _iso(c.get("created_at")),
                 }
             )
         return results
@@ -216,12 +257,17 @@ class ContactService:
     @staticmethod
     async def list_incoming_requests(user_id: str) -> List[dict]:
         db = get_database()
-        cursor = db.contact_requests.find(
-            {"to_user_id": user_id, "status": ContactRequestStatus.PENDING.value}
-        ).sort("created_at", -1)
+        rows = (
+            await db.contact_requests.find(
+                {"to_user_id": user_id, "status": ContactRequestStatus.PENDING.value}
+            )
+            .sort("created_at", -1)
+            .to_list(length=200)
+        )
+        users = await _users_by_ids(db, [r["from_user_id"] for r in rows])
         results = []
-        async for r in cursor:
-            from_user = await db.users.find_one({"_id": ObjectId(r["from_user_id"])})
+        for r in rows:
+            from_user = users.get(r["from_user_id"])
             results.append(
                 {
                     "id": str(r["_id"]),
@@ -232,7 +278,7 @@ class ContactService:
                     "from_profile_photo": from_user.get("profile_photo") if from_user else None,
                     "message": r.get("message"),
                     "status": r["status"],
-                    "created_at": (r["created_at"].isoformat().replace("+00:00","Z") if r["created_at"].tzinfo else r["created_at"].isoformat() + "Z") if r.get("created_at") else None,
+                    "created_at": _iso(r.get("created_at")),
                 }
             )
         return results
@@ -240,20 +286,25 @@ class ContactService:
     @staticmethod
     async def list_outgoing_requests(user_id: str) -> List[dict]:
         db = get_database()
-        cursor = db.contact_requests.find(
-            {
-                "from_user_id": user_id,
-                "status": {
-                    "$in": [
-                        ContactRequestStatus.PENDING.value,
-                        ContactRequestStatus.ACCEPTED.value,
-                    ]
-                },
-            }
-        ).sort("created_at", -1)
+        rows = (
+            await db.contact_requests.find(
+                {
+                    "from_user_id": user_id,
+                    "status": {
+                        "$in": [
+                            ContactRequestStatus.PENDING.value,
+                            ContactRequestStatus.ACCEPTED.value,
+                        ]
+                    },
+                }
+            )
+            .sort("created_at", -1)
+            .to_list(length=200)
+        )
+        users = await _users_by_ids(db, [r["to_user_id"] for r in rows])
         results = []
-        async for r in cursor:
-            to_user = await db.users.find_one({"_id": ObjectId(r["to_user_id"])})
+        for r in rows:
+            to_user = users.get(r["to_user_id"])
             results.append(
                 {
                     "id": str(r["_id"]),
@@ -261,9 +312,10 @@ class ContactService:
                     "to_user_id": r["to_user_id"],
                     "to_username": to_user["username"] if to_user else None,
                     "to_display_name": to_user["display_name"] if to_user else None,
+                    "to_profile_photo": to_user.get("profile_photo") if to_user else None,
                     "message": r.get("message"),
                     "status": r["status"],
-                    "created_at": (r["created_at"].isoformat().replace("+00:00","Z") if r["created_at"].tzinfo else r["created_at"].isoformat() + "Z") if r.get("created_at") else None,
+                    "created_at": _iso(r.get("created_at")),
                 }
             )
         return results
@@ -276,7 +328,6 @@ class ContactService:
         )
         if result.deleted_count == 0:
             raise NotFoundError("Contact not found")
-        # Optionally remove reverse; keep simple one-way remove for now
 
     @staticmethod
     async def block_user(blocker_id: str, blocked_user_id: str) -> None:
@@ -285,7 +336,7 @@ class ContactService:
             raise ValidationError("Cannot block yourself")
         if not ObjectId.is_valid(blocked_user_id):
             raise ValidationError("Invalid user id")
-        target = await db.users.find_one({"_id": ObjectId(blocked_user_id)})
+        target = await db.users.find_one({"_id": ObjectId(blocked_user_id)}, {"_id": 1})
         if not target:
             raise NotFoundError("User not found")
 
@@ -298,7 +349,6 @@ class ContactService:
             },
             upsert=True,
         )
-        # Remove from contacts both ways
         await db.contacts.delete_many(
             {
                 "$or": [
@@ -307,7 +357,6 @@ class ContactService:
                 ]
             }
         )
-        # Cancel pending requests
         await db.contact_requests.update_many(
             {
                 "$or": [

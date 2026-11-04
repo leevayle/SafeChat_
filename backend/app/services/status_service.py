@@ -1,4 +1,4 @@
-"""Status (stories) service."""
+"""Status (stories) service — batched lookups for feed and viewers."""
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 from bson import ObjectId
@@ -65,61 +65,68 @@ class StatusService:
                 "metadata": {},
             }
         )
-        return StatusService._serialize(doc)
+        serialized = StatusService._serialize(doc)
+        serialized["viewer_ids"] = []
+        serialized["view_count"] = 0
+        return serialized
+
+    @staticmethod
+    async def _contact_ids(db, viewer_id: str) -> List[str]:
+        ids: List[str] = []
+        async for c in db.contacts.find(
+            {
+                "owner_user_id": viewer_id,
+                "contact_status": ContactStatus.ACCEPTED.value,
+            },
+            {"contact_user_id": 1},
+        ):
+            ids.append(c["contact_user_id"])
+        return ids
 
     @staticmethod
     async def get_feed(viewer_id: str) -> List[dict]:
         """Statuses from contacts that are still valid and visible to viewer."""
         db = get_database()
         now = datetime.now(timezone.utc)
-
-        # Contact user ids
-        contact_ids = []
-        async for c in db.contacts.find(
-            {
-                "owner_user_id": viewer_id,
-                "contact_status": ContactStatus.ACCEPTED.value,
-            }
-        ):
-            contact_ids.append(c["contact_user_id"])
-
-        # Own statuses + contacts
+        contact_ids = await StatusService._contact_ids(db, viewer_id)
         owner_filter = {"$in": contact_ids + [viewer_id]}
-        # Oldest first so viewers play statuses chronologically (like WhatsApp)
-        cursor = db.statuses.find(
-            {
-                "owner_user_id": owner_filter,
-                "expires_at": {"$gt": now},
-            }
-        ).sort("created_at", 1)
 
-        results = []
-        async for s in cursor:
-            if await StatusService._can_view(s, viewer_id, contact_ids):
-                results.append(await StatusService._with_viewers(s))
-        return results
+        rows = (
+            await db.statuses.find(
+                {
+                    "owner_user_id": owner_filter,
+                    "expires_at": {"$gt": now},
+                }
+            )
+            .sort("created_at", 1)
+            .to_list(length=500)
+        )
+
+        visible = [
+            s
+            for s in rows
+            if StatusService._can_view_sync(s, viewer_id, contact_ids)
+        ]
+        return await StatusService._enrich_many(db, visible)
 
     @staticmethod
     async def get_user_statuses(owner_id: str, viewer_id: str) -> List[dict]:
         db = get_database()
         now = datetime.now(timezone.utc)
-        contact_ids = []
-        async for c in db.contacts.find(
-            {
-                "owner_user_id": viewer_id,
-                "contact_status": ContactStatus.ACCEPTED.value,
-            }
-        ):
-            contact_ids.append(c["contact_user_id"])
-
-        cursor = db.statuses.find(
-            {"owner_user_id": owner_id, "expires_at": {"$gt": now}}
-        ).sort("created_at", 1)
-        results = []
-        async for s in cursor:
-            if await StatusService._can_view(s, viewer_id, contact_ids):
-                results.append(await StatusService._with_viewers(s))
-        return results
+        contact_ids = await StatusService._contact_ids(db, viewer_id)
+        rows = (
+            await db.statuses.find(
+                {"owner_user_id": owner_id, "expires_at": {"$gt": now}}
+            )
+            .sort("created_at", 1)
+            .to_list(length=100)
+        )
+        visible = [
+            s
+            for s in rows
+            if StatusService._can_view_sync(s, viewer_id, contact_ids)
+        ]
+        return await StatusService._enrich_many(db, visible)
 
     @staticmethod
     async def view_status(status_id: str, viewer_id: str) -> dict:
@@ -130,22 +137,16 @@ class StatusService:
         if not s:
             raise NotFoundError("Status not found")
         now = datetime.now(timezone.utc)
-        if s["expires_at"].replace(tzinfo=timezone.utc) < now:
+        expires = s["expires_at"]
+        if getattr(expires, "tzinfo", None) is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires < now:
             raise NotFoundError("Status expired")
 
-        contact_ids = []
-        async for c in db.contacts.find(
-            {
-                "owner_user_id": viewer_id,
-                "contact_status": ContactStatus.ACCEPTED.value,
-            }
-        ):
-            contact_ids.append(c["contact_user_id"])
-
-        if not await StatusService._can_view(s, viewer_id, contact_ids):
+        contact_ids = await StatusService._contact_ids(db, viewer_id)
+        if not StatusService._can_view_sync(s, viewer_id, contact_ids):
             raise ForbiddenError("Not allowed to view this status")
 
-        # Record view (not for own)
         if s["owner_user_id"] != viewer_id:
             await db.status_views.update_one(
                 {"status_id": status_id, "viewer_id": viewer_id},
@@ -158,13 +159,9 @@ class StatusService:
                 },
                 upsert=True,
             )
-        data = StatusService._serialize(s)
-        viewer_ids = []
-        async for v in db.status_views.find({"status_id": status_id}):
-            viewer_ids.append(v["viewer_id"])
-        data["viewer_ids"] = viewer_ids
-        data["view_count"] = len(viewer_ids)
-        return data
+
+        enriched = await StatusService._enrich_many(db, [s])
+        return enriched[0]
 
     @staticmethod
     async def delete_status(status_id: str, user_id: str) -> None:
@@ -189,50 +186,112 @@ class StatusService:
             raise NotFoundError("Status not found")
         if s["owner_user_id"] != owner_id:
             raise ForbiddenError("Only owner can see viewers")
+
+        views = await db.status_views.find({"status_id": status_id}).to_list(length=500)
+        if not views:
+            return []
+        viewer_ids = [v["viewer_id"] for v in views]
+        oids = [ObjectId(i) for i in viewer_ids if ObjectId.is_valid(i)]
+        users: Dict[str, dict] = {}
+        if oids:
+            async for u in db.users.find(
+                {"_id": {"$in": oids}},
+                {"username": 1, "display_name": 1, "profile_photo": 1},
+            ):
+                users[str(u["_id"])] = u
+
+        like_ids = set()
+        async for lk in db.status_likes.find({"status_id": status_id}):
+            like_ids.add(lk.get("user_id"))
+
         results = []
-        async for v in db.status_views.find({"status_id": status_id}):
-            u = await db.users.find_one({"_id": ObjectId(v["viewer_id"])})
-            if u:
-                results.append(
-                    {
-                        "viewer_id": v["viewer_id"],
-                        "username": u["username"],
-                        "display_name": u["display_name"],
-                        "profile_photo": u.get("profile_photo"),
-                        "viewed_at": v["viewed_at"].isoformat()
-                        if v.get("viewed_at")
-                        else None,
-                    }
-                )
+        for v in views:
+            u = users.get(v["viewer_id"])
+            if not u:
+                continue
+            results.append(
+                {
+                    "viewer_id": v["viewer_id"],
+                    "username": u["username"],
+                    "display_name": u["display_name"],
+                    "profile_photo": u.get("profile_photo"),
+                    "viewed_at": v["viewed_at"].isoformat() if v.get("viewed_at") else None,
+                    "liked": v["viewer_id"] in like_ids,
+                }
+            )
+        # Sort: likers first, then by viewed_at desc
+        results.sort(key=lambda r: (not r.get("liked"), r.get("viewed_at") or ""), reverse=False)
+        results.sort(key=lambda r: (0 if r.get("liked") else 1))
         return results
 
 
     @staticmethod
-    async def _with_viewers(s: dict) -> dict:
+    async def toggle_like(status_id: str, user_id: str) -> dict:
+        """Like/unlike a status. Owner cannot like their own."""
         db = get_database()
-        data = StatusService._serialize(s)
-        sid = str(s["_id"])
-        viewer_ids = []
-        async for v in db.status_views.find({"status_id": sid}):
-            viewer_ids.append(v["viewer_id"])
-        data["viewer_ids"] = viewer_ids
-        data["view_count"] = len(viewer_ids)
-        u = None
-        if ObjectId.is_valid(s.get("owner_user_id", "")):
-            u = await db.users.find_one({"_id": ObjectId(s["owner_user_id"])})
-        if u:
-            data["owner"] = {
-                "id": s["owner_user_id"],
-                "username": u.get("username"),
-                "display_name": u.get("display_name"),
-                "profile_photo": u.get("profile_photo"),
+        if not ObjectId.is_valid(status_id):
+            raise ValidationError("Invalid status id")
+        s = await db.statuses.find_one({"_id": ObjectId(status_id)})
+        if not s:
+            raise NotFoundError("Status not found")
+        if s["owner_user_id"] == user_id:
+            raise ForbiddenError("Cannot like your own status")
+        contact_ids = await StatusService._contact_ids(db, user_id)
+        if not StatusService._can_view_sync(s, user_id, contact_ids):
+            raise ForbiddenError("Not allowed")
+        existing = await db.status_likes.find_one({"status_id": status_id, "user_id": user_id})
+        if existing:
+            await db.status_likes.delete_one({"_id": existing["_id"]})
+            return {"liked": False, "status_id": status_id}
+        await db.status_likes.insert_one(
+            {
+                "status_id": status_id,
+                "user_id": user_id,
+                "created_at": datetime.now(timezone.utc),
             }
-        return data
+        )
+        return {"liked": True, "status_id": status_id}
 
     @staticmethod
-    async def _can_view(
-        status: dict, viewer_id: str, viewer_contact_ids: List[str]
-    ) -> bool:
+    async def _enrich_many(db, statuses: List[dict]) -> List[dict]:
+        if not statuses:
+            return []
+        status_ids = [str(s["_id"]) for s in statuses]
+        owner_ids = list({s["owner_user_id"] for s in statuses})
+
+        viewers_map: Dict[str, List[str]] = {sid: [] for sid in status_ids}
+        async for v in db.status_views.find({"status_id": {"$in": status_ids}}):
+            viewers_map.setdefault(v["status_id"], []).append(v["viewer_id"])
+
+        owners: Dict[str, dict] = {}
+        oids = [ObjectId(i) for i in owner_ids if ObjectId.is_valid(i)]
+        if oids:
+            async for u in db.users.find(
+                {"_id": {"$in": oids}},
+                {"username": 1, "display_name": 1, "profile_photo": 1},
+            ):
+                owners[str(u["_id"])] = u
+
+        results = []
+        for s in statuses:
+            sid = str(s["_id"])
+            data = StatusService._serialize(s)
+            vids = viewers_map.get(sid) or []
+            data["viewer_ids"] = vids
+            data["view_count"] = len(vids)
+            u = owners.get(s["owner_user_id"])
+            if u:
+                data["owner"] = {
+                    "id": s["owner_user_id"],
+                    "username": u.get("username"),
+                    "display_name": u.get("display_name"),
+                    "profile_photo": u.get("profile_photo"),
+                }
+            results.append(data)
+        return results
+
+    @staticmethod
+    def _can_view_sync(status: dict, viewer_id: str, viewer_contact_ids: List[str]) -> bool:
         owner = status["owner_user_id"]
         if owner == viewer_id:
             return True
@@ -244,12 +303,26 @@ class StatusService:
         if vis == StatusVisibility.SELECTED.value:
             return viewer_id in (status.get("selected_viewer_ids") or [])
         if vis == StatusVisibility.CLOSE_FRIENDS.value:
-            # Treat close_friends as contacts for now
             return owner in viewer_contact_ids
         return False
 
     @staticmethod
+    async def _can_view(
+        status: dict, viewer_id: str, viewer_contact_ids: List[str]
+    ) -> bool:
+        return StatusService._can_view_sync(status, viewer_id, viewer_contact_ids)
+
+    @staticmethod
     def _serialize(s: dict) -> dict:
+        def _iso(v):
+            if v is None:
+                return None
+            if isinstance(v, str):
+                return v if v.endswith("Z") or "+" in v[10:] else v + ("Z" if "T" in v else "")
+            if getattr(v, "tzinfo", None) is None:
+                from datetime import timezone
+                v = v.replace(tzinfo=timezone.utc)
+            return v.astimezone(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         return {
             "id": str(s["_id"]),
             "owner_user_id": s["owner_user_id"],
@@ -257,6 +330,6 @@ class StatusService:
             "media_attachments": s.get("media_attachments") or [],
             "visibility": s.get("visibility"),
             "status_type": s.get("status_type"),
-            "created_at": s["created_at"].isoformat() if s.get("created_at") else None,
-            "expires_at": s["expires_at"].isoformat() if s.get("expires_at") else None,
+            "created_at": _iso(s.get("created_at")),
+            "expires_at": _iso(s.get("expires_at")),
         }

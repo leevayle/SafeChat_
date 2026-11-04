@@ -43,8 +43,8 @@ export function CallsTab({ onCall, onSimulateIncoming }: Props) {
   }
 
   return (
-    <div className="relative h-full overflow-y-auto pb-28">
-      <header className="flex min-h-16 items-center justify-between border-b border-gray-200 px-5 pt-[10px]">
+    <div className="relative flex h-full flex-col bg-white">
+      <header className="sticky top-0 z-20 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 px-5 pt-[max(10px,env(safe-area-inset-top))] backdrop-blur">
         <BrandMark />
         <button
           type="button"
@@ -56,6 +56,7 @@ export function CallsTab({ onCall, onSimulateIncoming }: Props) {
         </button>
       </header>
 
+      <div className="min-h-0 flex-1 overflow-y-auto pb-28">
       <h2 className="mb-1 px-5 pt-2.5 text-xl font-black">Recent calls</h2>
       <ul className="mt-2 px-2">
         {calls.length === 0 && (
@@ -85,14 +86,21 @@ export function CallsTab({ onCall, onSimulateIncoming }: Props) {
               >
                 <Avatar contact={ct} size={48} />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-extrabold">{ct.name}</p>
+                  <p className="truncate font-extrabold">
+                    {c.phone || c.name || ct.name || (c.username ? `@${c.username}` : 'Unknown')}
+                  </p>
                   <p
                     className={`flex items-center gap-1 text-sm font-semibold ${
                       c.status === 'missed' ? 'text-brand-red' : 'text-gray-500'
                     }`}
                   >
-                    <I size={14} /> {c.kind === 'video' ? 'Video' : 'Voice'} · {c.time || c.ago}
+                    <I size={14} /> {c.kind === 'video' ? 'Video' : 'Voice'}
+                    {c.duration && c.status === 'completed' ? ` · ${c.duration}` : ''}
+                    {c.time ? ` · ${c.time}` : ''}
                   </p>
+                  {!c.phone && c.username ? (
+                    <p className="truncate text-xs font-semibold text-gray-400">@{c.username}</p>
+                  ) : null}
                 </div>
                 <span className="flex h-9 w-9 items-center justify-center rounded-full text-brand-purple">
                   {c.kind === 'video' ? <Video size={18} /> : <Phone size={18} />}
@@ -102,6 +110,7 @@ export function CallsTab({ onCall, onSimulateIncoming }: Props) {
           )
         })}
       </ul>
+      </div>
 
       <motion.button
         type="button"
@@ -109,7 +118,7 @@ export function CallsTab({ onCall, onSimulateIncoming }: Props) {
         whileHover={{ scale: 1.06 }}
         whileTap={{ scale: 0.94 }}
         onClick={() => setPicker(true)}
-        className="absolute bottom-24 right-5 z-10 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white shadow-[0_10px_28px_-6px_rgba(123,44,191,0.55)]"
+        className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white shadow-[0_10px_28px_-6px_rgba(123,44,191,0.55)]"
       >
         <Plus size={26} strokeWidth={2.4} />
       </motion.button>

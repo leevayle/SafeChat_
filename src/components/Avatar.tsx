@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { resolvePhoto, warmPhoto } from '../lib/photoCache'
 
 type ContactLike = {
   id: string
@@ -9,14 +10,6 @@ type ContactLike = {
 }
 
 const API_ORIGIN = import.meta.env.VITE_API_URL || ''
-
-function mediaUrl(path?: string | null) {
-  if (!path) return ''
-  if (path.startsWith('http') || path.startsWith('data:') || path.startsWith('blob:')) return path
-  // relative /uploads/... → same origin (vite proxies) or absolute API
-  if (path.startsWith('/')) return `${API_ORIGIN}${path}`
-  return `${API_ORIGIN}/${path}`
-}
 
 export function Avatar({
   contact,
@@ -29,7 +22,13 @@ export function Avatar({
 }) {
   const [a, b] = contact.hue || ['#7B2CBF', '#6389EB']
   const [broken, setBroken] = useState(false)
-  useEffect(() => { setBroken(false) }, [contact.photo])
+  const src = resolvePhoto(contact.id, contact.photo, API_ORIGIN)
+
+  useEffect(() => {
+    setBroken(false)
+    if (contact.photo) warmPhoto(contact.id, contact.photo, API_ORIGIN)
+  }, [contact.id, contact.photo])
+
   const initials = (contact.name || '?')
     .split(' ')
     .map((w) => w[0])
@@ -37,7 +36,6 @@ export function Avatar({
     .slice(0, 2)
     .toUpperCase()
 
-  const src = mediaUrl(contact.photo)
   const showImg = Boolean(src) && !broken
 
   const body = showImg ? (
@@ -46,6 +44,8 @@ export function Avatar({
       alt=""
       className="h-full w-full rounded-full object-cover"
       style={{ width: size, height: size }}
+      loading="lazy"
+      decoding="async"
       onError={() => setBroken(true)}
     />
   ) : (
@@ -63,22 +63,15 @@ export function Avatar({
   )
 
   return (
-    <span className="relative inline-flex shrink-0 overflow-hidden rounded-full" style={{ width: size, height: size }}>
+    <span
+      className="relative inline-flex shrink-0 overflow-hidden rounded-full"
+      style={{ width: size, height: size }}
+    >
       {ring ? (
         <span className="rounded-full p-[2px] ring-[2.5px] ring-brand-purple">{body}</span>
       ) : (
         body
       )}
-
-      {/* //online status indicator
-
-      {contact.online && (
-        <span
-          className="absolute bottom-0 right-0 rounded-full bg-green-500 ring-2 ring-white"
-          style={{ width: size * 0.22, height: size * 0.22 }}
-        />
-      )} */}
-
     </span>
   )
 }

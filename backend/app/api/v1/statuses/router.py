@@ -53,3 +53,9 @@ async def delete_status(status_id: str, user: dict = Depends(get_current_user)):
 async def list_viewers(status_id: str, user: dict = Depends(get_current_user)):
     viewers = await StatusService.list_viewers(status_id, user["id"])
     return success_response("Viewers", viewers)
+
+
+@router.post("/{status_id}/like")
+async def toggle_like(status_id: str, user: dict = Depends(get_current_user)):
+    result = await StatusService.toggle_like(status_id, user["id"])
+    return success_response("Like updated", result)

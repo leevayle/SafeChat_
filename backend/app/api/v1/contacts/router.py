@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, status
 from app.api.deps import get_current_user
 from app.schemas.contacts import ContactRequestCreate, ContactNicknameUpdate
 from app.services.contact_service import ContactService
-from app.core.exceptions import success_response, AppException
+from app.core.exceptions import success_response
 
 router = APIRouter(prefix="/contacts", tags=["Contacts"])
 
@@ -19,16 +19,13 @@ async def send_contact_request(
     body: ContactRequestCreate,
     user: dict = Depends(get_current_user),
 ):
-    try:
-        result = await ContactService.send_request(
-            user["id"],
-            body.to_username,
-            body.message,
-            share_phone=getattr(body, "share_phone", False),
-        )
-        return success_response("Contact request sent", result)
-    except AppException as e:
-        raise e
+    result = await ContactService.send_request(
+        user["id"],
+        body.to_username,
+        body.message,
+        share_phone=getattr(body, "share_phone", False),
+    )
+    return success_response("Contact request sent", result)
 
 
 @router.get("/requests/incoming")

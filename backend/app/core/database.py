@@ -51,12 +51,6 @@ async def create_indexes() -> None:
     await database.users.create_index("account_status")
     await database.users.create_index("last_seen")
 
-    # phone verification records
-    await database.phone_verifications.create_index("phone_number")
-    await database.phone_verifications.create_index("expires_at", expireAfterSeconds=0)
-    await database.phone_verifications.create_index("registration_jti", sparse=True)
-    await database.phone_otp_ip_limits.create_index("ip_address", unique=True)
-
     # sessions
     await database.sessions.create_index("user_id")
     await database.sessions.create_index("token_hash", unique=True)
@@ -69,6 +63,9 @@ async def create_indexes() -> None:
     )
     await database.contacts.create_index("owner_user_id")
     await database.contacts.create_index("contact_status")
+    await database.contacts.create_index(
+        [("owner_user_id", 1), ("contact_status", 1), ("created_at", -1)]
+    )
 
     # contact_requests
     await database.contact_requests.create_index(
@@ -76,12 +73,22 @@ async def create_indexes() -> None:
     )
     await database.contact_requests.create_index("to_user_id")
     await database.contact_requests.create_index("status")
+    await database.contact_requests.create_index(
+        [("to_user_id", 1), ("status", 1), ("created_at", -1)]
+    )
+    await database.contact_requests.create_index(
+        [("from_user_id", 1), ("status", 1), ("created_at", -1)]
+    )
 
     # conversations
     await database.conversations.create_index("participant_ids")
     await database.conversations.create_index("conversation_type")
     await database.conversations.create_index("last_message_at")
     await database.conversations.create_index("group_id", sparse=True)
+    # Inbox list: filter by participant then sort by activity
+    await database.conversations.create_index(
+        [("participant_ids", 1), ("last_message_at", -1)]
+    )
 
     # messages
     await database.messages.create_index(
@@ -92,12 +99,22 @@ async def create_indexes() -> None:
         [("conversation_id", 1), ("_id", 1)]
     )
     await database.messages.create_index("idempotency_key", unique=True, sparse=True)
+    await database.messages.create_index(
+        [("conversation_id", 1), ("deleted_at", 1), ("_id", -1)]
+    )
 
     # message_receipts
     await database.message_receipts.create_index(
         [("message_id", 1), ("user_id", 1)], unique=True
     )
     await database.message_receipts.create_index("conversation_id")
+    # Unread badge + mark-read
+    await database.message_receipts.create_index(
+        [("conversation_id", 1), ("user_id", 1), ("read_at", 1)]
+    )
+    await database.message_receipts.create_index(
+        [("user_id", 1), ("read_at", 1)]
+    )
 
     # message_reactions
     await database.message_reactions.create_index(
@@ -115,13 +132,22 @@ async def create_indexes() -> None:
         "expires_at", expireAfterSeconds=0
     )
     await database.statuses.create_index("created_at")
+    await database.statuses.create_index(
+        [("owner_user_id", 1), ("expires_at", 1), ("created_at", 1)]
+    )
 
     # status_views
     await database.status_views.create_index(
         [("status_id", 1), ("viewer_id", 1)], unique=True
     )
+    await database.status_views.create_index("status_id")
 
     # calls
+    await database.call_logs.create_index([("user_id", 1), ("created_at", -1)])
+    await database.call_logs.create_index("peer_id")
+    await database.status_likes.create_index(
+        [("status_id", 1), ("user_id", 1)], unique=True, name="status_like_unique"
+    )
     await database.calls.create_index("caller_id")
     await database.calls.create_index("participant_ids")
     await database.calls.create_index("call_status")
