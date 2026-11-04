@@ -210,49 +210,66 @@ type Props = {
 
 export function CountryPicker({ open, selected, onSelect, onClose }: Props) {
   const [query, setQuery] = useState('')
-  const filtered = useMemo(() => COUNTRIES.filter((c) => `${c.name} ${c.code}`.toLowerCase().includes(query.toLowerCase())), [query])
+  const filtered = useMemo(
+    () =>
+      COUNTRIES.filter((c) =>
+        `${c.name} ${c.code}`.toLowerCase().includes(query.toLowerCase()),
+      ),
+    [query],
+  )
   return (
     <AnimatePresence>
       {open && (
         <>
           <motion.div
-            className="fixed inset-0 z-20"
+            className="fixed inset-0 z-[100] bg-ink/40 backdrop-blur-sm"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
           />
           <motion.div
-            className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-2xl border border-gray-100 bg-white shadow-xl"
-            initial={{ opacity: 0, y: -6, scale: 0.96 }}
+            className="fixed inset-x-4 top-[12%] z-[110] mx-auto flex max-h-[70vh] max-w-md flex-col overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-2xl"
+            initial={{ opacity: 0, y: 16, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -6, scale: 0.96 }}
+            exit={{ opacity: 0, y: 12, scale: 0.98 }}
             transition={{ type: 'spring', stiffness: 400, damping: 28 }}
           >
-            <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search country or code" className="h-11 w-full border-b border-gray-100 px-4 text-sm font-medium outline-none" />
-            <ul role="listbox" className="max-h-56 overflow-y-auto py-1">
-            {filtered.map((c, i) => {
-              const active = c.name === selected.name
-              return (
-                <motion.li
-                  key={c.name}
-                  role="option"
-                  aria-selected={active}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: 0.02 * i }}
-                  onClick={() => onSelect(c)}
-                  className={`flex cursor-pointer items-center gap-3 px-4 py-3 text-[14px] font-semibold transition-colors hover:bg-gray-50 ${
-                    active ? 'bg-brand-purple/5 text-brand-purple' : 'text-ink'
-                  }`}
-                >
-                  <span className="text-xl leading-none">{c.flag}</span>
-                  <span className="flex-1">{c.name}</span>
-                  <span className="text-gray-500">{c.code}</span>
-                </motion.li>
-              )
-            })}
-            {filtered.length === 0 && <li className="px-4 py-4 text-center text-sm text-gray-400">No countries found</li>}
+            <div className="border-b border-gray-100 px-4 pb-2 pt-4">
+              <p className="mb-2 text-sm font-black text-ink">Select country</p>
+              <input
+                autoFocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search country or code"
+                className="h-11 w-full rounded-2xl bg-gray-100 px-4 text-sm font-medium outline-none focus:ring-2 focus:ring-brand-purple/30"
+              />
+            </div>
+            <ul role="listbox" className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-1">
+              {filtered.map((c) => {
+                const active = c.code === selected.code && c.name === selected.name
+                return (
+                  <li key={`${c.name}-${c.code}`}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onSelect(c)
+                        onClose()
+                      }}
+                      className={`flex w-full items-center gap-3 px-4 py-3 text-left font-bold hover:bg-gray-50 ${
+                        active ? 'bg-brand-purple/10 text-brand-purple' : 'text-ink'
+                      }`}
+                    >
+                      <span className="w-8 shrink-0 text-xl leading-none">{c.flag}</span>
+                      <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                      <span className="shrink-0 text-sm font-semibold text-gray-500">{c.code}</span>
+                    </button>
+                  </li>
+                )
+              })}
+              {filtered.length === 0 && (
+                <li className="px-4 py-8 text-center text-sm font-bold text-gray-400">No countries found</li>
+              )}
             </ul>
           </motion.div>
         </>

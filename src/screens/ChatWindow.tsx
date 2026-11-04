@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, memo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Phone, Video, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw } from 'lucide-react'
+import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { api, hasAccessToken, type ApiMsg } from '../api'
 import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
@@ -136,29 +136,36 @@ const MessageBubble = memo(function MessageBubble({
   const [dx, setDx] = useState(0)
 
   if (m.callLog) {
-    const label =
-      m.callLog.status === 'missed'
-        ? 'Missed call'
+    const missed = m.callLog.status === 'missed' || m.callLog.direction === 'missed'
+    const label = missed
+      ? 'Missed call'
+      : m.callLog.direction === 'in'
+        ? 'Incoming'
+        : 'Outgoing'
+    const CallIcon = missed
+      ? PhoneMissed
+      : m.callLog.kind === 'video'
+        ? Video
         : m.callLog.direction === 'in'
-          ? 'Incoming call'
-          : 'Outgoing call'
-    const detail = [
-      m.callLog.kind === 'video' ? 'Video' : 'Voice',
-      m.callLog.duration,
-      m.timeLabel,
-    ]
-      .filter(Boolean)
-      .join(' · ')
+          ? PhoneIncoming
+          : PhoneOutgoing
+    const detail = [m.callLog.duration, m.timeLabel].filter(Boolean).join(' · ')
     return (
-      <div className="flex justify-center py-1">
+      <div className="flex justify-center py-1.5">
         <button
           type="button"
           onClick={() => onOpenCalls?.()}
-          className="flex items-center gap-2 rounded-full bg-gray-100 px-3.5 py-1.5 text-[12px] font-bold text-gray-600 ring-1 ring-gray-200/80"
+          className={`flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[12px] font-bold ring-1 ${
+            missed
+              ? 'bg-red-50 text-brand-red ring-red-100'
+              : 'bg-gray-100 text-gray-600 ring-gray-200/80'
+          }`}
         >
-          <span>{label}</span>
-          <span className="text-gray-400">·</span>
-          <span>{detail}</span>
+          <CallIcon size={14} strokeWidth={2.4} />
+          <span>
+            {label} · {m.callLog.kind === 'video' ? 'Video' : 'Voice'}
+            {detail ? ` · ${detail}` : ''}
+          </span>
         </button>
       </div>
     )
@@ -426,7 +433,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
             !claimedKeys.has(m.clientKey) &&
             (m.state === 'pending' || m.state === 'failed'),
         )
-        const merged = [...mapped, ...stillPending]
+        const callRows = prev.filter((m) => m.callLog)
+        const merged = [...mapped, ...stillPending, ...callRows].sort((a, b) => {
+          const ta = Date.parse(a.time) || 0
+          const tb = Date.parse(b.time) || 0
+          return ta - tb
+        })
         if (sameMsgList(prev, merged)) return prev
         return merged
       })
@@ -617,7 +629,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
 
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [msgs.length, pendingImage])
+  }, [msgs.length, pendingImage, typing])
 
   const deliverMessage = async (
     localId: string,
@@ -845,22 +857,25 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
           const existing = new Set(prev.filter((m) => m.callLog).map((m) => m.id))
           const extra: ApiMsg[] = peerCalls
             .filter((c: any) => !existing.has(`call-${c.id}`))
-            .map((c: any) => ({
-              id: `call-${c.id}`,
-              clientKey: `call-${c.id}`,
-              from: '',
-              to: contactId,
-              text: '',
-              time: c.ago || c.time || '',
-              timeLabel: c.time || '',
-              mine: c.direction === 'out',
-              callLog: {
-                kind: c.kind === 'video' ? 'video' : 'audio',
-                direction: c.direction || 'out',
-                status: c.status || 'completed',
-                duration: c.duration,
-              },
-            }))
+            .map((c: any) => {
+              const iso = c.ago || c.created_at || c.time || ''
+              return {
+                id: `call-${c.id}`,
+                clientKey: `call-${c.id}`,
+                from: '',
+                to: contactId,
+                text: '',
+                time: iso,
+                timeLabel: c.time || '',
+                mine: c.direction === 'out',
+                callLog: {
+                  kind: c.kind === 'video' ? 'video' : 'audio',
+                  direction: c.direction || 'out',
+                  status: c.status || 'completed',
+                  duration: c.duration,
+                },
+              }
+            })
           if (!extra.length) return prev
           const merged = [...prev, ...extra].sort((a, b) => {
             const ta = Date.parse(a.time) || 0
@@ -902,7 +917,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
                 ? 'typing…'
                 : peerOnline || c.online
                   ? 'Online'
-                  : formatLastSeen(peerLastSeen || (c as any).lastSeen)}
+                  : peerLastSeen || (c as any).lastSeen
+                    ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
+                    : ''}
             </p>
           </div>
         </button>
@@ -925,7 +942,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
       </header>
 
       <div
-        className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4"
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4 pb-6"
         style={{ fontSize: FONT_SIZES[settings.fontSize] || '1rem' }}
       >
         <p className="mx-auto w-fit rounded-full bg-white px-3 py-1 text-xs font-extrabold text-gray-500 shadow-sm">
@@ -985,7 +1002,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
             </motion.div>
           )}
         </AnimatePresence>
-        <div ref={end} />
+        <div ref={end} className="h-2 shrink-0 pb-1" />
       </div>
 
       {pendingImage && (
@@ -1010,23 +1027,75 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls }: Props) {
             </button>
             <p className="text-lg font-black">Contact info</p>
           </div>
-          <div className="flex flex-1 flex-col items-center overflow-y-auto px-6 pt-8">
-            <Avatar contact={{ ...c, online: peerOnline || c.online }} size={112} />
+          <div className="flex flex-1 flex-col items-center overflow-y-auto px-6 pb-10 pt-8">
+            <div className="rounded-full bg-gradient-to-br from-brand-purple/15 to-brand-orange/10 p-1.5">
+              <Avatar contact={{ ...c, online: peerOnline || c.online }} size={120} />
+            </div>
             <h2 className="mt-4 text-2xl font-black text-ink">{c.name}</h2>
             {c.username ? <p className="mt-1 font-bold text-brand-purple">@{c.username}</p> : null}
             {c.phone ? <p className="mt-1 text-sm font-semibold text-gray-500">{c.phone}</p> : null}
-            <p className={`mt-2 text-sm font-bold ${peerOnline || c.online ? 'text-[#5C8A5E]' : 'text-gray-400'}`}>
-              {peerOnline || c.online ? 'Online' : formatLastSeen(peerLastSeen || (c as any).lastSeen)}
+            <p className={`mt-2 min-h-[1.25rem] text-sm font-bold ${typing || peerOnline || c.online ? 'text-[#5C8A5E]' : 'text-gray-400'}`}>
+              {typing
+                ? 'typing…'
+                : peerOnline || c.online
+                  ? 'Online'
+                  : peerLastSeen || (c as any).lastSeen
+                    ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
+                    : ''}
             </p>
-            {c.bio ? (
-              <div className="mt-6 w-full rounded-2xl bg-gray-50 px-4 py-3">
-                <p className="text-xs font-black uppercase tracking-wide text-gray-400">Bio</p>
-                <p className="mt-1 text-sm font-semibold text-ink">{c.bio}</p>
+
+            <div className="mt-8 grid w-full max-w-sm grid-cols-3 gap-3">
+              <button
+                type="button"
+                onClick={() => setProfileOpen(false)}
+                className="flex flex-col items-center gap-1.5 rounded-2xl bg-gray-50 py-3.5 transition active:scale-95"
+              >
+                <span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-purple/10 text-brand-purple">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                </span>
+                <span className="text-xs font-extrabold text-ink">Chat</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setProfileOpen(false); onCall('audio') }}
+                className="flex flex-col items-center gap-1.5 rounded-2xl bg-gray-50 py-3.5 transition active:scale-95"
+              >
+                <span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-purple/10 text-brand-purple">
+                  <Phone size={20} />
+                </span>
+                <span className="text-xs font-extrabold text-ink">Audio</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setProfileOpen(false); onCall('video') }}
+                className="flex flex-col items-center gap-1.5 rounded-2xl bg-gray-50 py-3.5 transition active:scale-95"
+              >
+                <span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-purple/10 text-brand-purple">
+                  <Video size={20} />
+                </span>
+                <span className="text-xs font-extrabold text-ink">Video</span>
+              </button>
+            </div>
+
+            <div className="mt-8 w-full space-y-3">
+              <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                <p className="text-[11px] font-black uppercase tracking-wide text-gray-400">Bio</p>
+                <p className="mt-1 text-sm font-semibold text-ink">
+                  {(c as any).bio || c.bio || 'No bio yet'}
+                </p>
               </div>
-            ) : null}
-            <div className="mt-8 flex w-full gap-3">
-              <button type="button" onClick={() => { setProfileOpen(false); onCall('audio') }} className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-brand-purple/10 py-3.5 font-bold text-brand-purple">Audio</button>
-              <button type="button" onClick={() => { setProfileOpen(false); onCall('video') }} className="flex flex-1 items-center justify-center gap-2 rounded-2xl bg-brand-purple/10 py-3.5 font-bold text-brand-purple">Video</button>
+              {c.phone ? (
+                <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                  <p className="text-[11px] font-black uppercase tracking-wide text-gray-400">Phone</p>
+                  <p className="mt-1 text-sm font-semibold text-ink">{c.phone}</p>
+                </div>
+              ) : null}
+              {c.username ? (
+                <div className="rounded-2xl bg-gray-50 px-4 py-3">
+                  <p className="text-[11px] font-black uppercase tracking-wide text-gray-400">Username</p>
+                  <p className="mt-1 text-sm font-semibold text-brand-purple">@{c.username}</p>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>

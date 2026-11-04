@@ -219,10 +219,13 @@ class StatusService:
                     "liked": v["viewer_id"] in like_ids,
                 }
             )
-        # Sort: likers first, then by viewed_at desc
-        results.sort(key=lambda r: (not r.get("liked"), r.get("viewed_at") or ""), reverse=False)
-        results.sort(key=lambda r: (0 if r.get("liked") else 1))
-        return results
+        # Likers first, then most recent views
+        liked = [r for r in results if r.get("liked")]
+        rest = [r for r in results if not r.get("liked")]
+        liked.sort(key=lambda r: r.get("viewed_at") or "", reverse=True)
+        rest.sort(key=lambda r: r.get("viewed_at") or "", reverse=True)
+        return liked + rest
+
 
 
     @staticmethod

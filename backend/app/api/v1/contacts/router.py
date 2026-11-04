@@ -24,6 +24,7 @@ async def send_contact_request(
         body.to_username,
         body.message,
         share_phone=getattr(body, "share_phone", False),
+        from_nickname=getattr(body, "from_nickname", None),
     )
     return success_response("Contact request sent", result)
 

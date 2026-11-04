@@ -51,6 +51,7 @@ class ContactService:
         to_username: str,
         message: Optional[str] = None,
         share_phone: bool = False,
+        from_nickname: Optional[str] = None,
     ) -> dict:
         db = get_database()
         target = await db.users.find_one({"username": to_username.lower().strip()})
@@ -93,9 +94,12 @@ class ContactService:
             return await ContactService.accept_request(str(reverse["_id"]), from_user_id)
 
         now = datetime.now(timezone.utc)
+        # from_nickname is private to the sender — never returned on incoming lists
+        nick = (from_nickname or "").strip() or None
         doc = {
             "from_user_id": from_user_id,
             "to_user_id": to_user_id,
+            "from_nickname": nick,
             "message": message,
             "share_phone": bool(share_phone),
             "status": ContactRequestStatus.PENDING.value,
@@ -152,6 +156,7 @@ class ContactService:
             else ""
         )
 
+        sender_nick = (req.get("from_nickname") or "").strip() or None
         for owner, contact, peer_phone in (
             (req["from_user_id"], req["to_user_id"], ""),
             (req["to_user_id"], req["from_user_id"], from_phone),
@@ -162,6 +167,10 @@ class ContactService:
             }
             if peer_phone:
                 set_fields["shared_phone"] = peer_phone
+            # Only the sender sees/stores their private nickname for the peer
+            insert_nick = sender_nick if owner == req["from_user_id"] else None
+            if insert_nick and owner == req["from_user_id"]:
+                set_fields["nickname"] = insert_nick
             await db.contacts.update_one(
                 {"owner_user_id": owner, "contact_user_id": contact},
                 {
@@ -169,7 +178,7 @@ class ContactService:
                     "$setOnInsert": {
                         "owner_user_id": owner,
                         "contact_user_id": contact,
-                        "nickname": None,
+                        "nickname": insert_nick,
                         "created_at": now,
                     },
                 },

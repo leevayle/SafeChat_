@@ -56,7 +56,7 @@ export function formatLocalDateTime(input?: string | number | Date | null): stri
 /** "last seen" human label in local time. */
 export function formatLastSeen(input?: string | number | Date | null): string {
   const d = parseUtc(input)
-  if (!d) return 'last seen recently'
+  if (!d) return ''
   const diff = Date.now() - d.getTime()
   if (diff < 45_000) return 'last seen just now'
   if (diff < 3600_000) {

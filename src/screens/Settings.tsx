@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useRef, useState, useEffect, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { Pencil, User, Lock, Bell, MessageSquare, Database, Shield, Globe, HelpCircle, LogOut, Trash2, ChevronRight, Camera, Ban, Smartphone, Info, Palette } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
@@ -38,6 +38,39 @@ export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: (
   const [blockedOpen, setBlockedOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [savingProfile, setSavingProfile] = useState(false)
+  const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken' | 'invalid' | 'own'>('idle')
+  const usernameCheckRef = useRef(0)
+
+  useEffect(() => {
+    if (!edit) return
+    const raw = draft.username.trim().toLowerCase()
+    if (raw === (s.username || '').toLowerCase()) {
+      setUsernameStatus('own')
+      return
+    }
+    if (raw.length < 3) {
+      setUsernameStatus(raw.length === 0 ? 'idle' : 'invalid')
+      return
+    }
+    if (!/^[a-z0-9._]+$/.test(raw)) {
+      setUsernameStatus('invalid')
+      return
+    }
+    setUsernameStatus('checking')
+    const token = ++usernameCheckRef.current
+    const t = setTimeout(async () => {
+      try {
+        const { available } = await api.checkUsername(raw)
+        if (token !== usernameCheckRef.current) return
+        setUsernameStatus(available ? 'available' : 'taken')
+      } catch {
+        if (token !== usernameCheckRef.current) return
+        setUsernameStatus('idle')
+      }
+    }, 400)
+    return () => clearTimeout(t)
+  }, [draft.username, edit, s.username])
+
   const [draft, setDraft] = useState({ name: s.name, username: s.username, bio: s.bio })
   const file = useRef<HTMLInputElement>(null)
 
@@ -150,16 +183,46 @@ export function Settings({ onBack, onLogout }: { onBack: () => void; onLogout: (
           </button>
           <input ref={file} type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) { const reader = new FileReader(); reader.onload = () => { if (typeof reader.result === 'string') setSetting('photo', reader.result) }; reader.readAsDataURL(f) } }} />
         </div>
-        {[['Name', 'name', 30], ['Username', 'username', 20]].map(([l, k, m]) => (
-          <label key={k as string} className="mb-3 block text-sm font-extrabold text-gray-500">{l}
-            <input value={draft[k as 'name']} maxLength={m as number} onChange={(e) => setDraft({ ...draft, [k as string]: k === 'username' ? e.target.value.replace(/\s/g, '') : e.target.value })} className="mt-1.5 h-13 w-full rounded-full bg-gray-100 px-5 py-3 text-base font-bold text-ink outline-none focus:ring-4 focus:ring-brand-purple/25" />
-          </label>
-        ))}
+        <label className="mb-3 block text-sm font-extrabold text-gray-500">Name
+          <input
+            value={draft.name}
+            maxLength={30}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            className="mt-1.5 h-13 w-full rounded-full bg-gray-100 px-5 py-3 text-base font-bold text-ink outline-none focus:ring-4 focus:ring-brand-purple/25"
+          />
+        </label>
+        <label className="mb-1 block text-sm font-extrabold text-gray-500">Username
+          <input
+            value={draft.username}
+            maxLength={20}
+            onChange={(e) => {
+              const v = e.target.value.replace(/\s/g, '').toLowerCase()
+              setDraft({ ...draft, username: v })
+            }}
+            className="mt-1.5 h-13 w-full rounded-full bg-gray-100 px-5 py-3 text-base font-bold text-ink outline-none focus:ring-4 focus:ring-brand-purple/25"
+          />
+        </label>
+        <p
+          className={`mb-3 px-1 text-xs font-bold ${
+            usernameStatus === 'available' || usernameStatus === 'own'
+              ? 'text-[#5C8A5E]'
+              : usernameStatus === 'taken' || usernameStatus === 'invalid'
+                ? 'text-brand-red'
+                : 'text-gray-400'
+          }`}
+        >
+          {usernameStatus === 'checking' && 'Checking availability…'}
+          {usernameStatus === 'available' && 'Username is available'}
+          {usernameStatus === 'own' && 'This is your current username'}
+          {usernameStatus === 'taken' && 'Username is taken'}
+          {usernameStatus === 'invalid' && 'At least 3 characters, letters/numbers only'}
+          {usernameStatus === 'idle' && 'Usernames are unique'}
+        </p>
         <label className="mb-5 block text-sm font-extrabold text-gray-500">Bio
           <textarea value={draft.bio} maxLength={80} rows={2} onChange={(e) => setDraft({ ...draft, bio: e.target.value })} className="mt-1.5 w-full resize-none rounded-3xl bg-gray-100 px-5 py-3 text-base font-semibold text-ink outline-none focus:ring-4 focus:ring-brand-purple/25" />
         </label>
         <PrimaryButton
-          disabled={savingProfile || draft.name.trim().length < 2 || draft.username.length < 3}
+          disabled={savingProfile || draft.name.trim().length < 2 || draft.username.length < 3 || (usernameStatus !== 'available' && usernameStatus !== 'own')}
           onClick={async () => {
             if (savingProfile) return
             setSavingProfile(true)

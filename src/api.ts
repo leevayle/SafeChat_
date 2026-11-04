@@ -198,7 +198,7 @@ function mapContact(c: any): ApiContact {
     peerId,
     phone: c.phone_number || c.phone || '',
     username: c.username || '',
-    name: c.display_name || c.name || c.username || '',
+    name: c.nickname || c.saved_name || c.savedName || c.display_name || c.name || c.username || '',
     savedName: c.nickname || c.savedName || c.display_name || c.name || '',
     bio: c.bio || '',
     note: c.note || '',
@@ -543,8 +543,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({
         to_username: body.username.replace(/^@/, '').toLowerCase(),
-        message: body.message || body.savedName || undefined,
+        message: body.message || undefined,
         share_phone: !!body.sharePhone,
+        from_nickname: body.savedName || body.nickname || undefined,
       }),
     })
     // Mutual auto-accept may already create the contact

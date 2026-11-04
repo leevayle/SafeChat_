@@ -7,6 +7,8 @@ class ContactRequestCreate(BaseModel):
     to_username: str = Field(..., min_length=3, max_length=32)
     message: Optional[str] = Field(None, max_length=256)
     share_phone: bool = False
+    # Private label for the sender only — never shown to the recipient
+    from_nickname: Optional[str] = Field(None, max_length=64)
 
 
 class ContactNicknameUpdate(BaseModel):

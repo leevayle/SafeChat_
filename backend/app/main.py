@@ -24,15 +24,17 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
+    logger.info("Boot · starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
     try:
         await connect_to_mongo()
     except Exception as e:
-        logger.error("Failed to connect to MongoDB: %s", e)
+        logger.error("Boot · MongoDB failed: %s", e)
         raise
+    logger.info("Boot · server ready")
     yield
+    logger.info("Shutdown · closing MongoDB…")
     await close_mongo_connection()
-    logger.info("Shutdown complete")
+    logger.info("Shutdown · complete")
 
 
 app = FastAPI(

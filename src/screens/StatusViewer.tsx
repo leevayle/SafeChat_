@@ -82,6 +82,7 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
   const [viewers, setViewers] = useState<ViewerRow[]>([])
   const [viewersLoading, setViewersLoading] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const viewedRef = useRef<Set<string>>(new Set())
   const rafRef = useRef<number | null>(null)
@@ -236,8 +237,8 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
     setPaused(false)
   }
 
-  const deleteCurrent = async (e: React.MouseEvent) => {
-    e.stopPropagation()
+  const deleteCurrent = async (e?: React.MouseEvent) => {
+    e?.stopPropagation()
     if (!current || !isOwner || deleting) return
     setDeleting(true)
     setPaused(true)
@@ -407,7 +408,7 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
             <button
               type="button"
               data-status-action
-              onClick={deleteCurrent}
+              onClick={(e) => { e.stopPropagation(); setPaused(true); setConfirmDelete(true) }}
               disabled={deleting}
               className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm disabled:opacity-50"
               aria-label="Delete status"
@@ -468,7 +469,52 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
         </div>
       )}
 
-      {/* Owner viewers sheet */}
+      
+      {confirmDelete && (
+        <div
+          className="absolute inset-0 z-[70] flex items-end justify-center bg-black/50 px-4 pb-10"
+          onClick={(e) => {
+            e.stopPropagation()
+            setConfirmDelete(false)
+            setPaused(false)
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-lg font-black text-ink">Delete this status?</p>
+            <p className="mt-1 text-sm font-semibold text-gray-500">
+              It will be removed for everyone who can see it.
+            </p>
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-ink"
+                onClick={() => {
+                  setConfirmDelete(false)
+                  setPaused(false)
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white"
+                disabled={deleting}
+                onClick={() => {
+                  setConfirmDelete(false)
+                  void deleteCurrent()
+                }}
+              >
+                {deleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+{/* Owner viewers sheet */}
       <AnimatePresence>
         {viewersOpen && (
           <>

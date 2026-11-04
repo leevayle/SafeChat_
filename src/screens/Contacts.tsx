@@ -212,7 +212,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
 
       {/* Add contact sheet */}
       {adding && (
-        <div className="absolute inset-0 z-30 flex flex-col bg-white">
+        <div className="fixed inset-0 z-[90] flex flex-col bg-white">
           <ScreenHeader title="Add contact" onBack={() => setAdding(false)} />
           <div className="space-y-3 px-5 pt-2">
             <label className="block text-xs font-extrabold text-gray-500">Username on SafeChat</label>
@@ -283,11 +283,11 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
 
       {/* Edit sheet */}
       {edit && (
-        <div className="absolute inset-0 z-30 flex flex-col bg-white">
+        <div className="fixed inset-0 z-[90] flex flex-col bg-white">
           <ScreenHeader title="Edit contact" onBack={() => setEdit(null)} />
           <div className="space-y-3 px-5 pt-2">
             <p className="text-xs font-bold text-gray-400">@{edit.username || 'not on SafeChat'}</p>
-            <label className="block text-xs font-extrabold text-gray-500">Name (only you see this)</label>
+            <label className="block text-xs font-extrabold text-gray-500">Name on your phone (only you see this)</label>
             <input
               value={draft.savedName}
               onChange={(e) => setDraft((d) => ({ ...d, savedName: e.target.value }))}

@@ -15,8 +15,8 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
     <AnimatePresence>
       {open && (
         <>
-          <motion.div className="absolute inset-0 z-[60] bg-ink/40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
-          <motion.div className="absolute inset-x-0 bottom-0 z-[70] max-h-[85%] overflow-y-auto rounded-t-[2rem] bg-white p-6 pb-8 shadow-2xl" initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', stiffness: 320, damping: 32 }}>
+          <motion.div className="absolute inset-0 z-[100] bg-ink/40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
+          <motion.div className="absolute inset-x-0 bottom-0 z-[110] max-h-[85%] overflow-y-auto rounded-t-[2rem] bg-white p-6 pb-8 shadow-2xl" initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', stiffness: 320, damping: 32 }}>
             <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-gray-200" />
             {title && <h3 className="mb-3 text-xl font-black">{title}</h3>}
             {children}
