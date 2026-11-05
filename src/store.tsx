@@ -36,7 +36,7 @@ import {
   loadOutbox,
   removeOutbox,
 } from './lib/appCache'
-import { setCachedMessages, clearMessageCache } from './lib/messageCache'
+import { setCachedMessages, getCachedMessages, clearMessageCache } from './lib/messageCache'
 import { warmPhoto } from './lib/photoCache'
 
 export 
@@ -100,6 +100,7 @@ type Settings = {
   statusPrivacy: string
   email: string
   subscriptionPlan: string // pro | premium
+  premiumExpiresAt?: string | null
   liquidGlass: boolean
   colorMode: string
   appLock: boolean
@@ -391,6 +392,7 @@ const defaultSettings: Settings = {
   theme: 'purple',
   email: '',
   subscriptionPlan: 'pro',
+  premiumExpiresAt: null as string | null,
   liquidGlass: false,
   colorMode: 'light',
   chatAccent: 'purple',
@@ -424,12 +426,17 @@ type Store = {
   clearToast: () => void
   refreshGroups: () => Promise<void>
   refreshStatus: () => Promise<void>
+  refreshSubscription: () => Promise<void>
   refreshCalls: () => Promise<void>
   refreshSaveRequests: () => Promise<void>
   /** Optimistic local updates to status feed (UI-first) */
   patchStatusList: (fn: (list: any[]) => any[]) => void
   /** Optimistic upsert of a chat preview so ChatsHome updates instantly on send */
   upsertChatPreview: (preview: Partial<ChatPreview> & { contactId: string }) => void
+  typingPeers: Record<string, boolean>
+  presenceMap: Record<string, boolean>
+  activeConversationId: string | null
+  setActiveConversationId: (id: string | null) => void
   login: (phone: string, password: string) => Promise<ApiUser>
   register: (data: {
     phone: string
@@ -504,6 +511,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [contacts, setContacts] = useState<ApiContact[]>([])
   const [chats, setChats] = useState<ChatPreview[]>([])
   const [typingPeers, setTypingPeers] = useState<Record<string, boolean>>({})
+  /** userId -> online — used by Online filter + avatars (not only contacts list) */
+  const [presenceMap, setPresenceMap] = useState<Record<string, boolean>>({})
+  /** Conversation currently open in ChatWindow — inbound messages mark read, no unread bump */
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
+  const activeConvRef = useRef<string | null>(null)
+  activeConvRef.current = activeConversationId
+  const typingClearRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const seenInboundRef = useRef<Set<string>>(new Set())
   const [groups, setGroups] = useState<any[]>([])
   const [statusList, setStatusList] = useState<any[]>([])
   const [calls, setCalls] = useState<any[]>([])
@@ -560,7 +575,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     setMe(user)
     setSettings((prev) => {
-      const plan = ((user as any).subscriptionPlan || 'pro').replace('free', 'pro')
+      // Subscription ONLY from server - never upgrade from local cache alone
+      const plan = ((user as any).subscriptionPlan || (s as any)?.subscriptionPlan || 'pro')
+        .toString()
+        .replace('free', 'pro')
+      const isPremium = plan === 'premium'
+      const ps = (user as any).premiumSettings || (s as any)?.premiumSettings || {}
       const next = {
         ...defaultSettings,
         ...prev,
@@ -569,9 +589,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         bio: user.bio,
         phone: user.phone,
         photo: user.photo,
-        verifiedBadge: (user as any).verifiedBadge !== false,
         ...(s || {}),
-        subscriptionPlan: plan,
+        subscriptionPlan: isPremium ? 'premium' : 'pro',
+        premiumExpiresAt: (user as any).premiumExpiresAt || (s as any)?.premiumExpiresAt || null,
+        verifiedBadge: isPremium && ((user as any).verifiedBadge !== false) && ps.verified_badge !== false,
+        forceReadReceipts: isPremium && !!(ps.force_read_receipts ?? (s as any)?.forceReadReceipts),
+        liveTyping: isPremium && (ps.live_typing !== false) && ((s as any)?.liveTyping !== false),
+        statusAdsEnabled: isPremium && !!(ps.status_ads_enabled ?? (s as any)?.statusAdsEnabled),
         // Appearance always wins from resolve (server > cache > defaults)
         theme: appearance.theme,
         chatAccent: appearance.chatAccent,
@@ -604,6 +628,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setCalls([])
     setSaveRequestPending(0)
     setListsReady(true)
+    setPresenceMap({})
+    setTypingPeers({})
     clearMessageCache()
     void clearAllCaches()
     // Do not inherit previous user's theme after session expiry / forced logout
@@ -635,19 +661,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const { chats: c } = await api.chats({ lean: !!opts?.lean, limit: 50 })
       // Merge network into UI — never drop a row that is only local / newer than server
       setChats((prev) => {
-        const byId = new Map(prev.map((p) => [p.contactId, p]))
-        const seen = new Set<string>()
+        // Index local rows by contactId AND conversationId so nothing is dropped
+        const byContact = new Map(prev.map((p) => [p.contactId, p]))
+        const byConv = new Map(
+          prev.filter((p) => p.conversationId).map((p) => [p.conversationId!, p]),
+        )
+        const seenContact = new Set<string>()
+        const seenConv = new Set<string>()
         const merged = c.map((row) => {
-          seen.add(row.contactId)
-          const old = byId.get(row.contactId)
+          seenContact.add(row.contactId)
+          if (row.conversationId) seenConv.add(row.conversationId)
+          const old =
+            byContact.get(row.contactId) ||
+            (row.conversationId ? byConv.get(row.conversationId) : undefined)
           if (!old) return row
           const oldT = old.iso ? Date.parse(old.iso) : 0
           const newT = row.iso ? Date.parse(row.iso) : 0
-          // If UI has a newer last message (optimistic send), keep it
+          // Prefer local when newer or when server has no last text yet
           const keepLocalLast = oldT > newT || (!row.last && !!old.last)
           return {
             ...old,
             ...row,
+            contactId: row.contactId || old.contactId,
             photo: row.photo || old.photo,
             name: row.name || old.name,
             hue: row.hue || old.hue,
@@ -659,15 +694,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               : (row.state as any) || old.state,
             mine: keepLocalLast ? old.mine : row.mine ?? old.mine,
             conversationId: row.conversationId || old.conversationId,
-            unread: row.unread !== undefined ? row.unread : old.unread,
+            // Don't let a lagging server zero out a badge we just set locally
+            unread:
+              keepLocalLast && (old.unread || 0) > (row.unread || 0)
+                ? old.unread
+                : row.unread !== undefined
+                  ? row.unread
+                  : old.unread,
           }
         })
-        // Keep local-only previews (brand-new chats not yet in server list)
+        // Keep local-only previews (new chats / offline sends not yet on server)
         for (const p of prev) {
-          if (!seen.has(p.contactId)) merged.push(p)
+          const byC = seenContact.has(p.contactId)
+          const byV = p.conversationId && seenConv.has(p.conversationId)
+          if (!byC && !byV) merged.push(p)
         }
-        // Sort by activity
         merged.sort((a, b) => (Date.parse(b.iso || '') || 0) - (Date.parse(a.iso || '') || 0))
+        // Prefer the name YOU saved for this contact over their public display name
+        const clist = contactsRef.current || []
+        for (let i = 0; i < merged.length; i++) {
+          const row = merged[i]
+          const ct = clist.find(
+            (x: any) => x.id === row.contactId || x.peerId === row.contactId,
+          )
+          const saved = (ct?.savedName || ct?.name || '').trim()
+          if (saved) merged[i] = { ...row, name: saved }
+        }
         if (prev.length === merged.length) {
           let same = true
           for (let i = 0; i < prev.length; i++) {
@@ -675,6 +727,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             const b = merged[i]
             if (
               a.contactId !== b.contactId ||
+              a.conversationId !== b.conversationId ||
               a.unread !== b.unread ||
               a.last !== b.last ||
               a.iso !== b.iso ||
@@ -701,6 +754,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!hasAccessToken() || isSessionDead()) return
     try {
       const { contacts: c } = await api.contacts()
+      // Seed presence map from contact.online flags
+      setPresenceMap((prev) => {
+        const next = { ...prev }
+        for (const ct of c) {
+          const id = ct.id || ct.peerId
+          if (id && ct.online) next[id] = true
+        }
+        return next
+      })
       setContacts((prev) => {
         if (prev.length === c.length) {
           let same = true
@@ -760,6 +822,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+
+  const refreshSubscription = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
+    try {
+      const { user, settings: s } = await api.me()
+      applyUser(user, s as Record<string, unknown>)
+    } catch {
+      /* soft */
+    }
+  }, [applyUser])
+
   const refreshStatus = useCallback(async () => {
     if (!hasAccessToken() || isSessionDead()) return
     try {
@@ -781,17 +854,39 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         })
       // Cheap equality: id + views length + text/image — avoid full JSON.stringify on every poll
       setStatusList((prev) => {
-        if (prev.length === active.length) {
+        // Keep optimistic / pending local statuses so they never flash away
+        const pending = (prev || []).filter(
+          (s: any) => s?.pending || String(s?.id || '').startsWith('local-status-'),
+        )
+        const serverIds = new Set(active.map((s: any) => s.id))
+        // Drop pending only once server has a real row matching content+owner
+        const stillPending = pending.filter((p: any) => {
+          if (serverIds.has(p.id)) return false
+          return !active.some(
+            (s: any) =>
+              s.userId === p.userId &&
+              (s.text || '') === (p.text || '') &&
+              !!s.image === !!p.image &&
+              Math.abs((Date.parse(s.createdAt) || 0) - (Date.parse(p.createdAt) || 0)) < 120000,
+          )
+        })
+        const merged = [...active, ...stillPending].sort((a: any, b: any) => {
+          const ta = a.createdAt ? Date.parse(a.createdAt) : 0
+          const tb = b.createdAt ? Date.parse(b.createdAt) : 0
+          return ta - tb
+        })
+        if (prev.length === merged.length) {
           let same = true
           for (let i = 0; i < prev.length; i++) {
             const a = prev[i] as any
-            const b = active[i] as any
+            const b = merged[i] as any
             if (
               a.id !== b.id ||
               a.text !== b.text ||
               a.image !== b.image ||
               (a.views?.length ?? 0) !== (b.views?.length ?? 0) ||
-              a.expiresAt !== b.expiresAt
+              a.expiresAt !== b.expiresAt ||
+              !!a.pending !== !!b.pending
             ) {
               same = false
               break
@@ -799,8 +894,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           if (same) return prev
         }
-        void saveCachedStatuses(active)
-        return active
+        void saveCachedStatuses(merged.filter((s: any) => !s.pending))
+        return merged
       })
     } catch (e: any) {
       if ((e as any)?.status === 401 && !(e as any)?.soft) wipeSession()
@@ -819,7 +914,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [wipeSession])
 
   const patchStatusList = useCallback((fn: (list: any[]) => any[]) => {
-    setStatusList((prev) => fn(prev))
+    setStatusList((prev) => {
+      const next = fn(prev)
+      // Persist non-pending rows so optimistic posts survive refresh
+      void saveCachedStatuses((next || []).filter((s: any) => !s?.pending && !String(s?.id || '').startsWith('local-')))
+      return next
+    })
   }, [])
 
   const upsertChatPreview = useCallback(
@@ -1131,6 +1231,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!mine) {
             void api.markDelivered(m.id).catch(() => {})
           }
+          // Keep thread cache in sync so opening inbox shows the message
+          try {
+            const prev = getCachedMessages(cid) || []
+            if (!prev.some((x) => x.id === m.id || (m.client_key && x.clientKey === m.client_key))) {
+              const mapped: any = {
+                id: String(m.id),
+                clientKey: m.client_key || m.clientKey || m.id,
+                from: String(m.from || ''),
+                text: m.text || '',
+                time: m.time || new Date().toISOString(),
+                timeLabel: '',
+                mine,
+                state: (m.state as any) || 'sent',
+                image: m.image || null,
+                replyToId: m.reply_to_message_id || m.replyToId || null,
+                replyToText: m.reply_to_text || m.replyToText || null,
+                reactions: m.reactions || [],
+              }
+              setCachedMessages(cid, [...prev, mapped])
+            }
+          } catch { /* */ }
           let previewText = m.text || (m.image ? '📷 Photo' : '')
           const sr = String(previewText).match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
           if (sr) {
@@ -1149,6 +1270,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             let nextList
             if (idx >= 0) {
               const cur = prev[idx]
+              const mid = String(m.id)
+              const already = seenInboundRef.current.has(mid)
+              if (!mine) seenInboundRef.current.add(mid)
+              const openNow = activeConvRef.current && activeConvRef.current === cid
+              if (openNow && !mine) {
+                // Already in this chat — read immediately, never bump home badge
+                void api.markRead(cid).catch(() => {})
+                void import('./realtime').then(({ wsReceipt }) => {
+                  try { wsReceipt({ conversationId: cid, messageId: mid, state: 'read' }) } catch { /* */ }
+                }).catch(() => {})
+              }
               const updated = {
                 ...cur,
                 last: previewText,
@@ -1156,14 +1288,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 iso,
                 mine,
                 state: mine ? ((m.state as any) || 'sent') : cur.state,
-                unread: mine ? 0 : (cur.unread || 0) + 1,
+                unread: mine || openNow ? 0 : already ? (cur.unread || 0) : (cur.unread || 0) + 1,
               }
               nextList = [...prev]
               nextList.splice(idx, 1)
               nextList = [updated, ...nextList]
             } else if (mine) {
+              // Own send: home row should already exist via upsertChatPreview — never create with self as contactId
               return prev
             } else {
+              const openNow = activeConvRef.current && activeConvRef.current === cid
+              if (openNow) void api.markRead(cid).catch(() => {})
               nextList = [
                 {
                   contactId: String(m.from),
@@ -1172,7 +1307,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   last: previewText,
                   time: timeLabel,
                   iso,
-                  unread: 1,
+                  unread: openNow ? 0 : 1,
                   mine: false,
                   state: undefined,
                 },
@@ -1229,23 +1364,50 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
         },
         onTyping: (peerId, typing) => {
+          const on = !!typing
+          // Clear any previous idle timer
+          const prevTimer = typingClearRef.current[peerId]
+          if (prevTimer) {
+            clearTimeout(prevTimer)
+            delete typingClearRef.current[peerId]
+          }
           setTypingPeers((prev) => {
-            const on = !!typing
             if (!!prev[peerId] === on) return prev
             const next = { ...prev }
             if (on) next[peerId] = true
             else delete next[peerId]
             return next
           })
+          // Auto-clear so home feed returns to last message text
+          if (on) {
+            typingClearRef.current[peerId] = setTimeout(() => {
+              setTypingPeers((prev) => {
+                if (!prev[peerId]) return prev
+                const next = { ...prev }
+                delete next[peerId]
+                return next
+              })
+              delete typingClearRef.current[peerId]
+              try {
+                window.dispatchEvent(
+                  new CustomEvent('sc:rt-typing', { detail: { peerId, typing: false } }),
+                )
+              } catch { /* */ }
+            }, 4000)
+          }
           try {
             window.dispatchEvent(
-              new CustomEvent('sc:rt-typing', { detail: { peerId, typing } }),
+              new CustomEvent('sc:rt-typing', { detail: { peerId, typing: on } }),
             )
           } catch {
             /* */
           }
         },
         onPresence: (peerId, online, lastSeen) => {
+          setPresenceMap((prev) => {
+            if (prev[peerId] === !!online) return prev
+            return { ...prev, [peerId]: !!online }
+          })
           setContacts((prev) =>
             prev.map((c) =>
               c.id === peerId || c.peerId === peerId
@@ -1451,6 +1613,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const meRef = useRef(me)
   meRef.current = me
+  const contactsRef = useRef(contacts)
+  contactsRef.current = contacts
 
   // Device preferences are local-only. Never send them to the profile endpoint.
   const setSetting = useCallback(<K extends keyof Settings>(k: K, v: Settings[K]) => {
@@ -1492,12 +1656,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       typingIndicator: 'typing_indicator',
       autoDownload: 'auto_download',
       sound: 'sound',
+      readReceipts: 'read_receipts',
+      statusLikeNotif: 'status_like_notif',
+      colorMode: 'color_mode',
+      liquidGlass: 'liquid_glass',
+      hideLiveTyping: 'hide_live_typing',
     }
     const sk = serverKey[k as string]
     if (sk && hasAccessToken() && !isSessionDead()) {
-      void api.updatePreferences({ [sk]: v }).catch(() => {})
+      void api.updatePreferences({ [sk]: v })
+        .then(() => showToast('Setting saved'))
+        .catch(() => showToast('Could not save setting'))
+    } else {
+      // Local-only (or offline) — still confirm UI applied
+      showToast('Setting updated')
     }
-  }, [settings])
+  }, [settings, showToast])
 
   // Persist profile fields with one PATCH and update the local session cache;
   // profile saves must not call /auth/me again.
@@ -1549,6 +1723,45 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setGroups((gs) => gs.filter((g) => g.id !== id))
   }
 
+
+  // Live status view counts for the owner
+  useEffect(() => {
+    const onView = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as {
+        statusId?: string
+        viewCount?: number
+        viewer?: any
+      }
+      if (!d?.statusId) return
+      patchStatusList((list) =>
+        list.map((s: any) => {
+          if (s.id !== d.statusId) return s
+          const views = Array.isArray(s.views) ? [...s.views] : []
+          const vid = d.viewer?.viewer_id
+          if (vid && !views.includes(vid)) views.push(vid)
+          return {
+            ...s,
+            views,
+            viewCount: d.viewCount ?? views.length,
+          }
+        }),
+      )
+      if (d.viewer?.viewer_id) {
+        void (async () => {
+          try {
+            const { loadCachedViewers, saveCachedViewers } = await import('./lib/appCache')
+            const prev = (await loadCachedViewers<any>(d.statusId!)) || []
+            if (!prev.some((v: any) => v.viewer_id === d.viewer.viewer_id)) {
+              await saveCachedViewers(d.statusId!, [d.viewer, ...prev])
+            }
+          } catch { /* */ }
+        })()
+      }
+    }
+    window.addEventListener('sc:rt-status-view', onView)
+    return () => window.removeEventListener('sc:rt-status-view', onView)
+  }, [patchStatusList])
+
   const value = useMemo(
     () => ({
       ready,
@@ -1561,6 +1774,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       contacts,
       chats,
       typingPeers,
+      presenceMap,
+      activeConversationId,
+      setActiveConversationId,
       groups,
       statusList,
       calls,
@@ -1572,6 +1788,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       clearToast,
       refreshGroups,
       refreshStatus,
+      refreshSubscription,
       refreshCalls,
       refreshSaveRequests,
       patchStatusList,
@@ -1594,6 +1811,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       contacts,
       chats,
       typingPeers,
+      presenceMap,
+      activeConversationId,
+      setActiveConversationId,
       groups,
       statusList,
       calls,
@@ -1607,6 +1827,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       clearToast,
       refreshGroups,
       refreshStatus,
+      refreshSubscription,
       refreshCalls,
       refreshSaveRequests,
       patchStatusList,

@@ -87,12 +87,13 @@ export function Avatar({
       </span>
       {showBadge && (
         <span
-          className="pointer-events-none absolute z-20 flex items-center justify-center rounded-full bg-[#1DA1F2] text-white shadow-md ring-2 ring-white"
+          className="pointer-events-none absolute z-30 flex items-center justify-center rounded-full bg-[#1DA1F2] text-white shadow-md ring-2 ring-white"
           style={{
             width: badge,
             height: badge,
-            left: -1,
-            bottom: -1,
+            // Bottom-right of profile photo
+            right: -2,
+            bottom: -2,
             fontSize: badge * 0.55,
           }}
           title="Premium"

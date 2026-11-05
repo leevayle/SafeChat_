@@ -113,3 +113,60 @@ async def mpesa_status(checkout_request_id: str, user: dict = Depends(get_curren
         "Payment status",
         {"paid": paid, "plan": row.get("plan"), "status": "paid" if paid else row.get("status")},
     )
+
+
+class VerifyRequest(BaseModel):
+    checkoutRequestId: str
+
+
+@router.post("/mpesa/verify")
+async def mpesa_verify(body: VerifyRequest, user: dict = Depends(get_current_user)):
+    """Explicit payment verification - the step that grants Premium in DB."""
+    db = get_database()
+    row = await db.payments.find_one(
+        {"checkout_request_id": body.checkoutRequestId, "user_id": user["id"]}
+    )
+    if not row:
+        raise ValidationError("Payment not found")
+    now = datetime.now(timezone.utc)
+    if row.get("status") == "paid":
+        return success_response(
+            "Already premium",
+            {"paid": True, "plan": row.get("plan"), "subscription_plan": "premium"},
+        )
+    # In production: query Safaricom STK status here. Demo: accept if age >= 5s
+    created = row.get("created_at") or now
+    if getattr(created, "tzinfo", None) is None:
+        created = created.replace(tzinfo=timezone.utc)
+    if (now - created).total_seconds() < 5:
+        return success_response(
+            "Pending confirmation",
+            {"paid": False, "status": "pending", "plan": row.get("plan")},
+        )
+    plan = row.get("plan") or "monthly"
+    days = PLANS.get(plan, PLANS["monthly"])["days"]
+    expires = now + timedelta(days=days)
+    await db.payments.update_one(
+        {"_id": row["_id"]},
+        {"$set": {"status": "paid", "updated_at": now, "paid_at": now}},
+    )
+    await db.users.update_one(
+        {"_id": ObjectId(user["id"])},
+        {
+            "$set": {
+                "subscription_plan": "premium",
+                "premium_expires_at": expires,
+                "updated_at": now,
+                "premium_settings.verified_badge": True,
+            }
+        },
+    )
+    return success_response(
+        "Premium activated",
+        {
+            "paid": True,
+            "plan": plan,
+            "subscription_plan": "premium",
+            "premium_expires_at": expires.isoformat(),
+        },
+    )

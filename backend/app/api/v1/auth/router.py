@@ -73,36 +73,78 @@ async def logout(body: RefreshRequest):
 
 @router.get("/me")
 async def me(user: dict = Depends(get_current_user)):
+    from datetime import datetime, timezone
+    from bson import ObjectId
+    from app.core.database import get_database
+
+    db = get_database()
+    # Fresh doc so subscription/expiry is never stale from token-time user snapshot
+    doc = await db.users.find_one({"_id": ObjectId(user["id"])}) or user
+    plan = (doc.get("subscription_plan") or "pro").replace("free", "pro")
+    expires = doc.get("premium_expires_at")
+    now = datetime.now(timezone.utc)
+    if expires is not None:
+        if getattr(expires, "tzinfo", None) is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if plan == "premium" and expires < now:
+            # Expired - demote in DB
+            await db.users.update_one(
+                {"_id": ObjectId(user["id"])},
+                {"$set": {"subscription_plan": "pro", "premium_expires_at": None, "updated_at": now}},
+            )
+            plan = "pro"
+            expires = None
+    ps = doc.get("premium_settings") or {}
+    premium = plan == "premium"
+    expires_iso = None
+    if expires is not None:
+        expires_iso = expires.isoformat() if hasattr(expires, "isoformat") else str(expires)
+        if isinstance(expires_iso, str) and "T" in expires_iso and not expires_iso.endswith("Z") and "+" not in expires_iso[10:]:
+            expires_iso = expires_iso + "Z"
+
     return success_response(
         "Current user",
         {
             "id": user["id"],
-            "username": user["username"],
-            "display_name": user["display_name"],
-            "email": user.get("email"),
-            "phone_number": user.get("phone_number"),
-            "profile_photo": user.get("profile_photo"),
-            "bio": user.get("bio"),
-            "account_role": user.get("account_role"),
-            "account_status": user.get("account_status"),
-            "privacy_settings": user.get("privacy_settings"),
-            "notification_settings": user.get("notification_settings"),
-            "created_at": user.get("created_at").isoformat() if user.get("created_at") else None,
-            # Appearance (theme is CSS-only on client — never flash another user's palette)
-            "theme": user.get("theme") or "purple",
-            "chat_accent": user.get("chat_accent") or "purple",
-            "color_mode": user.get("color_mode") or "light",
-            "liquid_glass": bool(user.get("liquid_glass", False)),
-            "settings": {
-                "theme": user.get("theme") or "purple",
-                "chat_accent": user.get("chat_accent") or "purple",
-                "color_mode": user.get("color_mode") or "light",
-                "liquid_glass": bool(user.get("liquid_glass", False)),
-                "wallpaper": user.get("wallpaper"),
-                "status_validity": (user.get("status_settings") or {}).get("validity"),
-                "status_privacy": (user.get("status_settings") or {}).get("privacy"),
+            "username": doc.get("username") or user.get("username"),
+            "display_name": doc.get("display_name") or user.get("display_name"),
+            "email": doc.get("email"),
+            "phone_number": doc.get("phone_number"),
+            "profile_photo": doc.get("profile_photo"),
+            "bio": doc.get("bio") or "",
+            "account_role": doc.get("account_role"),
+            "account_status": doc.get("account_status"),
+            "privacy_settings": doc.get("privacy_settings"),
+            "notification_settings": doc.get("notification_settings"),
+            "created_at": doc.get("created_at").isoformat() if doc.get("created_at") else None,
+            "subscription_plan": plan,
+            "premium_expires_at": expires_iso,
+            "verified_badge": bool(ps.get("verified_badge", True)) if premium else False,
+            "premium_settings": {
+                "verified_badge": bool(ps.get("verified_badge", True)),
+                "force_read_receipts": bool(ps.get("force_read_receipts", False)),
+                "live_typing": bool(ps.get("live_typing", True)),
+                "status_ads_enabled": bool(ps.get("status_ads_enabled", False)),
             },
-            "preferences": user.get("preferences") or {},
+            # Appearance (theme is CSS-only on client)
+            "theme": doc.get("theme") or "purple",
+            "chat_accent": doc.get("chat_accent") or "purple",
+            "color_mode": doc.get("color_mode") or "light",
+            "liquid_glass": bool(doc.get("liquid_glass", False)),
+            "settings": {
+                "theme": doc.get("theme") or "purple",
+                "chat_accent": doc.get("chat_accent") or "purple",
+                "color_mode": doc.get("color_mode") or "light",
+                "liquid_glass": bool(doc.get("liquid_glass", False)),
+                "wallpaper": doc.get("wallpaper"),
+                "status_validity": (doc.get("status_settings") or {}).get("validity"),
+                "status_privacy": (doc.get("status_settings") or {}).get("privacy"),
+                "verified_badge": bool(ps.get("verified_badge", True)) if premium else False,
+                "force_read_receipts": bool(ps.get("force_read_receipts", False)) if premium else False,
+                "live_typing": bool(ps.get("live_typing", True)) if premium else False,
+                "status_ads_enabled": bool(ps.get("status_ads_enabled", False)) if premium else False,
+            },
+            "preferences": doc.get("preferences") or {},
         },
     )
 

@@ -55,10 +55,11 @@ export function StatusRing({
         {segments}
       </svg>
       <span
-        className="absolute inset-0 flex items-center justify-center"
+        className="absolute inset-0 flex items-center justify-center overflow-visible"
         style={{ padding: stroke + 1 }}
       >
-        <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full">
+        {/* overflow-visible so premium checkmark can sit on top of the ring */}
+        <span className="relative flex h-full w-full items-center justify-center overflow-visible rounded-full">
           {children}
         </span>
       </span>

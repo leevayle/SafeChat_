@@ -6,7 +6,7 @@ from bson import ObjectId
 from datetime import datetime, timezone
 from app.api.deps import get_current_user
 from app.core.database import get_database
-from app.core.exceptions import success_response, NotFoundError, ValidationError
+from app.core.exceptions import ForbiddenError, success_response, NotFoundError, ValidationError
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -240,7 +240,7 @@ async def deactivate_account(
 ):
     """Require password confirmation before deactivating the account."""
     from app.core.security import verify_password
-    from app.core.exceptions import UnauthorizedError, ValidationError
+    from app.core.exceptions import ForbiddenError, UnauthorizedError, ValidationError
 
     db = get_database()
     password = (body or {}).get("password") if isinstance(body, dict) else None
@@ -314,3 +314,32 @@ async def search_users(
             }
         )
     return success_response("Search results", results)
+
+
+class PremiumSettingsUpdate(BaseModel):
+    verified_badge: Optional[bool] = None
+    force_read_receipts: Optional[bool] = None
+    live_typing: Optional[bool] = None
+    status_ads_enabled: Optional[bool] = None
+
+
+@router.patch("/me/premium-settings")
+async def update_premium_settings(
+    body: PremiumSettingsUpdate,
+    user: dict = Depends(get_current_user),
+):
+    db = get_database()
+    u = await db.users.find_one({"_id": ObjectId(user["id"])})
+    if not u or (u.get("subscription_plan") or "pro") != "premium":
+        raise ForbiddenError("Premium required")
+    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if not updates:
+        return success_response("Nothing to update")
+    set_ops = {f"premium_settings.{k}": v for k, v in updates.items()}
+    # Mirror verified_badge to top-level for list serializers
+    if "verified_badge" in updates:
+        set_ops["verified_badge"] = updates["verified_badge"]
+    set_ops["updated_at"] = datetime.now(timezone.utc)
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
+    return success_response("Premium settings updated", updates)
+

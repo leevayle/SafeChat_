@@ -200,6 +200,8 @@ class AuthService:
             }
         )
 
+        premium = (user.get("subscription_plan") or "pro") == "premium"
+        ps = user.get("premium_settings") or {}
         user_public = {
             "id": user_id,
             "username": user["username"],
@@ -207,7 +209,20 @@ class AuthService:
             "profile_photo": user.get("profile_photo"),
             "account_role": user.get("account_role"),
             "account_status": status,
-            # Appearance — client applies CSS theme before painting the shell
+            "subscription_plan": user.get("subscription_plan") or "pro",
+            "verified_badge": bool(ps.get("verified_badge", True)) if premium else False,
+            "premium_settings": {
+                "verified_badge": bool(ps.get("verified_badge", True)),
+                "force_read_receipts": bool(ps.get("force_read_receipts", False)),
+                "live_typing": bool(ps.get("live_typing", True)),
+                "status_ads_enabled": bool(ps.get("status_ads_enabled", False)),
+            },
+            "premium_expires_at": (
+                user.get("premium_expires_at").isoformat()
+                if user.get("premium_expires_at") and hasattr(user.get("premium_expires_at"), "isoformat")
+                else (str(user.get("premium_expires_at")) if user.get("premium_expires_at") else None)
+            ),
+            # Appearance - client applies CSS theme before painting the shell
             "theme": user.get("theme") or "purple",
             "chat_accent": user.get("chat_accent") or "purple",
             "color_mode": user.get("color_mode") or "light",

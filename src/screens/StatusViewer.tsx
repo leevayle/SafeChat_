@@ -15,6 +15,31 @@ function mediaUrl(path?: string | null) {
 }
 
 const SEGMENT_MS = 5000
+
+/** Make http(s) and www links open outside the app */
+function linkifyStatusText(text: string) {
+  const parts = text.split(/(https?:\/\/[^\s]+|www\.[^\s]+)/gi)
+  return parts.map((part, i) => {
+    if (/^(https?:\/\/|www\.)/i.test(part)) {
+      const href = part.startsWith('http') ? part : `https://${part}`
+      return (
+        <a
+          key={i}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline decoration-white/70 underline-offset-2 text-brand-orange"
+          onClick={(e) => e.stopPropagation()}
+          data-status-action
+        >
+          {part}
+        </a>
+      )
+    }
+    return <span key={i}>{part}</span>
+  })
+}
+
 const HOLD_MS = 450 // short hold = pause; quick tap navigates
 
 type Props = {
@@ -132,6 +157,9 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
   const progressRef = useRef(0)
   const idxRef = useRef(0)
   const pausedRef = useRef(false)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  /** Active segment length in ms (video duration or default) */
+  const segmentMsRef = useRef(SEGMENT_MS)
   const itemsLenRef = useRef(items.length)
   const pressStartRef = useRef(0)
   const pressSideRef = useRef<'left' | 'right' | 'mid' | null>(null)
@@ -140,6 +168,15 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
   pausedRef.current = paused
   itemsLenRef.current = items.length
   progressRef.current = progress
+
+  // Default segment length when slide changes; video onLoadedMetadata may override
+  useEffect(() => {
+    segmentMsRef.current = SEGMENT_MS
+    const v = videoRef.current
+    if (v) {
+      try { v.pause(); v.currentTime = 0 } catch { /* */ }
+    }
+  }, [idx])
 
   // Keep idx in range when the filtered list shrinks (delete / expire)
   useEffect(() => {
@@ -238,6 +275,17 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
       .catch(() => {})
   }, [current?.id, current?.views, isOwner, me?.id, patchStatusList, refreshStatus])
 
+  // Sync video element with pause / resume
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    if (paused) {
+      try { v.pause() } catch { /* */ }
+    } else {
+      void v.play().catch(() => {})
+    }
+  }, [paused, idx])
+
   // Single active progress bar
   useEffect(() => {
     if (!items.length) return
@@ -249,7 +297,8 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
       lastTsRef.current = ts
 
       if (!pausedRef.current) {
-        const next = Math.min(1, progressRef.current + dt / SEGMENT_MS)
+        const dur = segmentMsRef.current || SEGMENT_MS
+        const next = Math.min(1, progressRef.current + dt / dur)
         progressRef.current = next
         setProgress(next)
         if (next >= 1) {
@@ -353,6 +402,7 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
     setDeleting(true)
     setPaused(true)
     const id = current.id
+    const snapshot = current
     const remaining = items.filter((s) => s.id !== id)
     patchStatusList((list) => list.filter((s) => s.id !== id))
     try {
@@ -366,11 +416,17 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
         progressRef.current = 0
         setPaused(false)
       }
-      // Don't hard-refresh immediately — optimistic list is source of truth; soft refresh later
       window.setTimeout(() => { void refreshStatus().catch(() => {}) }, 800)
     } catch {
+      // Rollback optimistic remove
+      patchStatusList((list) => {
+        if (list.some((s) => s.id === snapshot.id)) return list
+        return [...list, snapshot].sort(
+          (a, b) => (Date.parse(a.createdAt || '') || 0) - (Date.parse(b.createdAt || '') || 0),
+        )
+      })
       showToast('Delete failed')
-      void refreshStatus().catch(() => {})
+      setPaused(false)
     } finally {
       setDeleting(false)
     }
@@ -380,10 +436,17 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
     e.stopPropagation()
     if (!current) return
     if (isOwner) return
-    const next = { ...likes, [current.id]: !likes[current.id] }
-    void api.likeStatus(current.id).catch(() => {})
+    const id = current.id
+    const was = !!likes[id]
+    const next = { ...likes, [id]: !was }
     setLikes(next)
     saveLikes(next)
+    void api.likeStatus(id).catch(() => {
+      const rolled = { ...likes, [id]: was }
+      setLikes(rolled)
+      saveLikes(rolled)
+      showToast('Could not update like')
+    })
   }
 
   if (!items.length || !current) {
@@ -507,11 +570,22 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
           >
             {(current.type === 'video' || (current as any).video) ? (
               <video
+                ref={videoRef}
                 src={mediaUrl((current as any).video || current.image)}
-                className="max-h-[55vh] w-full rounded-2xl bg-transparent object-contain"
-                controls
+                className="max-h-[55vh] w-full rounded-2xl bg-transparent object-contain pointer-events-none"
                 autoPlay
                 playsInline
+                muted={muted}
+                onLoadedMetadata={(e) => {
+                  const d = e.currentTarget.duration
+                  if (d && Number.isFinite(d) && d > 0) {
+                    segmentMsRef.current = Math.max(1000, d * 1000)
+                  }
+                }}
+                onEnded={() => {
+                  progressRef.current = 1
+                  setProgress(1)
+                }}
               />
             ) : current.image ? (
               <img
@@ -522,7 +596,9 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
               />
             ) : null}
             {current.text && (
-              <p className="text-center text-2xl font-bold leading-snug">{current.text}</p>
+              <p className="pointer-events-auto text-center text-2xl font-bold leading-snug whitespace-pre-wrap break-words">
+                {linkifyStatusText(current.text)}
+              </p>
             )}
           </motion.div>
         </AnimatePresence>
@@ -715,10 +791,19 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
                     return
                   }
                   try {
+                    const hours = Number(
+                      (typeof localStorage !== 'undefined' &&
+                        JSON.parse(localStorage.getItem('sc_settings') || '{}').statusValidity) ||
+                        24,
+                    ) || 24
                     await api.postStatus(
                       current.text || '',
                       current.image || null,
                       (current as any).background || 'solid_1',
+                      {
+                        video: (current as any).video || undefined,
+                        expiresInHours: hours,
+                      },
                     )
                     showToast('Reposted to your status')
                     void refreshStatus?.()

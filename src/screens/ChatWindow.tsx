@@ -270,7 +270,7 @@ const MessageBubble = memo(function MessageBubble({
         {m.image && (
           <button
             type="button"
-            className="block w-full overflow-hidden"
+            className="block w-full overflow-hidden rounded-2xl"
             onClick={(e) => {
               e.stopPropagation()
               onOpenImage?.(mediaUrl(m.image))
@@ -279,7 +279,7 @@ const MessageBubble = memo(function MessageBubble({
             <img
               src={mediaUrl(m.image)}
               alt=""
-              className={`sc-msg-image max-h-60 w-full bg-transparent object-contain ${m.text && m.text !== '📷 Photo' ? '' : 'rounded-b-none'}`}
+              className="sc-msg-image max-h-60 w-full bg-transparent object-contain rounded-2xl"
               loading="lazy"
             />
           </button>
@@ -359,7 +359,7 @@ const MessageBubble = memo(function MessageBubble({
 })
 
 function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus }: Props) {
-  const { settings, contacts, chats, me, showToast, upsertChatPreview, statusList } = useStore()
+  const { settings, contacts, chats, me, showToast, upsertChatPreview, statusList, setActiveConversationId } = useStore()
   // Resolve peer from contacts, or from an existing chat preview (notifications may pass contactId)
   const chatPreview =
     chats.find(
@@ -670,6 +670,25 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }
 
+
+  // When home list later provides conversationId, adopt it (fixes empty inbox)
+  useEffect(() => {
+    if (conversationId) return
+    const found =
+      chats.find(
+        (ch) =>
+          ch.contactId === peerId ||
+          ch.contactId === contactId ||
+          ch.conversationId === contactId,
+      )?.conversationId || null
+    if (found) {
+      setConversationId(found)
+      convRef.current = found
+      void load(true)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chats, contactId, peerId, conversationId])
+
   useEffect(() => {
     setLoading(true)
     // Fresh open: do NOT animate history - only new/outgoing later
@@ -926,18 +945,29 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const liveClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pushLiveDraft = useCallback(
     (draft: string) => {
-      // Optional privacy only - live character stream is for ALL users by default
-      if ((settings as any).hideLiveTyping) return
       const to = peerId || contactId
       if (!to || !hasAccessToken()) return
-      // Skip only exact identical re-sends (not character changes / deletes)
+      if (settings.typingIndicator === false) return
+
+      // Always stream draft so Premium peers can render live characters.
+      // Non-premium peers only show the classic typing bubble.
+      // Premium senders may hide their draft via hideLiveTyping.
+      const hideMine = !!(settings as any).hideLiveTyping &&
+        (settings as any).subscriptionPlan === 'premium'
+
+      const typingNow = draft.length > 0
       if (draft === liveSendRef.current.last) return
       liveSendRef.current = { last: draft, at: Date.now() }
+
       try {
         if (isRealtimeOpen()) {
-          // Always stream full draft so peer sees h → hi → (delete) → "" live in the bubble
-          wsLiveTyping(to, draft)
-        } else if (settings.typingIndicator && draft.length > 0) {
+          if (hideMine) {
+            wsTyping(to, typingNow)
+          } else {
+            // draft packet includes typing flag for all receivers
+            wsLiveTyping(to, draft)
+          }
+        } else if (typingNow) {
           void api.setTyping(to).catch(() => {})
         }
       } catch {
@@ -984,7 +1014,24 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       requestAnimationFrame(() => pinToBottom(smooth))
     })
     openedOnce.current = true
-  }, [msgs.length, pendingImage, liveDraft, loading])
+  }, [msgs.length, pendingImage, liveDraft, typing, loading])
+  // Always reveal typing / live bubble at the bottom
+  useEffect(() => {
+    if (!typing && !(liveDraft && liveDraft.length)) return
+    requestAnimationFrame(() => {
+      pinToBottom(true)
+      requestAnimationFrame(() => pinToBottom(true))
+    })
+  }, [typing, liveDraft])
+  // Register open conversation so inbound WS marks read (no home unread bump)
+  useEffect(() => {
+    const cid = conversationId
+    if (cid) setActiveConversationId(cid)
+    return () => {
+      setActiveConversationId(null)
+    }
+  }, [conversationId, setActiveConversationId])
+
   useEffect(() => {
     openedOnce.current = false
   }, [contactId])
@@ -1255,12 +1302,18 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     const onLive = (ev: Event) => {
       const d = (ev as CustomEvent).detail as { peerId?: string; draft?: string }
       if (!isPeer(d?.peerId)) return
-      // Full draft string: "h" → "hi" → "" as they type/delete
       const draft = typeof d.draft === 'string' ? d.draft : ''
-      setLiveDraft(draft.length > 0 ? draft : null)
+      // One-way: only Premium (live typing on, default true) sees real characters
+      const canSeeLive =
+        (settings as any).subscriptionPlan === 'premium' &&
+        (settings as any).liveTyping !== false
+      if (canSeeLive) {
+        setLiveDraft(draft.length > 0 ? draft : null)
+      } else {
+        setLiveDraft(null)
+      }
       setTyping(draft.length > 0)
       if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
-      // Safety clear if peer goes idle without sending empty draft
       if (draft.length > 0) {
         liveClearTimer.current = setTimeout(() => {
           setLiveDraft(null)
@@ -1277,7 +1330,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       window.removeEventListener('sc:rt-live-typing', onLive)
       if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
     }
-  }, [contactId, peerId])
+  }, [contactId, peerId, settings])
 
 
   const applyEdit = async () => {
@@ -1459,7 +1512,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           onClick={() => setProfileOpen(true)}
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
-          <Avatar contact={{ ...c, online: peerOnline || c.online, premium: !!(c as any).premium || (c as any).subscriptionPlan === 'premium' }} size={44} />
+          <Avatar contact={{ ...c, online: peerOnline || c.online, premium: !!(c as any).verifiedBadge }} size={44} />
           <div className="min-w-0 flex-1">
             <p className="truncate font-extrabold leading-tight">{c.name}</p>
             <p
@@ -1638,7 +1691,24 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               </div>
             )
           })}
-          {/* Live character bubble - recipient sees h → hi → deletes in real time */}
+          {/* Classic three-dot typing bubble (default for everyone; Pro always) */}
+          {typing && !(liveDraft != null && liveDraft !== '') && (
+            <motion.div
+              key="typing-dots"
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.12 }}
+              className="flex"
+            >
+              <div className="flex items-center gap-1 rounded-3xl rounded-bl-md bg-white px-4 py-3 shadow-sm ring-1 ring-black/5">
+                <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.3s]" />
+                <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400 [animation-delay:-0.15s]" />
+                <span className="h-2 w-2 animate-bounce rounded-full bg-gray-400" />
+              </div>
+            </motion.div>
+          )}
+          {/* Live character bubble - Premium viewers only */}
           {liveDraft != null && liveDraft !== '' && (
             <motion.div
               key="live-typing"
@@ -1773,16 +1843,18 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                   contact={{
                     ...c,
                     online: peerOnline || c.online,
-                    premium:
-                      !!(c as any).premium ||
-                      !!(c as any).verifiedBadge ||
-                      (c as any).subscriptionPlan === 'premium',
+                    premium: !!(c as any).verifiedBadge,
                   }}
                   size={120}
                 />
               </div>
             </div>
             <h2 className="mt-4 text-2xl font-black text-ink">{c.name}</h2>
+            {(c as any).publicName && (c as any).publicName !== c.name ? (
+              <p className="mt-1 text-sm font-semibold text-gray-500">
+                Public name: {(c as any).publicName}
+              </p>
+            ) : null}
             {c.username ? <p className="mt-2 font-bold text-brand-purple">@{c.username}</p> : null}
             <p className="mt-1 text-xs font-semibold text-gray-400">
               {c.phone ? 'Contact shared with you' : 'Contact not shared with you'}

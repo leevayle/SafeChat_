@@ -485,6 +485,7 @@ function Shell() {
         {chat && (
           <div className="absolute inset-0 z-[35] bg-white">
             <ChatWindow
+              key={chat}
               contactId={chat}
               onBack={() => setChat(null)}
               onCall={(kind) => placeCall(chat, kind)}

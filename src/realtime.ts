@@ -65,18 +65,24 @@ type SocketState = {
   ws: WebSocket | null
   handlers: RtHandlers
   pingTimer: ReturnType<typeof setInterval> | null
+  pongWatch: ReturnType<typeof setInterval> | null
   reconnectTimer: ReturnType<typeof setTimeout> | null
   intentionalClose: boolean
   retries: number
+  lastPongAt: number
+  listenersBound: boolean
 }
 
 const state: SocketState = {
   ws: null,
   handlers: {},
   pingTimer: null,
+  pongWatch: null,
   reconnectTimer: null,
   intentionalClose: false,
   retries: 0,
+  lastPongAt: 0,
+  listenersBound: false,
 }
 
 function wsUrl(token: string): string {
@@ -102,6 +108,10 @@ function clearTimers() {
     clearInterval(state.pingTimer)
     state.pingTimer = null
   }
+  if (state.pongWatch) {
+    clearInterval(state.pongWatch)
+    state.pongWatch = null
+  }
   if (state.reconnectTimer) {
     clearTimeout(state.reconnectTimer)
     state.reconnectTimer = null
@@ -111,11 +121,42 @@ function clearTimers() {
 function scheduleReconnect() {
   if (state.intentionalClose) return
   if (!hasAccessToken()) return
-  const delay = Math.min(15000, 800 * Math.pow(1.6, state.retries))
+  if (state.reconnectTimer) return // already scheduled
+  // Fast first retries, then cap — proxies often drop idle sockets ~30–60s
+  const delay = Math.min(8000, 500 * Math.pow(1.5, state.retries))
   state.retries += 1
   state.reconnectTimer = setTimeout(() => {
+    state.reconnectTimer = null
+    // Force close stale socket before opening a new one
+    try {
+      if (state.ws && state.ws.readyState !== WebSocket.CLOSED) state.ws.close()
+    } catch { /* */ }
+    state.ws = null
     connectRealtime(state.handlers)
   }, delay)
+}
+
+function bindLifecycleListeners() {
+  if (state.listenersBound || typeof window === 'undefined') return
+  state.listenersBound = true
+  const bump = () => {
+    if (state.intentionalClose) return
+    if (!hasAccessToken()) return
+    // Tab visible again or network back — reconnect immediately if socket dead
+    const alive = state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)
+    if (!alive) {
+      state.retries = 0
+      connectRealtime(state.handlers)
+    } else if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+      rawSend({ t: 'ping' })
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') bump()
+  })
+  window.addEventListener('online', bump)
+  // Some browsers throttle timers in background; resume aggressively
+  window.addEventListener('focus', bump)
 }
 
 function rawSend(obj: object): boolean {
@@ -134,6 +175,7 @@ export function setRealtimeHandlers(handlers: RtHandlers) {
 
 export function connectRealtime(handlers?: RtHandlers) {
   if (handlers) state.handlers = { ...state.handlers, ...handlers }
+  bindLifecycleListeners()
   if (!hasAccessToken()) return
   if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
     return
@@ -154,10 +196,24 @@ export function connectRealtime(handlers?: RtHandlers) {
 
   ws.onopen = () => {
     state.retries = 0
+    state.lastPongAt = Date.now()
     state.handlers.onStatus?.('open')
+    // Ping every 15s — stays under common proxy idle timeouts (30–60s)
     state.pingTimer = setInterval(() => {
-      rawSend({ t: 'ping' })
-    }, 25000)
+      if (!rawSend({ t: 'ping' })) {
+        scheduleReconnect()
+      }
+    }, 15000)
+    // If no pong for 45s, treat socket as dead and reconnect
+    state.pongWatch = setInterval(() => {
+      if (state.intentionalClose) return
+      if (Date.now() - state.lastPongAt > 45000) {
+        try { state.ws?.close() } catch { /* */ }
+        state.ws = null
+        clearTimers()
+        scheduleReconnect()
+      }
+    }, 10000)
   }
 
   ws.onmessage = (ev) => {
@@ -168,7 +224,10 @@ export function connectRealtime(handlers?: RtHandlers) {
       return
     }
     const t = data?.t
-    if (t === 'pong' || t === 'ping') return
+    if (t === 'pong' || t === 'ping') {
+      state.lastPongAt = Date.now()
+      return
+    }
     if (t === 'msg' && data.c && data.m) {
       state.handlers.onMessage?.(String(data.c), data.m as RtMsg)
       return
@@ -244,6 +303,20 @@ export function connectRealtime(handlers?: RtHandlers) {
         !!data.online,
         data.lastSeen || null,
       )
+      return
+    }
+    if (t === 'status_view' && data.status_id) {
+      try {
+        window.dispatchEvent(
+          new CustomEvent('sc:rt-status-view', {
+            detail: {
+              statusId: String(data.status_id),
+              viewCount: data.view_count,
+              viewer: data.viewer || null,
+            },
+          }),
+        )
+      } catch { /* */ }
     }
   }
 
@@ -332,4 +405,17 @@ export function wsLiveTyping(to: string, draft: string) {
     live: true,
     typing: text.length > 0,
   })
+}
+
+
+/** Close and open a fresh socket (e.g. after access token rotation). */
+export function forceReconnectRealtime() {
+  state.intentionalClose = false
+  state.retries = 0
+  clearTimers()
+  try {
+    if (state.ws && state.ws.readyState !== WebSocket.CLOSED) state.ws.close()
+  } catch { /* */ }
+  state.ws = null
+  connectRealtime(state.handlers)
 }

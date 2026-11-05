@@ -20,6 +20,7 @@ import { Avatar } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
 import { ChatsHomeSkeleton } from '../components/ChatsHomeSkeleton'
 import { useStore } from '../store'
+import { api } from '../api'
 
 const FILTERS = ['All chats', 'Unread', 'Online',] as const
 type Filter = (typeof FILTERS)[number]
@@ -47,7 +48,7 @@ export function ChatsHome({
   onNotifications,
   onSupport,
 }: Props) {
-  const { chats, contacts, statusList, me, listsReady, saveRequestPending, typingPeers, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, showToast } = useStore()
+  const { chats, contacts, statusList, me, listsReady, saveRequestPending, typingPeers, presenceMap, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, refreshSubscription, showToast } = useStore()
   /** System-only: save requests etc. Chat unreads live on the bottom nav. */
   const systemNotifCount = saveRequestPending
   const [filter, setFilter] = useState<Filter>('All chats')
@@ -71,7 +72,8 @@ export function ChatsHome({
 
   const contactById = (id: string, fallback?: { name?: string; photo?: string | null; hue?: [string, string] }) => {
     const hit = contactMap.get(id)
-    if (hit) return hit
+    const online = !!(presenceMap?.[id] ?? hit?.online)
+    if (hit) return { ...hit, online }
     return {
       id,
       name: fallback?.name || id,
@@ -79,7 +81,7 @@ export function ChatsHome({
       phone: '',
       bio: '',
       photo: fallback?.photo ?? null,
-      online: false,
+      online,
       hue: (fallback?.hue || ['#7B2CBF', '#6389EB']) as [string, string],
     }
   }
@@ -128,7 +130,7 @@ export function ChatsHome({
       if (filter === 'Online') return ct.online
       return true
     })
-  }, [filter, q, chats, contactMap])
+  }, [filter, q, chats, contactMap, presenceMap])
 
   const statusUsers = useMemo(() => {
     const byUser = new Map<string, any>()
@@ -233,13 +235,29 @@ export function ChatsHome({
                     label: 'Refresh',
                     fn: () => {
                       showToast('Refreshing…')
-                      void Promise.all([
-                        refreshChats({ lean: true }),
-                        refreshCalls(),
-                        refreshStatus(),
-                        refreshContacts(),
-                        refreshSaveRequests(),
-                      ]).then(() => showToast('Up to date'))
+                      void (async () => {
+                        // Flush pending sends before pulling new data
+                        try {
+                          const { loadOutbox, removeOutbox } = await import('../lib/appCache')
+                          const items = await loadOutbox()
+                          for (const item of items || []) {
+                            if (!item.conversationId) continue
+                            try {
+                              await api.send(item.conversationId, item.text, item.image)
+                              await removeOutbox(item.id)
+                            } catch { /* retry later */ }
+                          }
+                        } catch { /* */ }
+                        await Promise.all([
+                          refreshChats({ lean: true }),
+                          refreshCalls(),
+                          refreshStatus(),
+                          refreshContacts(),
+                          refreshSaveRequests(),
+                          refreshSubscription(),
+                        ])
+                        showToast('Up to date')
+                      })()
                     },
                     Icon: RefreshCw,
                   },
@@ -300,7 +318,7 @@ export function ChatsHome({
                       onClick={() => onOpenStatus(c.id)}
                     >
                       <StatusRing total={meta.total} viewed={meta.viewed} size={60}>
-                        <Avatar contact={{ ...c, online: false }} size={50} />
+                        <Avatar contact={{ ...c, online: !!(presenceMap?.[c.id] ?? c.online) }} size={50} />
                       </StatusRing>
                       <span className="w-16 truncate text-center text-xs font-bold">{c.name.split(' ')[0]}</span>
                     </motion.button>
@@ -369,17 +387,25 @@ export function ChatsHome({
                           aria-label="View status"
                         >
                           <StatusRing total={meta.total} viewed={meta.viewed} size={56}>
-                            <Avatar contact={{ ...ct, premium: !!(ct as any).premium || (ct as any).verifiedBadge || (ct as any).subscriptionPlan === 'premium' }} size={46} />
+                            <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online),
+                          premium: !!(ct as any).verifiedBadge }} size={46} />
                           </StatusRing>
                         </span>
                       ) : (
-                        <Avatar contact={{ ...ct, premium: !!(ct as any).premium || (ct as any).verifiedBadge || (ct as any).subscriptionPlan === 'premium' }} size={52} />
+                        <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online),
+                          premium: !!(ct as any).verifiedBadge }} size={52} />
                       )}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
-                          <p className="truncate font-extrabold">{ct.name}</p>
+                          <p className="truncate font-extrabold">{(ct as any).savedName || ct.name}</p>
                           <div className="flex shrink-0 flex-col items-end gap-0.5">
-                            <span className="text-xs font-bold text-gray-400">{c.time}</span>
+                            <span
+                              className={`text-xs font-bold ${
+                                c.unread > 0 && !c.mine ? 'text-brand-purple' : 'text-gray-400'
+                              }`}
+                            >
+                              {c.time}
+                            </span>
                             {c.mine && (
                               <span
                                 className={`inline-flex items-center text-[11px] font-black leading-none ${
@@ -410,7 +436,7 @@ export function ChatsHome({
                             )}
                           </p>
                           {c.unread > 0 && (
-                            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-orange px-1.5 text-[11px] font-black text-white">
+                            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-purple px-1.5 text-[11px] font-black text-white">
                               {c.unread}
                             </span>
                           )}

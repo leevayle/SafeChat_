@@ -150,7 +150,7 @@ class StatusService:
             raise ForbiddenError("Not allowed to view this status")
 
         if s["owner_user_id"] != viewer_id:
-            await db.status_views.update_one(
+            result = await db.status_views.update_one(
                 {"status_id": status_id, "viewer_id": viewer_id},
                 {
                     "$setOnInsert": {
@@ -161,6 +161,34 @@ class StatusService:
                 },
                 upsert=True,
             )
+            # Notify owner of a new unique view so their count updates live
+            if result.upserted_id is not None:
+                try:
+                    from app.websocket.manager import manager
+                    viewer = await db.users.find_one(
+                        {"_id": ObjectId(viewer_id)},
+                        {"username": 1, "display_name": 1, "profile_photo": 1},
+                    )
+                    # Count after insert
+                    view_count = await db.status_views.count_documents({"status_id": status_id})
+                    await manager.send_user(
+                        str(s["owner_user_id"]),
+                        {
+                            "t": "status_view",
+                            "status_id": status_id,
+                            "view_count": view_count,
+                            "viewer": {
+                                "viewer_id": viewer_id,
+                                "username": (viewer or {}).get("username"),
+                                "display_name": (viewer or {}).get("display_name"),
+                                "profile_photo": (viewer or {}).get("profile_photo"),
+                                "viewed_at": now.isoformat(),
+                                "liked": False,
+                            },
+                        },
+                    )
+                except Exception:
+                    pass
 
         enriched = await StatusService._enrich_many(db, [s])
         return enriched[0]

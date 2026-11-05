@@ -5,6 +5,7 @@ import {
   Trash2, ChevronRight, Camera, Ban, Smartphone, Info, Palette, ArrowLeft,
 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
+import { Select } from '../components/Select'
 import { OptionList, PrimaryButton, ScreenHeader, Sheet, Toast, Toggle } from '../components/ui'
 import {
   FONT_SIZES,
@@ -530,14 +531,16 @@ export function Settings({
                   label="Time format"
                   hint="Used across chats, calls, and statuses"
                   right={
-                    <select
+                    <Select
+                      size="sm"
+                      className="min-w-[7.5rem]"
                       value={(s as any).timeFormat === '12h' ? '12h' : '24h'}
-                      onChange={(e) => setSetting('timeFormat' as any, e.target.value as never)}
-                      className="rounded-full bg-gray-100 px-3 py-1.5 text-xs font-extrabold outline-none"
-                    >
-                      <option value="24h">24-hour</option>
-                      <option value="12h">12-hour</option>
-                    </select>
+                      onChange={(v) => setSetting('timeFormat' as any, v as never)}
+                      options={[
+                        { value: '24h', label: '24-hour' },
+                        { value: '12h', label: '12-hour' },
+                      ]}
+                    />
                   }
                 />
 <Row label="Font size" {...sel('Font size', 'fontSize', Object.keys(FONT_SIZES))} />
@@ -767,6 +770,24 @@ export function Settings({
                 <p className="text-sm font-extrabold text-ink">
                   {((s as any).subscriptionPlan || me?.subscriptionPlan) === 'premium' ? 'Premium member' : 'Pro · Free plan'}
                 </p>
+                {((s as any).subscriptionPlan) === 'premium' && (s as any).premiumExpiresAt ? (
+                  <p className="mt-1 text-xs font-bold text-brand-purple/80">
+                    {(() => {
+                      const exp = Date.parse((s as any).premiumExpiresAt)
+                      if (!exp || Number.isNaN(exp)) return 'Active'
+                      const ms = exp - Date.now()
+                      if (ms <= 0) return 'Expired - renew to keep Premium'
+                      const h = Math.floor(ms / 3600000)
+                      const d = Math.floor(h / 24)
+                      const rh = h % 24
+                      if (d > 0) return `${d}d ${rh}h remaining`
+                      const m = Math.floor((ms % 3600000) / 60000)
+                      return `${h}h ${m}m remaining`
+                    })()}
+                  </p>
+                ) : ((s as any).subscriptionPlan) !== 'premium' ? (
+                  <p className="mt-1 text-xs font-bold text-gray-500">Upgrade via M-Pesa to unlock Premium</p>
+                ) : null}
                 <p className="mt-1 text-xs font-semibold text-gray-500">
                   Unlock live presence and stronger messaging tools.
                 </p>
@@ -774,13 +795,20 @@ export function Settings({
               <Card>
                 <Row
                   label="Live typing"
-                  hint="See what they type in real time - every character, including deletes - before they hit send"
+                  hint="Premium: stream characters live. Pro only sees typing…"
                   right={
                     <Toggle
-                      on={(s as any).liveTyping !== false}
+                      on={(s as any).subscriptionPlan === 'premium' && (s as any).liveTyping !== false}
                       onChange={(v) => {
-                        setSetting('liveTyping' as any, v as never)
-                        void api.updatePreferences({ live_typing: v }).catch(() => {})
+                        if ((s as any).subscriptionPlan !== 'premium') {
+                          setToast('Live typing is a Premium feature')
+                          return
+                        }
+                        setSetting('liveTyping' as any, v as never) // instant UI
+                        void api.updatePremiumSettings({ live_typing: v }).catch(() => {
+                          setSetting('liveTyping' as any, !v as never)
+                          setToast('Could not save setting')
+                        })
                       }}
                       label="Live typing"
                     />
@@ -791,8 +819,12 @@ export function Settings({
                   hint="Peers won't see your draft as you type"
                   right={
                     <Toggle
-                      on={!!(s as any).hideLiveTyping}
+                      on={!!(s as any).hideLiveTyping && ((s as any).subscriptionPlan === 'premium')}
                       onChange={(v) => {
+                        if ((s as any).subscriptionPlan !== 'premium') {
+                          setToast('Premium feature')
+                          return
+                        }
                         setSetting('hideLiveTyping' as any, v as never)
                         void api.updatePreferences({ hide_live_typing: v }).catch(() => {})
                       }}
@@ -801,7 +833,7 @@ export function Settings({
                   }
                 />
               </Card>
-              <Card className={((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium' ? 'opacity-55' : ''}>
+              <Card className={((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium' ? 'pointer-events-none opacity-45' : ''}>
                 <Row
                   label="Always-on read receipts"
                   hint="Always see when your messages are read, even if they turned receipts off"
@@ -814,7 +846,10 @@ export function Settings({
                           return
                         }
                         setSetting('forceReadReceipts' as any, v as never)
-                        void api.updatePremiumSettings({ force_read_receipts: v })
+                        void api.updatePremiumSettings({ force_read_receipts: v }).catch(() => {
+                          setSetting('forceReadReceipts' as any, !v as never)
+                          setToast('Could not save setting')
+                        })
                       }}
                       label="Always-on read receipts"
                     />
@@ -832,7 +867,10 @@ export function Settings({
                           return
                         }
                         setSetting('verifiedBadge' as any, v as never)
-                        void api.updatePremiumSettings({ verified_badge: v })
+                        void api.updatePremiumSettings({ verified_badge: v }).catch(() => {
+                          setSetting('verifiedBadge' as any, !v as never)
+                          setToast('Could not save setting')
+                        })
                       }}
                       label="Verification checkmark"
                     />
@@ -876,15 +914,15 @@ export function Settings({
                 {!!(s as any).busyEnabled && (
                   <div className="space-y-2 px-1 pb-2">
                     <label className="block text-[11px] font-extrabold text-gray-400">Who sees busy</label>
-                    <select
+                    <Select
                       value={(s as any).busyScope || 'everyone'}
-                      onChange={(e) => setSetting('busyScope' as any, e.target.value as never)}
-                      className="w-full rounded-2xl bg-gray-50 px-3 py-2.5 text-sm font-bold outline-none"
-                    >
-                      <option value="everyone">Everyone</option>
-                      <option value="contacts">My contacts</option>
-                      <option value="specific">Specific contacts</option>
-                    </select>
+                      onChange={(v) => setSetting('busyScope' as any, v as never)}
+                      options={[
+                        { value: 'everyone', label: 'Everyone' },
+                        { value: 'contacts', label: 'My contacts' },
+                        { value: 'specific', label: 'Specific contacts' },
+                      ]}
+                    />
                     <label className="block text-[11px] font-extrabold text-gray-400">Short message</label>
                     <input
                       value={(s as any).busyMessage || ''}
@@ -974,9 +1012,12 @@ export function Settings({
                         const poll = async () => {
                           tries += 1
                           try {
-                            const st = await api.mpesaStatus(res.checkoutRequestId)
+                            const st = await api.mpesaVerify(res.checkoutRequestId)
                             if (st?.paid) {
                               setSetting('subscriptionPlan' as any, 'premium' as never)
+                              if (me) {
+                                /* keep local me in sync */
+                              }
                               setToast('Payment successful. Premium unlocked!')
                               setPage('premium')
                               return

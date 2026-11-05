@@ -17,6 +17,7 @@ from app.api.v1.statuses.router import router as statuses_router
 from app.api.v1.calls.router import router as calls_router
 from app.api.v1.notifications.router import router as notifications_router
 from app.api.v1.payments.router import router as payments_router
+from app.api.v1.admin.router import router as admin_router
 from app.websocket.router import router as ws_router
 import logging
 
@@ -109,6 +110,7 @@ app.include_router(statuses_router, prefix=settings.API_V1_PREFIX)
 app.include_router(calls_router, prefix=settings.API_V1_PREFIX)
 app.include_router(notifications_router, prefix=settings.API_V1_PREFIX)
 app.include_router(payments_router, prefix=settings.API_V1_PREFIX)
+app.include_router(admin_router, prefix=settings.API_V1_PREFIX)
 app.include_router(ws_router, prefix=settings.API_V1_PREFIX)
 
 

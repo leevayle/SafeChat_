@@ -212,6 +212,7 @@ function mapUser(u: any): ApiUser {
     accountStatus: u.account_status || u.accountStatus || 'active',
     verifiedBadge: !!(u.verified_badge ?? u.premium_settings?.verified_badge),
     premiumSettings: u.premium_settings || u.premiumSettings || {},
+    premiumExpiresAt: u.premium_expires_at || u.premiumExpiresAt || null,
     deactivatedAt: u.deactivated_at || null,
     scheduledDeletionAt: u.scheduled_deletion_at || null,
     // Appearance (optional on type — used immediately on login)
@@ -238,7 +239,8 @@ function mapContact(c: any): ApiContact {
     phone: c.phone_number || c.phone || '',
     username: c.username || '',
     name: c.nickname || c.saved_name || c.savedName || c.display_name || c.name || c.username || peerId || 'User',
-    savedName: c.nickname || c.savedName || c.display_name || c.name || '',
+    savedName: c.nickname || c.saved_name || c.savedName || '',
+    publicName: c.display_name || c.name || c.username || '',
     bio: c.bio || '',
     note: c.note || '',
     photo: c.profile_photo ?? c.photo ?? null,
@@ -246,9 +248,11 @@ function mapContact(c: any): ApiContact {
     lastSeen: c.last_seen || c.lastSeen || null,
     hue: hueFor(peerId || c.username || 'x'),
     createdAt: c.created_at,
-    premium: c.subscription_plan === 'premium' && c.verified_badge !== false,
-    subscriptionPlan: c.subscription_plan,
-    verifiedBadge: c.verified_badge,
+    subscriptionPlan: (c.subscription_plan || c.subscriptionPlan || 'pro').replace('free', 'pro'),
+    verifiedBadge: !!(c.verified_badge ?? c.verifiedBadge),
+    premium:
+      (c.subscription_plan || c.subscriptionPlan) === 'premium' &&
+      (c.verified_badge ?? c.verifiedBadge) !== false,
   }
 }
 
@@ -332,7 +336,10 @@ function mapConversation(c: any, meId?: string): ChatPreview {
   return {
     contactId,
     conversationId: String(c.id),
-    name: other.display_name || other.username || contactId,
+    // Public name from server — UI prefers local savedName via contacts overlay
+    name: other.nickname || other.saved_name || other.display_name || other.username || contactId,
+    publicName: other.display_name || other.username || contactId,
+    username: other.username || '',
     photo: other.profile_photo ?? null,
     hue: hueFor(contactId),
     last: formatChatPreviewLast(lastText),
@@ -432,6 +439,10 @@ async function tryRefresh(): Promise<boolean> {
         }
         sessionDead = false
         consecutiveRefreshFails = 0
+        // Rotate WS onto the new access token
+        try {
+          void import('./realtime').then((m) => m.forceReconnectRealtime?.())
+        } catch { /* */ }
         return true
       }
       consecutiveRefreshFails += 1
@@ -677,12 +688,19 @@ export const api = {
       enter_is_send: 'enterIsSend',
       typing_indicator: 'typingIndicator',
       auto_download: 'autoDownload',
+      sound: 'sound',
+      read_receipts: 'readReceipts',
+      status_like_notif: 'statusLikeNotif',
+      hide_live_typing: 'hideLiveTyping',
+      color_mode: 'colorMode',
+      liquid_glass: 'liquidGlass',
     }
     const mapped: Record<string, unknown> = {
       theme: prefs.theme || theme,
       email: data?.email || '',
       phone: data?.phone_number || data?.phone || '',
       subscriptionPlan: (data?.subscription_plan || 'pro').replace('free', 'pro'),
+      premiumExpiresAt: data?.premium_expires_at || null,
       // flatten server settings for client store
       ...(data?.settings
         ? {
@@ -700,7 +718,7 @@ export const api = {
           }
         : {}),
       accountStatus: data?.account_status || 'active',
-      verifiedBadge: !!(data?.premium_settings?.verified_badge ?? true),
+      verifiedBadge: data?.subscription_plan === 'premium' && !!(data?.premium_settings?.verified_badge ?? true),
       premiumSettings: data?.premium_settings || {},
       deactivatedAt: data?.deactivated_at || null,
       scheduledDeletionAt: data?.scheduled_deletion_at || null,
@@ -743,6 +761,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     })
+  },
+  mpesaVerify: async (checkoutRequestId: string) => {
+    return req<{ paid: boolean; plan?: string; subscription_plan?: string }>(
+      '/api/v1/payments/mpesa/verify',
+      { method: 'POST', body: JSON.stringify({ checkoutRequestId }) },
+    )
   },
   mpesaStatus: async (checkoutRequestId: string) => {
     return req<{ paid: boolean; plan?: string }>(`/api/v1/payments/mpesa/status/${encodeURIComponent(checkoutRequestId)}`)

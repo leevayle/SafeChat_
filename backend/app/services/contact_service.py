@@ -30,6 +30,8 @@ async def _users_by_ids(db, ids: List[str]) -> Dict[str, dict]:
             "phone_number": 1,
             "phone": 1,
             "bio": 1,
+            "subscription_plan": 1,
+            "premium_settings": 1,
         },
     ):
         out[str(u["_id"])] = u
@@ -264,6 +266,11 @@ class ContactService:
                     "nickname": c.get("nickname"),
                     "contact_status": c["contact_status"],
                     "created_at": _iso(c.get("created_at")),
+                    "subscription_plan": contact_user.get("subscription_plan") or "pro",
+                    "verified_badge": bool(
+                        (contact_user.get("premium_settings") or {}).get("verified_badge", True)
+                    )
+                    and (contact_user.get("subscription_plan") or "pro") == "premium",
                 }
             )
         return results
