@@ -302,6 +302,7 @@ function Shell() {
       /* ignore */
     }
     restored.current = true
+    // Force app shell — authenticated users must never sit on login
     setStage('app')
   }
 
@@ -582,8 +583,12 @@ function Shell() {
         {overlay === 'notifications' && (
           <div className="absolute inset-0 z-[35] bg-white">
             <Notifications
-              onClose={() => setOverlay(null)}
+              onBack={() => setOverlay(null)}
               onOpenSaveRequests={() => setOverlay('saveRequests')}
+              onOpenCalls={() => {
+                setOverlay(null)
+                setTab('calls')
+              }}
               onOpenChat={(id) => {
                 setOverlay(null)
                 setTab('chats')

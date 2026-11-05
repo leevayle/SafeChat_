@@ -33,6 +33,8 @@ import {
   saveCachedStatuses,
   setCacheOwner,
   cacheOwnerId,
+  loadOutbox,
+  removeOutbox,
 } from './lib/appCache'
 import { setCachedMessages, clearMessageCache } from './lib/messageCache'
 import { warmPhoto } from './lib/photoCache'
@@ -42,8 +44,16 @@ const LS_OWNER_KEY = 'sc_user_id'
 
 function wipeForeignLocalState() {
   try {
-    // Keep per-user appearance map so the next login can paint the right theme instantly
-    const keep = new Set(['sc_appearance_by_user'])
+    // NEVER delete live auth tokens here — login may have just written them.
+    // Keep appearance map so the next login can paint the right theme instantly.
+    const keep = new Set([
+      'sc_appearance_by_user',
+      'sc_access',
+      'sc_refresh',
+      'sc_token',
+      'sc_user',
+      'sc_has_logged_in',
+    ])
     const keys: string[] = []
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i)
@@ -614,21 +624,41 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!hasAccessToken() || isSessionDead()) return
     try {
       const { chats: c } = await api.chats({ lean: !!opts?.lean, limit: 50 })
-      // Merge network into UI; keep richer cached fields (e.g. photo) when lean response omits them
+      // Merge network into UI — never drop a row that is only local / newer than server
       setChats((prev) => {
         const byId = new Map(prev.map((p) => [p.contactId, p]))
+        const seen = new Set<string>()
         const merged = c.map((row) => {
+          seen.add(row.contactId)
           const old = byId.get(row.contactId)
           if (!old) return row
+          const oldT = old.iso ? Date.parse(old.iso) : 0
+          const newT = row.iso ? Date.parse(row.iso) : 0
+          // If UI has a newer last message (optimistic send), keep it
+          const keepLocalLast = oldT > newT || (!row.last && !!old.last)
           return {
             ...old,
             ...row,
-            // Prefer non-empty photo/name from whichever side has them
             photo: row.photo || old.photo,
             name: row.name || old.name,
             hue: row.hue || old.hue,
+            last: keepLocalLast ? old.last : row.last || old.last,
+            iso: keepLocalLast ? old.iso : row.iso || old.iso,
+            time: keepLocalLast ? old.time : row.time || old.time,
+            state: keepLocalLast
+              ? (old.state as any) || row.state
+              : (row.state as any) || old.state,
+            mine: keepLocalLast ? old.mine : row.mine ?? old.mine,
+            conversationId: row.conversationId || old.conversationId,
+            unread: row.unread !== undefined ? row.unread : old.unread,
           }
         })
+        // Keep local-only previews (brand-new chats not yet in server list)
+        for (const p of prev) {
+          if (!seen.has(p.contactId)) merged.push(p)
+        }
+        // Sort by activity
+        merged.sort((a, b) => (Date.parse(b.iso || '') || 0) - (Date.parse(a.iso || '') || 0))
         if (prev.length === merged.length) {
           let same = true
           for (let i = 0; i < prev.length; i++) {
@@ -652,7 +682,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return merged
       })
     } catch (e: any) {
-      if ((e as any)?.status === 401 || String(e?.message || '').toLowerCase().includes('unauthorized')) {
+      if ((e as any)?.status === 401 && !(e as any)?.soft) {
         wipeSession()
       }
     }
@@ -764,7 +794,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return active
       })
     } catch (e: any) {
-      if ((e as any)?.status === 401) wipeSession()
+      if ((e as any)?.status === 401 && !(e as any)?.soft) wipeSession()
     }
   }, [wipeSession])
 
@@ -775,7 +805,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const n = (requests || []).filter((r: any) => r.status === 'pending').length
       setSaveRequestPending(n)
     } catch (e: any) {
-      if ((e as any)?.status === 401) wipeSession()
+      if ((e as any)?.status === 401 && !(e as any)?.soft) wipeSession()
     }
   }, [wipeSession])
 
@@ -799,6 +829,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             minute: '2-digit',
             hour12: false,
           })
+        let nextList: ChatPreview[]
         if (idx >= 0) {
           const cur = prev[idx]
           const nextLast = preview.last ?? cur.last
@@ -813,49 +844,46 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             mine: preview.mine ?? cur.mine ?? true,
             state: preview.state ?? cur.state ?? 'sent',
           }
-          // Receipt-only: patch in place (no reorder / re-animation)
           if (!contentChanged && idx === 0) {
-            const next = [...prev]
-            next[0] = updated
-            return next
-          }
-          if (!contentChanged) {
-            const next = [...prev]
-            next[idx] = updated
-            return next
-          }
-          // New peer message while app is open → soft inbox chime
-          if (contentChanged && updated.mine === false) {
-            try {
-              const mutedMap = JSON.parse(localStorage.getItem('sc_chat_muted') || '{}')
-              if (!mutedMap[updated.contactId]) playIncomingMessageChime()
-            } catch {
-              playIncomingMessageChime()
+            nextList = [...prev]
+            nextList[0] = updated
+          } else if (!contentChanged) {
+            nextList = [...prev]
+            nextList[idx] = updated
+          } else {
+            if (updated.mine === false) {
+              try {
+                const mutedMap = JSON.parse(localStorage.getItem('sc_chat_muted') || '{}')
+                if (!mutedMap[updated.contactId]) playIncomingMessageChime()
+              } catch {
+                playIncomingMessageChime()
+              }
             }
+            nextList = [...prev]
+            nextList[idx] = updated
+            const [item] = nextList.splice(idx, 1)
+            nextList = [item, ...nextList]
           }
-          // New message content → bump to top
-          const next = [...prev]
-          next[idx] = updated
-          const [item] = next.splice(idx, 1)
-          return [item, ...next]
+        } else {
+          nextList = [
+            {
+              contactId: preview.contactId,
+              conversationId: preview.conversationId,
+              name: preview.name,
+              photo: preview.photo ?? null,
+              hue: preview.hue,
+              last: preview.last || '',
+              time: timeLabel,
+              unread: 0,
+              mine: true,
+              state: preview.state || 'pending',
+              iso: nowIso,
+            },
+            ...prev,
+          ]
         }
-        // New conversation preview
-        return [
-          {
-            contactId: preview.contactId,
-            conversationId: preview.conversationId,
-            name: preview.name,
-            photo: preview.photo ?? null,
-            hue: preview.hue,
-            last: preview.last || '',
-            time: timeLabel,
-            unread: 0,
-            mine: true,
-            state: preview.state || 'pending',
-            iso: nowIso,
-          },
-          ...prev,
-        ]
+        void saveCachedChats(nextList)
+        return nextList
       })
     },
     [],
@@ -867,7 +895,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const { calls: c } = await api.calls()
       setCalls(c || [])
     } catch (e: any) {
-      if ((e as any)?.status === 401) wipeSession()
+      if ((e as any)?.status === 401 && !(e as any)?.soft) wipeSession()
     }
   }, [wipeSession])
 
@@ -1014,7 +1042,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           applyUser(user, s as Record<string, unknown>)
           setSessionOk(true)
         } catch (e: any) {
-          if ((e as any)?.status === 401 || String(e?.message || '').toLowerCase().includes('unauthorized')) {
+          // Soft /me failure must not kick the user out mid-session
+          if ((e as any)?.status === 401 && !(e as any)?.soft) {
             wipeSession()
           }
         }
@@ -1073,6 +1102,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     void import('./realtime').then(({ connectRealtime, disconnectRealtime }) => {
       if (stopped) return
       connectRealtime({
+        onStatus: (st) => {
+          if (st !== 'open' && st !== 'connected') return
+          // Flush outbox when connection restored
+          void loadOutbox().then(async (items) => {
+            for (const item of items) {
+              if (!item.conversationId) continue
+              try {
+                await api.send(item.conversationId, item.text, item.image)
+                await removeOutbox(item.id)
+              } catch { /* retry next open */ }
+            }
+          })
+        },
         onMessage: (cid, m) => {
           if (!m?.id) return
           const mine = String(m.from) === String(myId)
@@ -1095,6 +1137,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // Patch home preview by conversationId (stable contactId from existing row)
           setChats((prev) => {
             const idx = prev.findIndex((c) => c.conversationId === cid)
+            let nextList
             if (idx >= 0) {
               const cur = prev[idx]
               const updated = {
@@ -1106,26 +1149,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 state: mine ? ((m.state as any) || 'sent') : cur.state,
                 unread: mine ? 0 : (cur.unread || 0) + 1,
               }
-              const next = [...prev]
-              next.splice(idx, 1)
-              return [updated, ...next]
+              nextList = [...prev]
+              nextList.splice(idx, 1)
+              nextList = [updated, ...nextList]
+            } else if (mine) {
+              return prev
+            } else {
+              nextList = [
+                {
+                  contactId: String(m.from),
+                  conversationId: cid,
+                  name: undefined,
+                  last: previewText,
+                  time: timeLabel,
+                  iso,
+                  unread: 1,
+                  mine: false,
+                  state: undefined,
+                },
+                ...prev,
+              ]
             }
-            if (mine) return prev
-            // Unknown thread — create a lightweight preview from sender id
-            return [
-              {
-                contactId: String(m.from),
-                conversationId: cid,
-                name: undefined,
-                last: previewText,
-                time: timeLabel,
-                iso,
-                unread: 1,
-                mine: false,
-                state: undefined,
-              },
-              ...prev,
-            ]
+            void saveCachedChats(nextList)
+            return nextList
           })
           try {
             window.dispatchEvent(new CustomEvent('sc:rt-msg', { detail: { cid, m, mine } }))
@@ -1214,10 +1260,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ? await api.login({ phone_number: raw.replace(/[^\d+]/g, ''), password })
       : await api.login({ username: raw.replace(/^@/, '').toLowerCase(), password })
     const { access_token, refresh_token, user } = session
+    if (!access_token || !user?.id) {
+      throw new Error('Login succeeded but session was incomplete — try again')
+    }
+
+    // Account switch: clear foreign prefs BEFORE writing new tokens
+    try {
+      const prevOwner = localStorage.getItem(LS_OWNER_KEY)
+      if (prevOwner && prevOwner !== user.id) {
+        wipeForeignLocalState()
+        void clearAllCaches()
+        clearMessageCache()
+      }
+    } catch {
+      /* */
+    }
+
     markSessionAlive()
     setSession(access_token, refresh_token, user)
 
-    // 1) Theme first (CSS only) — never flash another user's palette
+    // Theme first (CSS only) — never flash another user's palette
     const loginTheme = (user as any).theme as string | undefined
     const loginAccent = (user as any).chatAccent as string | undefined
     resolveAndApplyAppearance(user.id, {
@@ -1231,21 +1293,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ...(loginAccent ? { chatAccent: loginAccent } : {}),
     })
 
-    // 2) Chats hydrate IMMEDIATELY in parallel with /me — first login must fill inbox now
+    // Inbox immediately with skeleton — hydrate + /me in background (never block navigation)
     setSessionOk(true)
     setListsReady(false)
-    const hydrateP = hydrateAfterAuth()
-    const meP = (async () => {
+    void hydrateAfterAuth().catch(() => {
+      // Safety: never leave the user stuck on skeleton forever
+      setListsReady(true)
+    })
+    void (async () => {
       try {
         const { user: fresh, settings: s } = await api.me()
         if (!isSessionDead()) applyUser(fresh, s as Record<string, unknown>)
       } catch {
-        /* soft — cached appearance already applied */
+        /* soft */
       }
     })()
-    // Wait for chats (critical path) so home is populated on first paint after login
-    await hydrateP
-    void meP
     return user
   }
 
@@ -1323,7 +1385,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         /* soft */
       }
     })()
-    await hydrateP
+    void hydrateP
     return user
   }
 

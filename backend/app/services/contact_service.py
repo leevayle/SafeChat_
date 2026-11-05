@@ -250,18 +250,15 @@ class ContactService:
             contact_user = users.get(c["contact_user_id"])
             if not contact_user:
                 continue
-            phone = (
-                c.get("shared_phone")
-                or contact_user.get("phone_number")
-                or contact_user.get("phone")
-                or ""
-            )
+            # Phone only if peer shared it on the save request; username is always unique
+            phone = (c.get("shared_phone") or "").strip()
             results.append(
                 {
                     "id": str(c["_id"]),
                     "contact_user_id": c["contact_user_id"],
                     "username": contact_user["username"],
-                    "display_name": contact_user["display_name"],
+                    "display_name": contact_user.get("display_name")
+                    or contact_user["username"],
                     "profile_photo": contact_user.get("profile_photo"),
                     "phone_number": phone,
                     "nickname": c.get("nickname"),

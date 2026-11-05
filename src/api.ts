@@ -399,37 +399,60 @@ type BackendEnvelope = {
   error_code?: string
 }
 
+/** Single-flight refresh — concurrent 401s must share one rotate, or the second kills the session. */
+let refreshInflight: Promise<boolean> | null = null
+let consecutiveRefreshFails = 0
+
 async function tryRefresh(): Promise<boolean> {
-  const rt = refreshToken()
-  if (!rt) return false
-  try {
-    const res = await fetch(`${BASE}/api/v1/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: rt }),
-    })
-    const body: BackendEnvelope = await res.json().catch(() => ({}))
-    if (!res.ok || body.success === false) return false
-    const data = body.data || body
-    if ((data as any).access_token) {
-      localStorage.setItem('sc_access', (data as any).access_token)
-      localStorage.setItem('sc_token', (data as any).access_token)
-      if ((data as any).refresh_token) localStorage.setItem('sc_refresh', (data as any).refresh_token)
-      sessionDead = false
-      return true
+  if (refreshInflight) return refreshInflight
+  refreshInflight = (async () => {
+    const rt = refreshToken()
+    if (!rt) {
+      consecutiveRefreshFails += 1
+      return false
     }
-  } catch { /* */ }
-  return false
+    try {
+      const res = await fetch(`${BASE}/api/v1/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: rt }),
+      })
+      const body: BackendEnvelope = await res.json().catch(() => ({}))
+      if (!res.ok || body.success === false) {
+        consecutiveRefreshFails += 1
+        return false
+      }
+      const data = body.data || body
+      if ((data as any).access_token) {
+        localStorage.setItem('sc_access', (data as any).access_token)
+        localStorage.setItem('sc_token', (data as any).access_token)
+        if ((data as any).refresh_token) {
+          localStorage.setItem('sc_refresh', (data as any).refresh_token)
+        }
+        sessionDead = false
+        consecutiveRefreshFails = 0
+        return true
+      }
+      consecutiveRefreshFails += 1
+      return false
+    } catch {
+      consecutiveRefreshFails += 1
+      return false
+    } finally {
+      refreshInflight = null
+    }
+  })()
+  return refreshInflight
 }
 
-/** Refresh access token periodically so short-lived tokens don't force re-login. */
+/** Refresh access token periodically — failure alone does NOT kill the session. */
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 export function startProactiveRefresh() {
   if (refreshTimer) return
   refreshTimer = setInterval(() => {
     if (sessionDead || !refreshToken()) return
     void tryRefresh()
-  }, 10 * 60 * 1000) // every 10 minutes
+  }, 12 * 60 * 1000) // every 12 minutes
 }
 export function stopProactiveRefresh() {
   if (refreshTimer) {
@@ -438,18 +461,37 @@ export function stopProactiveRefresh() {
   }
 }
 
+/** True for background/read polls — never force logout on these alone. */
+function isSoftReadPath(path: string, method: string) {
+  const m = (method || 'GET').toUpperCase()
+  if (m !== 'GET' && m !== 'HEAD') return false
+  // Soft reads that fire often while scrolling / idling
+  return (
+    path.includes('/conversations') ||
+    path.includes('/messages') ||
+    path.includes('/statuses') ||
+    path.includes('/contacts') ||
+    path.includes('/groups') ||
+    path.includes('/calls') ||
+    path.includes('/users/search') ||
+    path.includes('/users/me') ||
+    path.includes('/contact-requests') ||
+    path.includes('/notifications')
+  )
+}
 
 async function req<T = any>(path: string, opts: RequestInit = {}, retried = false): Promise<T> {
   const publicPath = isPublicAuthPath(path)
+  const method = (opts.method || 'GET').toUpperCase()
 
-  // Hard stop: dead session or missing token → never hit the network for protected routes
+  // Hard stop only when session was proven dead (failed write/auth after refresh)
   if (!publicPath) {
     if (sessionDead) {
       const err = new Error('Session expired — log in again')
       ;(err as any).status = 401
       throw err
     }
-    if (!accessToken()) {
+    if (!accessToken() && !refreshToken()) {
       const err = new Error('Please log in again')
       ;(err as any).status = 401
       throw err
@@ -473,10 +515,18 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
       const ok = await tryRefresh()
       if (ok) return req(path, opts, true)
     }
-    // Refresh failed or already retried → kill session so polls stop
-    markSessionDead()
-    const err = new Error(friendlyError(body.message || 'Session expired — log in again', 401, path))
+    // Soft reads: do not deauth — just fail this request (UI keeps cached data)
+    const soft = isSoftReadPath(path, method)
+    if (!soft && consecutiveRefreshFails >= 2) {
+      markSessionDead()
+    }
+    const err = new Error(
+      soft
+        ? 'Temporarily unavailable'
+        : friendlyError(body.message || 'Session expired — log in again', 401, path),
+    )
     ;(err as any).status = 401
+    ;(err as any).soft = soft
     throw err
   }
 

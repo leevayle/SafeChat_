@@ -89,12 +89,14 @@ async def _handle_send(user_id: str, websocket: WebSocket, data: dict) -> None:
         from app.services.messaging_service import MessagingService
 
         media = [{"type": "image", "url": image}] if image else None
+        reply_to = data.get("reply_to") or data.get("reply_to_message_id")
         msg = await MessagingService.send_message(
             conversation_id=str(conv_id),
             sender_id=user_id,
             content=text or ("" if image else text),
             message_type="image" if image else "text",
             media_attachments=media,
+            reply_to_message_id=str(reply_to) if reply_to else None,
             idempotency_key=client_key if client_key else None,
         )
         mid = msg.get("id") or msg.get("_id")

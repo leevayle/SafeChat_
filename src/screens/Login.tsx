@@ -14,11 +14,12 @@ export function Login({
   onSuccess: () => void
   onSignup?: () => void
 }) {
-  const { login } = useStore()
+  const { login, showToast } = useStore()
   const [phone, setPhone] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [okMsg, setOkMsg] = useState('')
 
   const submit = async () => {
     if (!phone.trim() || !password) {
@@ -27,14 +28,20 @@ export function Login({
     }
     setLoading(true)
     setError('')
+    setOkMsg('')
     try {
       await login(phone.trim().replace(/[^+\d]/g, ''), password)
+      setOkMsg('Signed in — opening your chats…')
+      try { showToast('Welcome back') } catch { /* */ }
+      // Always hand off to inbox — do not stay on this screen after auth
       onSuccess()
     } catch (e: any) {
-      setError(e.message || 'Login failed')
-    } finally {
+      setError(e?.message || 'Login failed')
       setLoading(false)
+      return
     }
+    // Keep button in loading state briefly while stage flips to app
+    setLoading(false)
   }
 
   return (
@@ -88,6 +95,7 @@ export function Login({
             onKeyDown={(e) => e.key === 'Enter' && submit()}
           />
           {error && <p className="mt-3 text-sm font-bold text-brand-red">{error}</p>}
+          {okMsg && <p className="mt-3 text-sm font-bold text-brand-purple">{okMsg}</p>}
         </div>
       </motion.div>
 

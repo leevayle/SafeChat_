@@ -5,6 +5,7 @@ import { X, Volume2, VolumeX, Heart, Trash2, Eye, Download, Repeat2, Copy } from
 import { Avatar } from '../components/Avatar'
 import { api } from '../api'
 import { useStore } from '../store'
+import { loadCachedViewers, saveCachedViewers } from '../lib/appCache'
 
 const API_ORIGIN = import.meta.env.VITE_API_URL || ''
 function mediaUrl(path?: string | null) {
@@ -284,12 +285,21 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
     setPaused(true)
     setViewersOpen(true)
     setViewersLoading(true)
+    // Instant from cache, then refresh
+    try {
+      const cached = await loadCachedViewers<ViewerRow>(current.id)
+      if (cached?.length) {
+        setViewers(cached)
+        setViewersLoading(false)
+      }
+    } catch { /* */ }
     try {
       const { viewers: list } = await api.statusViewers(current.id)
       setViewers(list)
+      void saveCachedViewers(current.id, list)
     } catch {
       showToast('Could not load viewers')
-      setViewers([])
+      setViewers((v) => v)
     } finally {
       setViewersLoading(false)
     }

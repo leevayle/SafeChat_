@@ -9,6 +9,7 @@ import { FONT_SIZES, WALLPAPERS, useStore } from '../store'
 import { playInboxLandingChime } from '../lib/sounds'
 import { compressForWeb } from '../lib/imageProcess'
 import { getCachedMessages, setCachedMessages, hydrateThreadFromDisk } from '../lib/messageCache'
+import { warmPhoto } from '../lib/photoCache'
 import { putOutbox, removeOutbox } from '../lib/appCache'
 
 type Props = { contactId: string; onBack: () => void; onCall: (kind: 'audio' | 'video') => void; onOpenCalls?: () => void; onOpenStatus?: (userId: string, statusId?: string) => void }
@@ -224,7 +225,7 @@ const MessageBubble = memo(function MessageBubble({
         onClick={() => {
           if (mine && m.state === 'failed') onRetry(m)
         }}
-        className={`relative max-w-[76%] ${
+        className={`relative max-w-[76%] ${m.reactions?.length ? 'mb-3 ' : ''}${
           mine
             ? 'bubble-mine rounded-2xl rounded-br-sm text-white shadow-[0_4px_18px_-6px_rgba(0,0,0,0.28)]'
             : 'rounded-2xl rounded-bl-sm bg-white text-ink shadow-[0_4px_16px_-8px_rgba(15,23,42,0.18)] ring-1 ring-black/[0.04]'
@@ -334,33 +335,34 @@ const MessageBubble = memo(function MessageBubble({
             })}
           <ReceiptTicks state={m.state} readReceipts={readReceipts} mine={mine} />
         </p>
+        {/* Reactions sit on the bubble edge (inside layout, not off-screen) */}
+        {!!(m.reactions && m.reactions.length) && (
+          <div
+            className={`absolute -bottom-2.5 flex max-w-full flex-wrap gap-0.5 ${
+              mine ? 'right-2' : 'left-2'
+            }`}
+          >
+            {Object.entries(
+              (m.reactions || []).reduce((acc: Record<string, number>, r: any) => {
+                const e = typeof r === 'string' ? r : r.emoji
+                if (!e) return acc
+                acc[e] = (acc[e] || 0) + 1
+                return acc
+              }, {} as Record<string, number>),
+            ).map(([emoji, count]) => (
+              <span
+                key={emoji}
+                className="flex h-6 min-w-6 items-center justify-center rounded-full bg-white px-1.5 text-[12px] shadow-sm ring-1 ring-black/8"
+              >
+                {emoji}
+                {(count as number) > 1 ? (
+                  <span className="ml-0.5 text-[10px] font-black text-gray-500">{count as number}</span>
+                ) : null}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
-      {!!(m.reactions && m.reactions.length) && (
-        <div
-          className={`pointer-events-none absolute -top-2 flex items-center ${
-            mine ? 'left-0 -translate-x-1/3' : 'right-0 translate-x-1/3'
-          }`}
-        >
-          {Object.entries(
-            (m.reactions || []).reduce((acc: Record<string, number>, r: any) => {
-              const e = typeof r === 'string' ? r : r.emoji
-              if (!e) return acc
-              acc[e] = (acc[e] || 0) + 1
-              return acc
-            }, {} as Record<string, number>),
-          ).map(([emoji, count]) => (
-            <span
-              key={emoji}
-              className="flex h-7 min-w-7 items-center justify-center rounded-full bg-white px-1.5 text-[13px] shadow-md ring-1 ring-black/5"
-            >
-              {emoji}
-              {(count as number) > 1 ? (
-                <span className="ml-0.5 text-[10px] font-black text-gray-500">{count as number}</span>
-              ) : null}
-            </span>
-          ))}
-        </div>
-      )}
     </motion.div>
   )
 })
@@ -375,16 +377,26 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         ch.conversationId === contactId,
     ) || null
   const peerId = chatPreview?.contactId || contactId
-  const c =
-    contacts.find((x) => x.id === peerId || x.peerId === peerId) ||
-    (chatPreview
+  const contactHit = contacts.find((x) => x.id === peerId || x.peerId === peerId)
+  // Prefer contact book photo, fall back to chat-list photo (never force null)
+  const c = contactHit
+    ? {
+        ...contactHit,
+        photo: contactHit.photo || chatPreview?.photo || null,
+        name: contactHit.name || chatPreview?.name || peerId,
+        hue:
+          contactHit.hue ||
+          (chatPreview?.hue as [string, string]) ||
+          (['#7B2CBF', '#6389EB'] as [string, string]),
+      }
+    : chatPreview
       ? {
           id: peerId,
           name: chatPreview.name || peerId,
-          username: '',
+          username: (chatPreview as any).username || '',
           phone: '',
           bio: '',
-          photo: null,
+          photo: chatPreview.photo ?? null,
           online: false,
           hue: (chatPreview.hue as [string, string]) || (['#7B2CBF', '#6389EB'] as [string, string]),
         }
@@ -397,15 +409,25 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           photo: null,
           online: false,
           hue: ['#7B2CBF', '#6389EB'] as [string, string],
-        })
+        }
   const knownConv =
     chatPreview?.conversationId ||
     chats.find((ch) => ch.contactId === peerId || ch.contactId === (c as any).peerId)
       ?.conversationId ||
     null
+  // Ensure avatar photo is warmed whenever we open this chat
+  useEffect(() => {
+    if (c?.photo) warmPhoto(String(c.id || peerId), c.photo, API_ORIGIN)
+  }, [peerId, c?.photo, c?.id])
+
   const [conversationId, setConversationId] = useState<string | null>(knownConv)
   const [msgs, setMsgs] = useState<ApiMsg[]>([])
-  const [text, setText] = useState('')
+  const [text, setText] = useState(() => {
+    try {
+      const map = JSON.parse(localStorage.getItem('sc_composer_drafts') || '{}')
+      return typeof map[contactId] === 'string' ? map[contactId] : ''
+    } catch { return '' }
+  })
   const [typing, setTyping] = useState(false)
   const [peerRecording, setPeerRecording] = useState(false)
   const [liveDraft, setLiveDraft] = useState<string | null>(null)
@@ -454,6 +476,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   }, [replyTo, statusReply])
   const msgRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const end = useRef<HTMLDivElement>(null)
+  const msgsScrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const convRef = useRef<string | null>(knownConv)
   const ensurePromise = useRef<Promise<string | null> | null>(null)
@@ -532,27 +555,31 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         }
       }
       setMsgs((prev) => {
-        // Merge server history into UI — never drop a bubble that is already on screen
+        // Merge server history into UI — NEVER drop a bubble already on screen
+        // (server lag / partial pages used to wipe messages for a few seconds)
         const prevById = new Map(prev.map((m) => [m.id, m]))
         const claimedKeys = new Set<string>()
-        const claimedLocalIds = new Set<string>()
+        const claimedIds = new Set<string>()
         const mapped = messages.map((sm) => {
           const prior = prevById.get(sm.id)
-          if (prior?.clientKey) {
-            claimedKeys.add(prior.clientKey)
-            if (String(prior.id).startsWith('local-')) claimedLocalIds.add(prior.id)
+          if (prior) {
+            if (prior.clientKey) claimedKeys.add(prior.clientKey)
+            claimedIds.add(prior.id)
+            claimedIds.add(sm.id)
             return {
               ...sm,
-              clientKey: prior.clientKey,
+              clientKey: prior.clientKey || sm.clientKey || sm.id,
               mine: prior.mine ?? sm.mine,
               state: pickState(sm.state, prior.state),
               edited: !!(prior as any).edited || !!(sm as any).edited,
               text: sm.text || prior.text,
               image: sm.image ?? prior.image,
               timeLabel: sm.timeLabel || prior.timeLabel,
+              replyToId: sm.replyToId || prior.replyToId,
+              replyToText: sm.replyToText || prior.replyToText,
             }
           }
-          // Match optimistic local by clientKey on server payload, else body+mine
+          // Match optimistic local by clientKey or same body + direction
           const byCk =
             (sm as any).clientKey &&
             prev.find(
@@ -572,53 +599,61 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                   (!!p.image && !!sm.image && p.image === sm.image)) &&
                 (!!p.image === !!sm.image),
             )
-          if (match?.clientKey) {
-            claimedKeys.add(match.clientKey)
-            claimedLocalIds.add(match.id)
+          if (match) {
+            if (match.clientKey) claimedKeys.add(match.clientKey)
+            claimedIds.add(match.id)
+            claimedIds.add(sm.id)
             return {
               ...sm,
-              clientKey: match.clientKey,
-              mine: true,
+              clientKey: match.clientKey || sm.id,
+              mine: match.mine ?? true,
               state: pickState(sm.state, match.state),
               text: sm.text || match.text,
               image: sm.image ?? match.image,
               timeLabel: sm.timeLabel || match.timeLabel,
+              replyToId: sm.replyToId || match.replyToId,
+              replyToText: sm.replyToText || match.replyToText,
             }
           }
+          claimedIds.add(sm.id)
           return { ...sm, clientKey: (sm as any).clientKey || sm.id }
         })
-        // Keep EVERY unclaimed local/optimistic row (any state) — never vanish after print
-        const stillLocal = prev.filter(
-          (m) =>
-            String(m.id).startsWith('local-') &&
-            !claimedLocalIds.has(m.id) &&
-            !(m.clientKey && claimedKeys.has(m.clientKey)),
-        )
-        const callRows = prev.filter((m) => m.callLog && !mapped.some((x) => x.id === m.id))
-        const merged = [...mapped, ...stillLocal, ...callRows].sort((a, b) => {
+        // Keep every on-screen row the server did not claim (local OR real ids)
+        const keepPrev = prev.filter((m) => {
+          if (claimedIds.has(m.id)) return false
+          if (m.clientKey && claimedKeys.has(m.clientKey)) return false
+          return true
+        })
+        const merged = [...mapped, ...keepPrev].sort((a, b) => {
           const ta = Date.parse(a.time) || 0
           const tb = Date.parse(b.time) || 0
           return ta - tb
         })
-        if (sameMsgList(prev, merged)) return prev
-        if (!merged.length && prev.length) return prev
-        const byId = new Map(prev.map((m) => [m.id, m]))
-        const byKey = new Map(
-          prev.filter((m) => m.clientKey).map((m) => [m.clientKey as string, m]),
-        )
-        const stable = merged.map((m) => {
-          const old = byId.get(m.id) || (m.clientKey ? byKey.get(m.clientKey) : undefined)
-          if (!old) return m
-          return {
-            ...m,
-            clientKey: old.clientKey || m.clientKey,
-            state: pickState(m.state, old.state),
-            edited: !!(old as any).edited || !!(m as any).edited,
-            text: m.text || old.text,
-            image: m.image ?? old.image,
+        // Dedupe by clientKey preferring server ids over local-
+        const byKey = new Map<string, (typeof merged)[0]>()
+        for (const m of merged) {
+          const k = m.clientKey || m.id
+          const existing = byKey.get(k)
+          if (!existing) {
+            byKey.set(k, m)
+            continue
           }
-        })
+          // Prefer non-local id and higher receipt state
+          const prefer =
+            (!String(m.id).startsWith('local-') && String(existing.id).startsWith('local-')) ||
+            rankState(m.state) > rankState(existing.state)
+          byKey.set(k, prefer ? { ...existing, ...m, clientKey: k, state: pickState(m.state, existing.state) } : {
+            ...m,
+            ...existing,
+            clientKey: k,
+            state: pickState(existing.state, m.state),
+          })
+        }
+        const stable = Array.from(byKey.values()).sort(
+          (a, b) => (Date.parse(a.time) || 0) - (Date.parse(b.time) || 0),
+        )
         if (sameMsgList(prev, stable)) return prev
+        if (!stable.length && prev.length) return prev
         setCachedMessages(cid, stable)
         return stable
       })
@@ -632,21 +667,37 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
   useEffect(() => {
     setLoading(true)
+    // Fresh open: do NOT animate history — only new/outgoing later
     animatedKeys.current = new Set()
     setConversationId(knownConv)
     convRef.current = knownConv
+    const seedKeys = (list: ApiMsg[]) => {
+      for (const m of list) {
+        const k = m.clientKey || m.id
+        if (k) animatedKeys.current.add(k)
+      }
+    }
     // Instant paint from memory/disk cache for this thread
     if (knownConv) {
       const mem = getCachedMessages(knownConv)
       if (mem?.length) {
+        seedKeys(mem)
         setMsgs(mem)
         setLoading(false)
+        // Jump to latest without animation
+        requestAnimationFrame(() => {
+          end.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+        })
       } else {
         setMsgs([])
         void hydrateThreadFromDisk(knownConv).then((disk) => {
           if (disk?.length && convRef.current === knownConv) {
+            seedKeys(disk)
             setMsgs(disk)
             setLoading(false)
+            requestAnimationFrame(() => {
+              end.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+            })
           }
         })
       }
@@ -869,20 +920,59 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }, [peerId, contactId, settings])
 
+  const openedOnce = useRef(false)
+  const pinToBottom = (smooth = false) => {
+    const el = msgsScrollRef.current
+    if (el) {
+      if (smooth) {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+      } else {
+        el.scrollTop = el.scrollHeight
+      }
+      return
+    }
+    end.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' })
+  }
   useEffect(() => {
-    end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [msgs.length, pendingImage, typing, liveDraft])
+    const smooth = openedOnce.current
+    // Double rAF + microtask so layout finishes before pin (no gap under last bubble)
+    requestAnimationFrame(() => {
+      pinToBottom(smooth)
+      requestAnimationFrame(() => pinToBottom(smooth))
+    })
+    openedOnce.current = true
+  }, [msgs.length, pendingImage, liveDraft, loading])
+  useEffect(() => {
+    openedOnce.current = false
+  }, [contactId])
 
-  // Soft landing chime when a peer message arrives while this chat is open
+  // Chime only when a NEW peer message is printed (never on history load / receipt merge)
+  const knownMsgIdsRef = useRef<Set<string>>(new Set())
   useEffect(() => {
-    const prev = prevMsgCountRef.current
-    prevMsgCountRef.current = msgs.length
-    if (prev === 0 || msgs.length <= prev || chatMuted) return
-    const last = msgs[msgs.length - 1]
-    if (!last) return
-    const mine = last.mine ?? last.from === me?.id
-    if (!mine) playInboxLandingChime()
+    // Seed on first non-empty paint without sound
+    if (knownMsgIdsRef.current.size === 0 && msgs.length) {
+      for (const m of msgs) knownMsgIdsRef.current.add(m.clientKey || m.id)
+      return
+    }
+    if (chatMuted) {
+      for (const m of msgs) knownMsgIdsRef.current.add(m.clientKey || m.id)
+      return
+    }
+    let played = false
+    for (const m of msgs) {
+      const k = m.clientKey || m.id
+      if (knownMsgIdsRef.current.has(k)) continue
+      knownMsgIdsRef.current.add(k)
+      const mine = m.mine ?? m.from === me?.id
+      if (!mine && !played) {
+        playInboxLandingChime()
+        played = true
+      }
+    }
   }, [msgs, chatMuted, me?.id])
+  useEffect(() => {
+    knownMsgIdsRef.current = new Set()
+  }, [contactId])
 
   const deliverMessage = async (
     localId: string,
@@ -944,6 +1034,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                 time: x.time || message.time,
                 text: x.text || message.text,
                 image: x.image ?? message.image,
+                replyToId: x.replyToId || message.replyToId || null,
+                replyToText: x.replyToText || message.replyToText || null,
+                statusReply: x.statusReply || message.statusReply || null,
               }
             : x,
         ),
@@ -991,6 +1084,11 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     setStatusReply(null)
     // Stop live preview on peer as soon as we send
     pushLiveDraft('')
+    try {
+      const map = JSON.parse(localStorage.getItem('sc_composer_drafts') || '{}')
+      delete map[contactId]
+      localStorage.setItem('sc_composer_drafts', JSON.stringify(map))
+    } catch { /* */ }
 
     const localId = `local-${Date.now()}`
     const nowIso = utcNowIso()
@@ -1400,6 +1498,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       </header>
 
       <div
+        ref={msgsScrollRef}
         className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4 pb-6"
         style={{ fontSize: FONT_SIZES[settings.fontSize] || '1rem' }}
       >
@@ -1471,15 +1570,19 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           {liveDraft != null && liveDraft !== '' && (
             <motion.div
               key="live-typing"
-              initial={{ opacity: 0, y: 8 }}
+              initial={{ opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
+              transition={{ duration: 0.12 }}
               className="flex"
             >
               <div className="max-w-[85%] rounded-3xl rounded-bl-md bg-white px-3.5 py-2.5 shadow-sm ring-1 ring-brand-purple/15">
-                <p className="whitespace-pre-wrap break-words text-[15px] font-medium leading-snug text-ink">
+                <p className="whitespace-pre-wrap break-words font-mono text-[14px] font-medium leading-snug tracking-tight text-ink">
                   {liveDraft}
-                  <span className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[2px] animate-pulse bg-brand-purple align-middle" />
+                  <span
+                    className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[2px] bg-brand-purple align-middle"
+                    style={{ animation: 'sc-caret 1s steps(1) infinite' }}
+                  />
                 </p>
               </div>
             </motion.div>
@@ -1783,6 +1886,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                   el.style.height = Math.min(120, el.scrollHeight) + 'px'
                   // Live typing for all users — stream each change (type + delete)
                   pushLiveDraft(val)
+                  try {
+                    const map = JSON.parse(localStorage.getItem('sc_composer_drafts') || '{}')
+                    if (val) map[contactId] = val
+                    else delete map[contactId]
+                    localStorage.setItem('sc_composer_drafts', JSON.stringify(map))
+                  } catch { /* */ }
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey && settings.enterIsSend) {
