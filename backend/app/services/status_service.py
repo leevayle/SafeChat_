@@ -248,13 +248,41 @@ class StatusService:
         if existing:
             await db.status_likes.delete_one({"_id": existing["_id"]})
             return {"liked": False, "status_id": status_id}
+        now = datetime.now(timezone.utc)
         await db.status_likes.insert_one(
             {
                 "status_id": status_id,
                 "user_id": user_id,
-                "created_at": datetime.now(timezone.utc),
+                "created_at": now,
             }
         )
+        # Notify status owner
+        try:
+            liker = await db.users.find_one(
+                {"_id": ObjectId(user_id)},
+                {"username": 1, "display_name": 1, "profile_photo": 1},
+            )
+            name = (
+                (liker or {}).get("display_name")
+                or (liker or {}).get("username")
+                or "Someone"
+            )
+            await db.notifications.insert_one(
+                {
+                    "user_id": s["owner_user_id"],
+                    "type": "status_like",
+                    "title": f"{name} liked your status",
+                    "body": "Tap to open",
+                    "status_id": status_id,
+                    "actor_id": user_id,
+                    "actor_name": name,
+                    "actor_photo": (liker or {}).get("profile_photo"),
+                    "read": False,
+                    "created_at": now,
+                }
+            )
+        except Exception:
+            pass
         return {"liked": True, "status_id": status_id}
 
     @staticmethod

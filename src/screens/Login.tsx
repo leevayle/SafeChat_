@@ -31,9 +31,9 @@ export function Login({
     setOkMsg('')
     try {
       await login(phone.trim().replace(/[^+\d]/g, ''), password)
-      setOkMsg('Signed in — opening your chats…')
+      setOkMsg('Signed in - opening your chats…')
       try { showToast('Welcome back') } catch { /* */ }
-      // Always hand off to inbox — do not stay on this screen after auth
+      // Always hand off to inbox - do not stay on this screen after auth
       onSuccess()
     } catch (e: any) {
       setError(e?.message || 'Login failed')

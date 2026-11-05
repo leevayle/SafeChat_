@@ -56,6 +56,8 @@ export type RtHandlers = {
   onCall?: (packet: RtCallPacket) => void
   onTyping?: (peerId: string, typing: boolean) => void
   onPresence?: (peerId: string, online: boolean, lastSeen?: string | null) => void
+  onEdit?: (cid: string, messageId: string, text: string) => void
+  onReact?: (cid: string, messageId: string, emoji: string, userId: string, removed: boolean) => void
   onStatus?: (status: 'open' | 'closed' | 'error') => void
 }
 
@@ -169,6 +171,40 @@ export function connectRealtime(handlers?: RtHandlers) {
     if (t === 'pong' || t === 'ping') return
     if (t === 'msg' && data.c && data.m) {
       state.handlers.onMessage?.(String(data.c), data.m as RtMsg)
+      return
+    }
+    if (t === 'edit' && data.c && data.id) {
+      state.handlers.onEdit?.(String(data.c), String(data.id), String(data.text || ''))
+      try {
+        window.dispatchEvent(
+          new CustomEvent('sc:rt-edit', {
+            detail: { cid: String(data.c), id: String(data.id), text: String(data.text || '') },
+          }),
+        )
+      } catch { /* */ }
+      return
+    }
+    if (t === 'react' && data.c && data.id) {
+      state.handlers.onReact?.(
+        String(data.c),
+        String(data.id),
+        String(data.emoji || ''),
+        String(data.from || ''),
+        !!data.removed,
+      )
+      try {
+        window.dispatchEvent(
+          new CustomEvent('sc:rt-react', {
+            detail: {
+              cid: String(data.c),
+              id: String(data.id),
+              emoji: String(data.emoji || ''),
+              userId: String(data.from || ''),
+              removed: !!data.removed,
+            },
+          }),
+        )
+      } catch { /* */ }
       return
     }
     if (t === 'rcpt' && data.c && data.id && data.s) {

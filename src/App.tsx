@@ -594,6 +594,10 @@ function Shell() {
                 setTab('chats')
                 setChat(id)
               }}
+              onOpenStatus={(userId, statusId) => {
+                setOverlay(null)
+                setStatusUser({ userId, statusId })
+              }}
             />
           </div>
         )}

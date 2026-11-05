@@ -83,7 +83,7 @@ function sameMsgList(a: ApiMsg[], b: ApiMsg[]) {
   return true
 }
 
-/** Receipt ticks only — isolated so state changes never re-animate the bubble */
+/** Receipt ticks only - isolated so state changes never re-animate the bubble */
 const ReceiptTicks = memo(function ReceiptTicks({
   state,
   readReceipts,
@@ -103,7 +103,7 @@ const ReceiptTicks = memo(function ReceiptTicks({
         size={13}
         strokeWidth={2.5}
         className="text-red-200"
-        aria-label="Failed — tap to retry"
+        aria-label="Failed - tap to retry"
       />
     )
   }
@@ -207,7 +207,7 @@ const MessageBubble = memo(function MessageBubble({
         const d = e.touches[0].clientX - startX.current
         const dy = Math.abs(e.touches[0].clientY - startY.current)
         if (d > 8 && d > dy * 1.2) {
-          // horizontal reply gesture — don't fight vertical scroll
+          // horizontal reply gesture - don't fight vertical scroll
           setDx(Math.min(56, d * 0.4))
         }
       }}
@@ -225,7 +225,7 @@ const MessageBubble = memo(function MessageBubble({
         onClick={() => {
           if (mine && m.state === 'failed') onRetry(m)
         }}
-        className={`relative max-w-[76%] ${m.reactions?.length ? 'mb-3 ' : ''}${
+        className={`relative max-w-[76%] ${
           mine
             ? 'bubble-mine rounded-2xl rounded-br-sm text-white shadow-[0_4px_18px_-6px_rgba(0,0,0,0.28)]'
             : 'rounded-2xl rounded-bl-sm bg-white text-ink shadow-[0_4px_16px_-8px_rgba(15,23,42,0.18)] ring-1 ring-black/[0.04]'
@@ -279,7 +279,7 @@ const MessageBubble = memo(function MessageBubble({
             <img
               src={mediaUrl(m.image)}
               alt=""
-              className={`max-h-60 w-full object-cover ${m.text && m.text !== '📷 Photo' ? '' : 'rounded-b-none'}`}
+              className={`sc-msg-image max-h-60 w-full bg-transparent object-contain ${m.text && m.text !== '📷 Photo' ? '' : 'rounded-b-none'}`}
               loading="lazy"
             />
           </button>
@@ -326,22 +326,13 @@ const MessageBubble = memo(function MessageBubble({
             mine ? 'text-white/70' : 'text-gray-400'
           }`}
         >
-          {(m as any).edited ? <span className="mr-0.5 opacity-80">edited</span> : null}
-          {m.timeLabel ||
-            new Date(m.time).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: false,
-            })}
+          {(m as any).editing ? <span className="mr-0.5 opacity-80">editing…</span> : (m as any).edited ? <span className="mr-0.5 opacity-80">edited</span> : null}
+          {m.timeLabel || formatLocalTime(m.time)}
           <ReceiptTicks state={m.state} readReceipts={readReceipts} mine={mine} />
         </p>
-        {/* Reactions sit on the bubble edge (inside layout, not off-screen) */}
+        {/* Reactions at the very bottom of the bubble border - no overlap on text */}
         {!!(m.reactions && m.reactions.length) && (
-          <div
-            className={`absolute -bottom-2.5 flex max-w-full flex-wrap gap-0.5 ${
-              mine ? 'right-2' : 'left-2'
-            }`}
-          >
+          <div className="flex flex-wrap gap-0.5 px-2.5 pb-1.5 pt-0.5">
             {Object.entries(
               (m.reactions || []).reduce((acc: Record<string, number>, r: any) => {
                 const e = typeof r === 'string' ? r : r.emoji
@@ -352,11 +343,11 @@ const MessageBubble = memo(function MessageBubble({
             ).map(([emoji, count]) => (
               <span
                 key={emoji}
-                className="flex h-6 min-w-6 items-center justify-center rounded-full bg-white px-1.5 text-[12px] shadow-sm ring-1 ring-black/8"
+                className="flex h-5 min-w-5 items-center justify-center rounded-full bg-black/5 px-1 text-[11px] ring-1 ring-black/6"
               >
                 {emoji}
                 {(count as number) > 1 ? (
-                  <span className="ml-0.5 text-[10px] font-black text-gray-500">{count as number}</span>
+                  <span className="ml-0.5 text-[9px] font-black text-gray-500">{count as number}</span>
                 ) : null}
               </span>
             ))}
@@ -450,6 +441,20 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [pendingImage, setPendingImage] = useState<string | null>(null)
   const [replyTo, setReplyTo] = useState<ApiMsg | null>(null)
   const [profileOpen, setProfileOpen] = useState(false)
+  // ESC → back to chats home
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        if (profileOpen) setProfileOpen(false)
+        else if (actionMsg) { setActionMsg(null); setEditing(false) }
+        else onBack()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onBack, profileOpen, actionMsg])
+
   const [peerOnline, setPeerOnline] = useState(false)
   const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null)
   const [chatMenu, setChatMenu] = useState(false)
@@ -504,7 +509,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     const username = ((c as any).username || '').replace(/^@/, '').trim()
     const peer = peerId || contactId
     if (!username && !peer) {
-      showToast('Could not open chat — contact is missing')
+      showToast('Could not open chat - contact is missing')
       return null
     }
     ensurePromise.current = (async () => {
@@ -555,7 +560,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         }
       }
       setMsgs((prev) => {
-        // Merge server history into UI — NEVER drop a bubble already on screen
+        // Merge server history into UI - NEVER drop a bubble already on screen
         // (server lag / partial pages used to wipe messages for a few seconds)
         const prevById = new Map(prev.map((m) => [m.id, m]))
         const claimedKeys = new Set<string>()
@@ -667,7 +672,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
   useEffect(() => {
     setLoading(true)
-    // Fresh open: do NOT animate history — only new/outgoing later
+    // Fresh open: do NOT animate history - only new/outgoing later
     animatedKeys.current = new Set()
     setConversationId(knownConv)
     convRef.current = knownConv
@@ -705,7 +710,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       setMsgs([])
     }
     // Instant blue ticks for the sender: as soon as this chat surface is open,
-    // mark read — do not wait for message history to finish loading.
+    // mark read - do not wait for message history to finish loading.
     if (knownConv && hasAccessToken()) {
       void api.markRead(knownConv).catch(() => {})
       wsReceipt({ conversationId: knownConv, messageId: 'all', state: 'read' })
@@ -764,11 +769,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         text,
         image: detail.m.image || null,
         time: detail.m.time || new Date().toISOString(),
-        timeLabel: new Date(detail.m.time || Date.now()).toLocaleTimeString([], {
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: false,
-        }),
+        timeLabel: formatLocalTime(detail.m.time || Date.now()),
         state: (detail.m.state as any) || (mine ? 'sent' : undefined),
         mine,
         replyToId: detail.m.reply_to_message_id || null,
@@ -870,20 +871,62 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
     window.addEventListener('sc:rt-msg', onMsg)
     window.addEventListener('sc:rt-rcpt', onRcpt)
+    const onEdit = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as { cid: string; id: string; text: string }
+      if (!d?.id) return
+      const openCid = convRef.current
+      if (d.cid && openCid && d.cid !== openCid) return
+      setMsgs((prev) =>
+        prev.map((x) =>
+          x.id === d.id || x.clientKey === d.id
+            ? { ...x, text: d.text, edited: true, editing: false }
+            : x,
+        ),
+      )
+    }
+    const onReact = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as {
+        cid: string
+        id: string
+        emoji: string
+        userId: string
+        removed: boolean
+      }
+      if (!d?.id || !d.emoji) return
+      const openCid = convRef.current
+      if (d.cid && openCid && d.cid !== openCid) return
+      setMsgs((prev) =>
+        prev.map((x) => {
+          if (x.id !== d.id && x.clientKey !== d.id) return x
+          let reactions = [...(x.reactions || [])]
+          // one reaction per user
+          reactions = reactions.filter((r: any) => r.user_id !== d.userId)
+          if (!d.removed) {
+            reactions.push({ emoji: d.emoji, user_id: d.userId })
+          }
+          return { ...x, reactions }
+        }),
+      )
+    }
+    window.addEventListener('sc:rt-edit', onEdit)
+    window.addEventListener('sc:rt-react', onReact)
+
     window.addEventListener('sc:rt-ack', onAck)
     return () => {
       window.removeEventListener('sc:rt-msg', onMsg)
       window.removeEventListener('sc:rt-rcpt', onRcpt)
+      window.removeEventListener('sc:rt-edit', onEdit)
+      window.removeEventListener('sc:rt-react', onReact)
       window.removeEventListener('sc:rt-ack', onAck)
     }
   }, [contactId, me?.id, peerId, upsertChatPreview])
 
-  // Live typing stream (all users) — character-level draft to peer via WS
+  // Live typing stream (all users) - character-level draft to peer via WS
   const liveSendRef = useRef<{ last: string; at: number }>({ last: '', at: 0 })
   const liveClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pushLiveDraft = useCallback(
     (draft: string) => {
-      // Optional privacy only — live character stream is for ALL users by default
+      // Optional privacy only - live character stream is for ALL users by default
       if ((settings as any).hideLiveTyping) return
       const to = peerId || contactId
       if (!to || !hasAccessToken()) return
@@ -994,7 +1037,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           photo: c.photo,
           hue: c.hue,
         })
-        showToast('Could not open chat — tap message to retry')
+        showToast('Could not open chat - tap message to retry')
         return
       }
       if (cid && cid !== conversationId) {
@@ -1020,7 +1063,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         return
       }
       const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img, opts)
-      // In-place receipt update only — never replace/remove the printed bubble
+      // In-place receipt update only - never replace/remove the printed bubble
       setMsgs((m) =>
         m.map((x) =>
           x.id === localId || x.clientKey === localId
@@ -1066,7 +1109,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         photo: c.photo,
         hue: c.hue,
       })
-      showToast(e?.message || 'Message failed — tap to retry')
+      showToast(e?.message || 'Message failed - tap to retry')
     }
   }
 
@@ -1111,7 +1154,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       replyToText: replySnap?.text || (replySnap?.image ? '📷 Photo' : undefined),
       statusReply: statusSnap,
     }
-    // UI first — message window + chats home at the same time
+    // UI first - message window + chats home at the same time
     setMsgs((m) => [...m, optimistic])
     upsertChatPreview({
       contactId: (c as any).peerId || contactId,
@@ -1200,7 +1243,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     const onTyping = (ev: Event) => {
       const d = (ev as CustomEvent).detail as { peerId?: string; typing?: boolean }
       if (!isPeer(d?.peerId)) return
-      // Header only — never put draft text here
+      // Header only - never put draft text here
       setTyping(!!d.typing)
       // Only clear the bubble when peer fully stops (not on every keypress)
       if (!d.typing) setLiveDraft(null)
@@ -1240,13 +1283,36 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const applyEdit = async () => {
     if (!actionMsg || !editText.trim()) return
     const id = actionMsg.id
+    const clientKey = actionMsg.clientKey
+    const prevText = actionMsg.text
     const text = editText.trim()
-    setMsgs((list) => list.map((m) => (m.id === id ? { ...m, text, edited: true } : m)))
+    // Optimistic: keep text, mark editing… - never blank the bubble
+    setMsgs((list) =>
+      list.map((m) =>
+        m.id === id || (clientKey && m.clientKey === clientKey)
+          ? { ...m, text, editing: true, edited: false }
+          : m,
+      ),
+    )
     setEditing(false)
     setActionMsg(null)
     try {
       await api.editMessage(id, text)
+      setMsgs((list) =>
+        list.map((m) =>
+          m.id === id || (clientKey && m.clientKey === clientKey)
+            ? { ...m, text, editing: false, edited: true }
+            : m,
+        ),
+      )
     } catch {
+      setMsgs((list) =>
+        list.map((m) =>
+          m.id === id || (clientKey && m.clientKey === clientKey)
+            ? { ...m, text: prevText, editing: false, edited: !!(m as any).edited }
+            : m,
+        ),
+      )
       showToast('Could not edit message')
     }
   }
@@ -1405,13 +1471,19 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             >
               {peerRecording
                 ? 'recording…'
-                : liveDraft || typing
-                  ? 'typing…'
-                  : peerOnline || c.online
-                    ? 'Online'
-                    : peerLastSeen || (c as any).lastSeen
-                      ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
-                      : ''}
+                : (c as any).onCall
+                  ? 'on a call'
+                  : (c as any).busyMessage || ((c as any).busy ? 'busy' : null)
+                    ? (c as any).busyMessage || 'busy'
+                    : liveDraft || typing
+                      ? 'typing…'
+                      : peerOnline || c.online
+                        ? 'Online'
+                        : peerLastSeen || (c as any).lastSeen
+                          ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
+                          : c.username
+                            ? `@${c.username}`
+                            : ''}
             </p>
           </div>
         </button>
@@ -1566,7 +1638,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               </div>
             )
           })}
-          {/* Live character bubble — recipient sees h → hi → deletes in real time */}
+          {/* Live character bubble - recipient sees h → hi → deletes in real time */}
           {liveDraft != null && liveDraft !== '' && (
             <motion.div
               key="live-typing"
@@ -1711,20 +1783,29 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               </div>
             </div>
             <h2 className="mt-4 text-2xl font-black text-ink">{c.name}</h2>
-            {c.username ? <p className="mt-1 font-bold text-brand-purple">@{c.username}</p> : null}
+            {c.username ? <p className="mt-2 font-bold text-brand-purple">@{c.username}</p> : null}
+            <p className="mt-1 text-xs font-semibold text-gray-400">
+              {c.phone ? 'Contact shared with you' : 'Contact not shared with you'}
+            </p>
             {c.phone ? <p className="mt-1 text-sm font-semibold text-gray-500">{c.phone}</p> : null}
             <p
               className={`mt-2 min-h-[1.25rem] max-w-sm px-4 text-center text-sm font-bold ${
                 liveDraft || typing || peerOnline || c.online ? 'text-brand-blue' : 'text-gray-400'
               }`}
             >
-              {liveDraft || typing
-                ? 'typing…'
-                : peerOnline || c.online
-                  ? 'Online'
-                  : peerLastSeen || (c as any).lastSeen
-                    ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
-                    : ''}
+              {(c as any).onCall
+                ? 'on a call'
+                : (c as any).busyMessage || ((c as any).busy ? 'busy' : null)
+                  ? (c as any).busyMessage || 'busy'
+                  : liveDraft || typing
+                    ? 'typing…'
+                    : peerOnline || c.online
+                      ? 'Online'
+                      : peerLastSeen || (c as any).lastSeen
+                        ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
+                        : c.username
+                          ? `@${c.username}`
+                          : ''}
             </p>
 
             <div className="mt-8 grid w-full max-w-sm grid-cols-3 gap-3">
@@ -1884,7 +1965,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                   const el = e.target
                   el.style.height = '24px'
                   el.style.height = Math.min(120, el.scrollHeight) + 'px'
-                  // Live typing for all users — stream each change (type + delete)
+                  // Live typing for all users - stream each change (type + delete)
                   pushLiveDraft(val)
                   try {
                     const map = JSON.parse(localStorage.getItem('sc_composer_drafts') || '{}')
@@ -1955,7 +2036,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                           const secs = recordSecs
                           setRecordSecs(0)
                           const body = `🎤 Voice note (${secs}s)`
-                          // Reuse send path with body only — media upload path may be added later
+                          // Reuse send path with body only - media upload path may be added later
                           setText(body)
                           setTimeout(() => {
                             send()

@@ -26,6 +26,8 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const [searchHits, setSearchHits] = useState<any[]>([])
   const [busy, setBusy] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [notFoundPhone, setNotFoundPhone] = useState<string | null>(null)
+  const [identity, setIdentity] = useState('')
 
   const list = useMemo(() => {
     const qq = q.trim().toLowerCase()
@@ -94,13 +96,22 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   }
 
   const runSearch = async (value: string) => {
-    setAddForm((f) => ({ ...f, username: value }))
+    setIdentity(value)
+    // Phone numbers (+...) - no live search; resolve only on Send
+    if (value.trim().startsWith('+')) {
+      setSearchHits([])
+      setAddForm((f) => ({ ...f, username: '', phone: value.trim() }))
+      setAddMode('phone')
+      return
+    }
+    setAddMode('username')
+    setAddForm((f) => ({ ...f, username: value.replace(/^@/, ''), phone: '' }))
     if (value.trim().length < 2) {
       setSearchHits([])
       return
     }
     try {
-      const { users } = await api.searchUsers(value.trim())
+      const { users } = await api.searchUsers(value.trim().replace(/^@/, ''))
       setSearchHits(users)
     } catch {
       setSearchHits([])
@@ -109,27 +120,57 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
 
   const addContact = async (peer?: { id: string; username: string; phone: string; name: string }) => {
     setBusy(true)
+    setNotFoundPhone(null)
     try {
-      const username = (peer?.username || addForm.username || '').replace(/^@/, '').trim()
-      const phoneFull = peer?.phone || (addForm.phone ? `${phoneCountry}${addForm.phone}` : '')
-      if (addMode === 'username' && !username) {
-        showToast('Enter a username to send a save request')
-        return
+      let username = (peer?.username || addForm.username || '').replace(/^@/, '').trim()
+      let phoneFull = (peer?.phone || addForm.phone || identity || '').trim()
+      if (phoneFull && !phoneFull.startsWith('+') && addMode === 'phone') {
+        phoneFull = `${phoneCountry}${phoneFull.replace(/\D/g, '')}`
       }
-      if (addMode === 'phone' && !phoneFull) {
-        showToast('Enter a phone number')
+      // Phone path: look up only when Send is pressed
+      if (!peer && (phoneFull.startsWith('+') || addMode === 'phone')) {
+        if (!phoneFull.startsWith('+')) {
+          showToast('Enter a full number starting with +')
+          setBusy(false)
+          return
+        }
+        try {
+          const { users } = await api.searchUsers(phoneFull)
+          const hit = (users || []).find(
+            (u: any) =>
+              String(u.phone || '').replace(/\s/g, '') === phoneFull.replace(/\s/g, '') ||
+              String(u.phone_number || '').replace(/\s/g, '') === phoneFull.replace(/\s/g, ''),
+          ) || (users || [])[0]
+          if (!hit) {
+            setNotFoundPhone(phoneFull)
+            setBusy(false)
+            return
+          }
+          peer = hit
+          username = hit.username
+          phoneFull = hit.phone || phoneFull
+        } catch {
+          setNotFoundPhone(phoneFull)
+          setBusy(false)
+          return
+        }
+      }
+      if (!peer && !username) {
+        showToast('Enter a username or phone (+…)')
+        setBusy(false)
         return
       }
       const res = await api.addContact({
         peerId: peer?.id,
         username: username || undefined,
-        phone: addMode === 'phone' ? phoneFull : undefined,
+        phone: phoneFull.startsWith('+') ? phoneFull : undefined,
         savedName: addForm.savedName || peer?.name || username || phoneFull,
         sharePhone: addForm.sharePhone,
       })
       await refreshContacts()
       showToast(res.pending ? 'Save request sent' : 'Contact saved')
       setAdding(false)
+      setIdentity('')
       setAddForm({ username: '', phone: '', savedName: '', sharePhone: true })
       setSearchHits([])
     } catch (e: any) {
@@ -190,7 +231,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
                   {c.favourite && <Star size={12} className="ml-1 inline text-brand-orange" fill="currentColor" />}
                 </p>
                 <p className="truncate text-xs font-semibold text-gray-500">
-                  @{c.username || '—'} · {c.phone || 'no number'}
+                  @{c.username || '-'} · {c.phone || 'no number'}
                 </p>
               </div>
             </button>
@@ -223,28 +264,35 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
         <div className="fixed inset-0 z-[90] flex flex-col bg-white">
           <ScreenHeader
             title="Add contact"
-            onBack={() => setAdding(false)}
+            onBack={() => {
+              setAdding(false)
+              setNotFoundPhone(null)
+              setIdentity('')
+              setSearchHits([])
+            }}
             right={
-              <select
-                value={addMode}
-                onChange={(e) => setAddMode(e.target.value as 'username' | 'phone')}
-                className="rounded-full bg-gray-100 px-2.5 py-1.5 text-xs font-extrabold text-ink outline-none"
-                aria-label="Search by"
-              >
-                <option value="username">Username</option>
-                <option value="phone">Phone</option>
-              </select>
+              <span className="rounded-full bg-brand-purple/10 px-2.5 py-1 text-[11px] font-extrabold text-brand-purple">
+                {identity.trim().startsWith('+') ? 'Phone' : 'Username'}
+              </span>
             }
           />
           <div className="space-y-3 px-5 pt-2">
-            <label className="block text-xs font-extrabold text-gray-500">Username on SafeChat</label>
+            <label className="block text-xs font-extrabold text-gray-500">
+              Username or phone
+            </label>
             <input
-              value={addForm.username}
-              onChange={(e) => runSearch(e.target.value.replace(/^@/, ''))}
-              placeholder="@username"
+              value={identity}
+              onChange={(e) => runSearch(e.target.value)}
+              placeholder="@username or +2547…"
               className="w-full rounded-2xl border border-gray-200 px-4 py-3 font-semibold outline-none focus:border-brand-purple"
+              inputMode={identity.trim().startsWith('+') ? 'tel' : 'text'}
             />
-            {searchHits.length > 0 && (
+            <p className="text-[11px] font-semibold text-gray-400">
+              {identity.trim().startsWith('+')
+                ? 'Phone numbers are checked only when you send the request.'
+                : 'Type a username to search, or start with + for a phone number.'}
+            </p>
+            {searchHits.length > 0 && !identity.trim().startsWith('+') && (
               <ul className="overflow-hidden rounded-2xl border border-gray-100">
                 {searchHits.map((u) => (
                   <li key={u.id}>
@@ -296,10 +344,43 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
                 />
               </span>
             </button>
-            <PillButton onClick={() => addContact()} disabled={busy || !addForm.username.trim()}>
+            <PillButton
+              onClick={() => addContact()}
+              disabled={busy || !identity.trim()}
+            >
               {busy ? 'Sending…' : 'Send save request'}
             </PillButton>
           </div>
+
+          {notFoundPhone && (
+            <div className="fixed inset-0 z-[95] flex items-end justify-center bg-black/40 p-4 sm:items-center">
+              <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-xl">
+                <p className="text-lg font-black text-ink">Not on SafeChat yet</p>
+                <p className="mt-2 text-sm font-semibold text-gray-500">
+                  <span className="font-extrabold text-ink">{notFoundPhone}</span> has not joined SafeChat.
+                  Invite them with an SMS so you can chat securely.
+                </p>
+                <div className="mt-5 flex gap-2">
+                  <button
+                    type="button"
+                    className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold"
+                    onClick={() => setNotFoundPhone(null)}
+                  >
+                    Okay
+                  </button>
+                  <a
+                    href={`sms:${notFoundPhone}?body=${encodeURIComponent(
+                      'Join me on SafeChat - private chats, calls and statuses. Get the app and save my number!',
+                    )}`}
+                    className="flex flex-1 items-center justify-center rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
+                    onClick={() => setNotFoundPhone(null)}
+                  >
+                    Send SMS invite
+                  </a>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

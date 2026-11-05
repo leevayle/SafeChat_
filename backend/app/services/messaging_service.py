@@ -320,7 +320,18 @@ class MessagingService:
         msg["content"] = content
         msg["updated_at"] = now
         msg["edited"] = True
-        return await MessagingService._serialize_message(msg)
+        serialized = await MessagingService._serialize_message(msg)
+        # Fan-out edit so recipients update in place
+        try:
+            from app.websocket.manager import manager, packet_edit
+            conv_id = str(msg["conversation_id"])
+            payload = packet_edit(conv_id, str(msg["_id"]), content, user_id)
+            for pid in (await db.conversations.find_one({"_id": ObjectId(conv_id)}) or {}).get("participant_ids", []):
+                if str(pid) != str(user_id):
+                    await manager.send_user(str(pid), payload)
+        except Exception:
+            pass
+        return serialized
 
     @staticmethod
     async def delete_message(message_id: str, user_id: str) -> None:
@@ -511,26 +522,43 @@ class MessagingService:
             raise ForbiddenError("Not a participant")
 
         now = datetime.now(timezone.utc)
-        await db.message_reactions.update_one(
-            {"message_id": message_id, "user_id": user_id, "emoji": emoji},
+        # One reaction per user: remove previous then set new
+        await db.message_reactions.delete_many({"message_id": message_id, "user_id": user_id})
+        await db.message_reactions.insert_one(
             {
-                "$setOnInsert": {
-                    "message_id": message_id,
-                    "user_id": user_id,
-                    "emoji": emoji,
-                    "created_at": now,
-                }
-            },
-            upsert=True,
+                "message_id": message_id,
+                "user_id": user_id,
+                "emoji": emoji,
+                "created_at": now,
+            }
         )
+        try:
+            from app.websocket.manager import manager, packet_react
+            conv_id = str(msg["conversation_id"])
+            payload = packet_react(conv_id, message_id, emoji, user_id, removed=False)
+            for pid in (conv or {}).get("participant_ids", []):
+                await manager.send_user(str(pid), payload)
+        except Exception:
+            pass
         return {"message_id": message_id, "emoji": emoji, "user_id": user_id}
 
     @staticmethod
     async def remove_reaction(message_id: str, user_id: str, emoji: str) -> None:
         db = get_database()
+        msg = await db.messages.find_one({"_id": ObjectId(message_id)}) if ObjectId.is_valid(message_id) else None
         await db.message_reactions.delete_one(
             {"message_id": message_id, "user_id": user_id, "emoji": emoji}
         )
+        if msg:
+            try:
+                from app.websocket.manager import manager, packet_react
+                conv_id = str(msg["conversation_id"])
+                payload = packet_react(conv_id, message_id, emoji, user_id, removed=True)
+                conv = await db.conversations.find_one({"_id": ObjectId(conv_id)})
+                for pid in (conv or {}).get("participant_ids", []):
+                    await manager.send_user(str(pid), payload)
+            except Exception:
+                pass
 
     @staticmethod
     async def _serialize_message(msg: dict, viewer_id: Optional[str] = None) -> dict:

@@ -12,6 +12,7 @@ import {
 import { useStore } from '../store'
 import { Avatar } from '../components/Avatar'
 import { api, hasAccessToken } from '../api'
+// status_like notifications from server
 import { loadCachedNotifications, saveCachedNotifications } from '../lib/appCache'
 
 type Props = {
@@ -19,6 +20,7 @@ type Props = {
   onOpenChat?: (contactId: string) => void
   onOpenSaveRequests?: () => void
   onOpenCalls?: () => void
+  onOpenStatus?: (userId: string, statusId?: string) => void
 }
 
 type Filter = 'all' | 'requests' | 'calls' | 'system'
@@ -57,10 +59,13 @@ export function Notifications({
   onOpenChat,
   onOpenSaveRequests,
   onOpenCalls,
+  onOpenStatus,
 }: Props) {
-  const { saveRequestPending, calls, chats, contacts, showToast } = useStore()
+  const { saveRequestPending, calls, chats, contacts, showToast, me } = useStore()
+  const meIdPlaceholder = me?.id || ''
   const [filter, setFilter] = useState<Filter>('all')
   const [incoming, setIncoming] = useState<any[]>([])
+  const [serverNotifs, setServerNotifs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [readIds, setReadIds] = useState<Set<string>>(() => {
     try {
@@ -92,7 +97,15 @@ export function Notifications({
         const list = (requests || []).filter((r: any) => r.status === 'pending')
         if (!alive) return
         setIncoming(list)
-        void saveCachedNotifications(list)
+      } catch {
+        /* */
+      }
+      try {
+        const { notifications } = await api.listNotifications()
+        if (!alive) return
+        ;(window as any).__sc_server_notifs = notifications || []
+        void saveCachedNotifications(notifications || [])
+        setServerNotifs(notifications || [])
       } catch {
         /* */
       } finally {
@@ -189,6 +202,23 @@ export function Notifications({
       })
     }
 
+    for (const n of serverNotifs) {
+      if (n.type === 'status_like') {
+        const id = `slike-${n.id}`
+        out.push({
+          id,
+          kind: 'system',
+          title: n.title || 'Status like',
+          body: n.body || 'liked your status',
+          when: timeLabel(n.created_at),
+          iso: n.created_at,
+          unread: !n.read && !readIds.has(id),
+          contactId: n.actor_id,
+          photo: n.actor_photo,
+          statusId: n.status_id,
+        } as any)
+      }
+    }
     // Lightweight system tips (always available)
     out.push(
       {
@@ -216,7 +246,7 @@ export function Notifications({
       return a.kind.localeCompare(b.kind)
     })
     return out
-  }, [incoming, calls, chats, contacts, readIds])
+  }, [incoming, calls, chats, contacts, readIds, serverNotifs])
 
   const filtered = items.filter((i) => {
     if (filter === 'all') return true
@@ -323,7 +353,11 @@ export function Notifications({
                     type="button"
                     onClick={() => {
                       markRead(n.id)
-                      if (n.kind === 'request') onOpenSaveRequests?.()
+                      if ((n as any).statusId && onOpenStatus) {
+                        // status like → open my status at that item (then open viewers)
+                        onOpenStatus(meIdPlaceholder || me?.id || '', (n as any).statusId)
+                        try { sessionStorage.setItem('sc_open_viewers', (n as any).statusId) } catch { /* */ }
+                      } else if (n.kind === 'request') onOpenSaveRequests?.()
                       else if (n.kind === 'missed_call') {
                         if (n.contactId && onOpenChat) onOpenChat(n.contactId)
                         else onOpenCalls?.()

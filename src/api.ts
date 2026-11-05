@@ -373,7 +373,8 @@ function mapStatus(s: any): any {
     id: String(s.id || s._id),
     userId,
     text: s.content || s.text || '',
-    image: (s.media_attachments && s.media_attachments[0]?.url) || s.image || null,
+    image: (s.media_attachments && s.media_attachments.find((m: any) => m.type === 'image')?.url) || s.image || null,
+    video: (s.media_attachments && s.media_attachments.find((m: any) => m.type === 'video')?.url) || s.video || null,
     background: s.background || 'theme_purple_grad',
     createdAt: s.created_at || s.createdAt,
     expiresAt: s.expires_at || s.expiresAt,
@@ -737,6 +738,15 @@ export const api = {
     })
   },
 
+  mpesaStkPush: async (body: { phone: string; plan: string }) => {
+    return req<{ checkoutRequestId: string; merchantRequestId?: string }>('/api/v1/payments/mpesa/stk', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  },
+  mpesaStatus: async (checkoutRequestId: string) => {
+    return req<{ paid: boolean; plan?: string }>(`/api/v1/payments/mpesa/status/${encodeURIComponent(checkoutRequestId)}`)
+  },
   upgradePremium: () =>
     req<any>('/api/v1/users/me/upgrade-premium', { method: 'POST' }),
   reactivateAccount: () =>
@@ -1057,18 +1067,19 @@ export const api = {
     text: string,
     image?: string | null,
     background?: string | null,
-    opts?: { expiresInHours?: number; visibility?: string },
+    opts?: { expiresInHours?: number; visibility?: string; video?: string },
   ) => {
     const payload: Record<string, unknown> = {
       content: text || '',
-      status_type: image ? 'image' : 'text',
+      status_type: opts?.video ? 'video' : image ? 'image' : 'text',
       visibility: opts?.visibility || 'contacts',
       expires_in_hours: opts?.expiresInHours ?? 24,
       background: background || 'theme_purple_grad',
     }
-    if (image) {
-      payload.media_attachments = [{ type: 'image', url: image }]
-    }
+    const media: any[] = []
+    if (image) media.push({ type: 'image', url: image })
+    if (opts?.video) media.push({ type: 'video', url: opts.video })
+    if (media.length) payload.media_attachments = media
     const s = await req<any>('/api/v1/statuses', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -1102,6 +1113,19 @@ export const api = {
 
   likeStatus: async (id: string) => {
     return req<any>(`/api/v1/statuses/${id}/like`, { method: 'POST' })
+  },
+
+  listNotifications: async () => {
+    const list = await req<any[]>('/api/v1/notifications')
+    return { notifications: list || [] }
+  },
+  markNotificationRead: async (id: string) => {
+    await req(`/api/v1/notifications/${id}/read`, { method: 'POST' })
+    return { ok: true }
+  },
+  markAllNotificationsRead: async () => {
+    await req('/api/v1/notifications/read-all', { method: 'POST' })
+    return { ok: true }
   },
 
   iceServers: async () => {

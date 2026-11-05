@@ -177,6 +177,35 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
     }
   }, [])
 
+  // From notification: open viewers sheet for this status
+  useEffect(() => {
+    if (!current?.id || !isOwner) return
+    try {
+      const want = sessionStorage.getItem('sc_open_viewers')
+      if (want && want === current.id) {
+        sessionStorage.removeItem('sc_open_viewers')
+        setViewersOpen(true)
+        setViewersLoading(true)
+        void (async () => {
+          try {
+            const cached = await loadCachedViewers<ViewerRow>(current.id)
+            if (cached?.length) {
+              setViewers(cached)
+              setViewersLoading(false)
+            }
+            const { viewers: list } = await api.statusViewers(current.id)
+            setViewers(list)
+            void saveCachedViewers(current.id, list)
+          } catch {
+            setViewers([])
+          } finally {
+            setViewersLoading(false)
+          }
+        })()
+      }
+    } catch { /* */ }
+  }, [current?.id, isOwner])
+
   // Register view only for OTHER people's statuses — never for your own
   useEffect(() => {
     if (!current?.id || !me?.id) return
@@ -476,14 +505,22 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
             transition={{ duration: 0.15 }}
             className="flex w-full max-w-sm flex-col items-center gap-4"
           >
-            {current.image && (
+            {(current.type === 'video' || (current as any).video) ? (
+              <video
+                src={mediaUrl((current as any).video || current.image)}
+                className="max-h-[55vh] w-full rounded-2xl bg-transparent object-contain"
+                controls
+                autoPlay
+                playsInline
+              />
+            ) : current.image ? (
               <img
                 src={mediaUrl(current.image)}
                 alt=""
-                className="max-h-[55vh] w-full rounded-2xl object-contain"
+                className="max-h-[55vh] w-full rounded-2xl bg-transparent object-contain"
                 draggable={false}
               />
-            )}
+            ) : null}
             {current.text && (
               <p className="text-center text-2xl font-bold leading-snug">{current.text}</p>
             )}

@@ -75,7 +75,7 @@ manager = ConnectionManager()
 
 
 def packet_msg(conversation_id: str, message: dict) -> dict:
-    """Minimal new-message packet for peers."""
+    """Minimal new-message packet for peers — include reply tag so UI prints once."""
     return {
         "t": "msg",
         "c": conversation_id,
@@ -87,12 +87,38 @@ def packet_msg(conversation_id: str, message: dict) -> dict:
             "type": message.get("message_type") or message.get("type") or "text",
             "image": _first_media_url(message),
             "state": message.get("delivery_status") or "sent",
+            "reply_to_message_id": message.get("reply_to_message_id"),
+            "reply_to_text": message.get("reply_to_text"),
+            "is_edited": message.get("is_edited") or message.get("edited"),
+            "client_key": message.get("client_key") or message.get("idempotency_key"),
         },
     }
 
 
 def packet_rcpt(conversation_id: str, message_id: str, state: str) -> dict:
     return {"t": "rcpt", "c": conversation_id, "id": message_id, "s": state}
+
+
+def packet_edit(conversation_id: str, message_id: str, text: str, user_id: str) -> dict:
+    return {
+        "t": "edit",
+        "c": conversation_id,
+        "id": message_id,
+        "text": text,
+        "from": user_id,
+        "edited": True,
+    }
+
+
+def packet_react(conversation_id: str, message_id: str, emoji: str, user_id: str, removed: bool = False) -> dict:
+    return {
+        "t": "react",
+        "c": conversation_id,
+        "id": message_id,
+        "emoji": emoji,
+        "from": user_id,
+        "removed": removed,
+    }
 
 
 def _first_media_url(message: dict) -> Optional[str]:

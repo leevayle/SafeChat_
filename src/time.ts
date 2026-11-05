@@ -1,5 +1,18 @@
 /** UTC helpers — store/transmit UTC, display local. */
 
+function getHour12(): boolean {
+  try {
+    const raw = localStorage.getItem('sc_settings')
+    if (!raw) return false
+    const s = JSON.parse(raw)
+    return s?.timeFormat === '12h'
+  } catch {
+    return false
+  }
+}
+
+/** UTC helpers — store/transmit UTC, display local. */
+
 /** Current instant as ISO-8601 UTC with Z suffix. */
 export function utcNowIso(): string {
   return new Date().toISOString()
@@ -33,7 +46,7 @@ export function formatLocalTime(input?: string | number | Date | null): string {
   return d.toLocaleTimeString(undefined, {
     hour: '2-digit',
     minute: '2-digit',
-    hour12: false,
+    hour12: getHour12(),
   })
 }
 
@@ -49,7 +62,7 @@ export function formatLocalDateTime(input?: string | number | Date | null): stri
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-    hour12: false,
+    hour12: getHour12(),
   })
 }
 

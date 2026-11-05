@@ -34,6 +34,7 @@ export function StatusTab({ onOpenStatus }: Props) {
   const [privacy, setPrivacy] = useState<(typeof PRIVACY)[number]>('My contacts')
   const [text, setText] = useState('')
   const [image, setImage] = useState<string | null>(null)
+  const [video, setVideo] = useState<string | null>(null)
   const [composing, setComposing] = useState(false)
   const [postMenu, setPostMenu] = useState(false)
   const [adMode, setAdMode] = useState(false)
@@ -41,7 +42,7 @@ export function StatusTab({ onOpenStatus }: Props) {
   const [statusSettings, setStatusSettings] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
-  // Derived from bgCode — must come AFTER useState (TDZ)
+  // Derived from bgCode - must come AFTER useState (TDZ)
   const lightBg = bgCode === 'white'
   const onLight = lightBg
     ? 'bg-black/10 text-ink ring-black/15'
@@ -58,7 +59,7 @@ export function StatusTab({ onOpenStatus }: Props) {
   const others = statusList.filter((s) => s.userId !== me?.id && isActive(s) && !(s as any).isAd)
   const adStatuses = statusList.filter((s) => s.userId !== me?.id && isActive(s) && !!(s as any).isAd)
 
-  /** one row per user — segment ring by status count (same as chats home) */
+  /** one row per user - segment ring by status count (same as chats home) */
   const recentUsers = useMemo(() => {
     const map = new Map<
       string,
@@ -89,10 +90,27 @@ export function StatusTab({ onOpenStatus }: Props) {
   const onPick = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     e.target.value = ''
-    if (!f || !f.type.startsWith('image/')) return
+    if (!f) return
+    if (f.type.startsWith('video/')) {
+      try {
+        const data = await new Promise<string>((resolve, reject) => {
+          const r = new FileReader()
+          r.onload = () => resolve(String(r.result))
+          r.onerror = reject
+          r.readAsDataURL(f)
+        })
+        setVideo(data)
+        setImage(null)
+      } catch {
+        showToast('Could not process video')
+      }
+      return
+    }
+    if (!f.type.startsWith('image/')) return
     try {
       const data = await compressForWeb(f)
       setImage(data)
+      setVideo(null)
     } catch {
       showToast('Could not process image')
     }
@@ -116,9 +134,10 @@ export function StatusTab({ onOpenStatus }: Props) {
   }
 
   const post = async () => {
-    if ((!text.trim() && !image) || busy) return
+    if ((!text.trim() && !image && !video) || busy) return
     const body = text.trim()
     const img = image
+    const vid = video
     const localId = `local-status-${Date.now()}`
     const hours = hoursFromValidity(validity)
     const createdAt = new Date().toISOString()
@@ -131,7 +150,8 @@ export function StatusTab({ onOpenStatus }: Props) {
       background: bgCode,
       createdAt,
       expiresAt,
-      type: img ? 'image' : 'text',
+      type: vid ? 'video' : img ? 'image' : 'text',
+      video: vid || null,
       views: [] as string[],
       ago: 'Posting…',
       user: me
@@ -147,16 +167,18 @@ export function StatusTab({ onOpenStatus }: Props) {
       pending: true,
     }
 
-    // UI first — append at end (oldest → newest)
+    // UI first - append at end (oldest → newest)
     patchStatusList((list) => [...list, optimistic])
     setText('')
     setImage(null)
+    setVideo(null)
     setComposing(false)
     showToast('Posting status…')
     setBusy(true)
 
     try {
       const { status } = await api.postStatus(body, img, bgCode, {
+        video: vid || undefined,
         expiresInHours: hours,
         is_ad: !!adMode,
         ad_reach: adMode ? 'international' : undefined,
@@ -166,7 +188,7 @@ export function StatusTab({ onOpenStatus }: Props) {
             'My contacts',
         ),
       })
-      // Keep the same list slot — swap id/metadata only so the bubble never disappears
+      // Keep the same list slot - swap id/metadata only so the bubble never disappears
       patchStatusList((list) =>
         list.map((s) =>
           s.id === localId
@@ -189,7 +211,7 @@ export function StatusTab({ onOpenStatus }: Props) {
       showToast('Status posted')
     } catch (e: any) {
       patchStatusList((list) => list.filter((s) => s.id !== localId))
-      showToast(e?.message || 'Could not post status — try again')
+      showToast(e?.message || 'Could not post status - try again')
     } finally {
       setBusy(false)
     }
@@ -212,7 +234,7 @@ export function StatusTab({ onOpenStatus }: Props) {
       <div className="px-5 pt-2.5">
         <h2 className="mb-3 text-xl font-black">Status</h2>
 
-        {/* My statuses — horizontal rounded rectangles + trailing + */}
+        {/* My statuses - horizontal rounded rectangles + trailing + */}
         <p className="mb-2 text-sm font-extrabold text-gray-500">My status</p>
         <div data-no-tab-swipe="1" className="no-scrollbar -mx-1 flex gap-3 overflow-x-auto pb-2 pt-1">
           {mine.map((s) => (
@@ -247,7 +269,7 @@ export function StatusTab({ onOpenStatus }: Props) {
             </button>
           ))}
 
-          {/* Add status — always last; sole item when empty */}
+          {/* Add status - always last; sole item when empty */}
           <button
             type="button"
             onClick={openComposer}
@@ -328,7 +350,7 @@ export function StatusTab({ onOpenStatus }: Props) {
 
       </div>
 
-      {/* Composer — full-screen modern status editor */}
+      {/* Composer - full-screen modern status editor */}
       {composing && (
         <div className="absolute inset-0 z-[90] flex flex-col bg-black">
           <div
@@ -404,9 +426,28 @@ export function StatusTab({ onOpenStatus }: Props) {
             )}
 
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6">
-              {image ? (
+              {video ? (
                 <div className="relative max-h-[55vh] w-full">
-                  <img src={image} alt="" className="mx-auto max-h-[55vh] w-auto max-w-full rounded-2xl object-contain shadow-2xl" />
+                  <video src={video} controls className="mx-auto max-h-[55vh] w-auto max-w-full rounded-2xl bg-black/20 object-contain shadow-2xl" />
+                  <button
+                    type="button"
+                    onClick={() => setVideo(null)}
+                    className="absolute right-2 top-2 rounded-full bg-black/55 p-1.5 text-white"
+                    aria-label="Remove video"
+                  >
+                    <X size={16} />
+                  </button>
+                  <textarea
+                    value={text}
+                    onChange={(e) => setText(e.target.value.slice(0, 140))}
+                    placeholder="Add a caption…"
+                    className={`mt-4 w-full resize-none bg-transparent text-center text-base font-bold outline-none ${lightBg ? 'text-ink placeholder:text-ink/40' : 'text-white placeholder:text-white/55'}`}
+                    rows={2}
+                  />
+                </div>
+              ) : image ? (
+                <div className="relative max-h-[55vh] w-full">
+                  <img src={image} alt="" className="mx-auto max-h-[55vh] w-auto max-w-full rounded-2xl bg-transparent object-contain shadow-2xl" />
                   <button
                     type="button"
                     onClick={() => setImage(null)}
@@ -435,7 +476,7 @@ export function StatusTab({ onOpenStatus }: Props) {
               )}
             </div>
 
-            <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPick} />
+            <input ref={fileRef} type="file" accept="image/*,video/*" hidden onChange={onPick} />
 
             <div className="space-y-5 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4">
               <div className="no-scrollbar -mx-5 flex justify-center gap-2.5 overflow-x-auto px-5 py-1">

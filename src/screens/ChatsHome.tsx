@@ -13,6 +13,7 @@ import {
   BellRing,
   Headphones,
   Clock,
+  RefreshCw,
 } from 'lucide-react'
 import { Wordmark } from '../components/Logo'
 import { Avatar } from '../components/Avatar'
@@ -46,7 +47,7 @@ export function ChatsHome({
   onNotifications,
   onSupport,
 }: Props) {
-  const { chats, contacts, statusList, me, listsReady, saveRequestPending , typingPeers } = useStore()
+  const { chats, contacts, statusList, me, listsReady, saveRequestPending, typingPeers, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, showToast } = useStore()
   /** System-only: save requests etc. Chat unreads live on the bottom nav. */
   const systemNotifCount = saveRequestPending
   const [filter, setFilter] = useState<Filter>('All chats')
@@ -55,10 +56,10 @@ export function ChatsHome({
   const [menu, setMenu] = useState(false)
   const pendingCount = saveRequestPending
   const showSkeleton = !listsReady
-  /** Rows that already entered — receipt/state updates must not re-animate the whole row */
+  /** Rows that already entered - receipt/state updates must not re-animate the whole row */
   const seenRows = useRef<Set<string>>(new Set())
 
-  // O(1) contact lookup — avoid .find() on every row / status
+  // O(1) contact lookup - avoid .find() on every row / status
   const contactMap = useMemo(() => {
     const m = new Map<string, (typeof contacts)[0]>()
     for (const c of contacts) {
@@ -154,7 +155,7 @@ export function ChatsHome({
 
   return (
     <div className="relative flex h-full flex-col bg-white">
-      {/* z-10: sticky top chrome — below overlays */}
+      {/* z-10: sticky top chrome - below overlays */}
       <header className="sticky top-0 z-10 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 pb-3 px-5 pt-[max(12px,env(safe-area-inset-top))] backdrop-blur">
         <div className="flex w-full items-center">
           {searching ? (
@@ -219,7 +220,7 @@ export function ChatsHome({
               exit={{ opacity: 0, scale: 0.96, y: -4 }}
               transition={{ type: 'spring', stiffness: 420, damping: 32 }}
               style={{ transformOrigin: 'top right' }}
-              className="fixed right-3 top-[max(3.75rem,calc(env(safe-area-inset-top)+2.75rem))] z-50 max-h-[min(70vh,420px)] w-56 overflow-y-auto rounded-2xl bg-white p-1.5 shadow-xl ring-1 ring-black/5"
+              className="fixed right-3 top-[max(3.75rem,calc(env(safe-area-inset-top)+2.75rem))] z-50 w-[15.5rem] overflow-hidden rounded-3xl bg-white/95 p-2 shadow-2xl ring-1 ring-black/6 backdrop-blur-xl"
             >
               {(
                 [
@@ -228,6 +229,20 @@ export function ChatsHome({
                   { label: 'Contacts', fn: onContacts, Icon: ContactRound },
                   { label: 'Save requests', fn: onSaveRequests, Icon: UserRoundPlus, badge: pendingCount },
                   { label: 'Notifications', fn: onNotifications, Icon: BellRing, badge: systemNotifCount },
+                  {
+                    label: 'Refresh',
+                    fn: () => {
+                      showToast('Refreshing…')
+                      void Promise.all([
+                        refreshChats({ lean: true }),
+                        refreshCalls(),
+                        refreshStatus(),
+                        refreshContacts(),
+                        refreshSaveRequests(),
+                      ]).then(() => showToast('Up to date'))
+                    },
+                    Icon: RefreshCw,
+                  },
                   { label: 'Support', fn: onSupport, Icon: Headphones },
                   { label: 'Settings', fn: onSettings, Icon: Settings2 },
                 ] as const
@@ -236,7 +251,7 @@ export function ChatsHome({
                 return (
                   <li
                     key={label}
-                    className={i < arr.length - 1 ? 'border-b border-gray-200' : undefined}
+                    className={undefined}
                   >
                     <button
                       type="button"
@@ -244,10 +259,10 @@ export function ChatsHome({
                         setMenu(false)
                         fn()
                       }}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left font-bold hover:bg-gray-100"
+                      className="flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-left text-[13px] font-extrabold text-ink transition active:scale-[0.98] hover:bg-brand-purple/6"
                     >
-                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-purple/10">
-                        <Icon size={16} className="text-brand-purple" strokeWidth={2.3} />
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-purple/15 to-brand-orange/10 ring-1 ring-brand-purple/10">
+                        <Icon size={16} className="text-brand-purple" strokeWidth={2.4} />
                       </span>
                       <span className="min-w-0 flex-1">{label}</span>
                       {badge && badge > 0 ? (

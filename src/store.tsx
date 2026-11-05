@@ -76,6 +76,10 @@ type Settings = {
   hideLiveTyping?: boolean
   verifiedBadge?: boolean
   statusAdsEnabled?: boolean
+  statusLikeNotif?: boolean
+  busyEnabled?: boolean
+  busyScope?: string
+  busyMessage?: string
   autoDownload?: string
   enterIsSend?: boolean
   language?: string
@@ -266,6 +270,7 @@ export function defaultAppearance(): Appearance {
   return {
     theme: 'purple',
     chatAccent: 'purple',
+  timeFormat: '24h',
     colorMode: 'light',
     liquidGlass: false,
   }
@@ -368,6 +373,10 @@ const defaultSettings: Settings = {
   hideLiveTyping: false,
   verifiedBadge: true,
   statusAdsEnabled: false,
+  statusLikeNotif: true,
+  busyEnabled: false,
+  busyScope: 'everyone',
+  busyMessage: '',
   appLock: false,
   twoStep: false,
   msgNotif: true,

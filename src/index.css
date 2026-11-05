@@ -231,3 +231,10 @@ html[data-mode="dark"] .sticky {
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0; }
 }
+
+/* Transparent media — never fill with solid bg */
+img.sc-media-transparent,
+.sc-msg-image img {
+  background: transparent !important;
+  object-fit: contain;
+}

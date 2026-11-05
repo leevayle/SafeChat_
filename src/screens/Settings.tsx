@@ -36,6 +36,7 @@ type Page =
   | 'help'
   | 'blocked'
   | 'premium'
+  | 'mpesa'
   | 'account'
 
 function Row({
@@ -487,7 +488,18 @@ export function Settings({
                     />
                   }
                 />
+                
                 <Row
+                  label="Status likes"
+                  hint="When someone likes your status"
+                  right={
+                    <Toggle
+                      on={(s as any).statusLikeNotif !== false}
+                      onChange={(v) => setSetting('statusLikeNotif' as any, v as never)}
+                    />
+                  }
+                />
+<Row
                   label="Call notifications"
                   right={
                     <Toggle
@@ -514,7 +526,21 @@ export function Settings({
           {page === 'chats' && (
             <motion.div key="chats" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-5">
               <Card>
-                <Row label="Font size" {...sel('Font size', 'fontSize', Object.keys(FONT_SIZES))} />
+                                <Row
+                  label="Time format"
+                  hint="Used across chats, calls, and statuses"
+                  right={
+                    <select
+                      value={(s as any).timeFormat === '12h' ? '12h' : '24h'}
+                      onChange={(e) => setSetting('timeFormat' as any, e.target.value as never)}
+                      className="rounded-full bg-gray-100 px-3 py-1.5 text-xs font-extrabold outline-none"
+                    >
+                      <option value="24h">24-hour</option>
+                      <option value="12h">12-hour</option>
+                    </select>
+                  }
+                />
+<Row label="Font size" {...sel('Font size', 'fontSize', Object.keys(FONT_SIZES))} />
                 <Row
                   label="Enter is send"
                   right={
@@ -748,7 +774,7 @@ export function Settings({
               <Card>
                 <Row
                   label="Live typing"
-                  hint="See what they type in real time — every character, including deletes — before they hit send"
+                  hint="See what they type in real time - every character, including deletes - before they hit send"
                   right={
                     <Toggle
                       on={(s as any).liveTyping !== false}
@@ -830,16 +856,147 @@ export function Settings({
                     />
                   }
                 />
+                <Row
+                  label="Busy status"
+                  hint="Show busy instead of Online - optional short note"
+                  right={
+                    <Toggle
+                      on={!!(s as any).busyEnabled}
+                      onChange={(v) => {
+                        if (((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium') {
+                          setToast('This is a premium feature')
+                          return
+                        }
+                        setSetting('busyEnabled' as any, v as never)
+                      }}
+                      label="Busy status"
+                    />
+                  }
+                />
+                {!!(s as any).busyEnabled && (
+                  <div className="space-y-2 px-1 pb-2">
+                    <label className="block text-[11px] font-extrabold text-gray-400">Who sees busy</label>
+                    <select
+                      value={(s as any).busyScope || 'everyone'}
+                      onChange={(e) => setSetting('busyScope' as any, e.target.value as never)}
+                      className="w-full rounded-2xl bg-gray-50 px-3 py-2.5 text-sm font-bold outline-none"
+                    >
+                      <option value="everyone">Everyone</option>
+                      <option value="contacts">My contacts</option>
+                      <option value="specific">Specific contacts</option>
+                    </select>
+                    <label className="block text-[11px] font-extrabold text-gray-400">Short message</label>
+                    <input
+                      value={(s as any).busyMessage || ''}
+                      maxLength={28}
+                      onChange={(e) => setSetting('busyMessage' as any, e.target.value.slice(0, 28) as never)}
+                      placeholder="e.g. in bed · in a meeting"
+                      className="w-full rounded-2xl bg-gray-50 px-3 py-2.5 text-sm font-bold outline-none"
+                    />
+                    <p className="text-[11px] font-semibold text-gray-400">Max 28 characters · shows under your name</p>
+                  </div>
+                )}
               </Card>
               {((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium' && (
                 <button
                   type="button"
                   className="w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white shadow-md"
-                  onClick={() => setPage('account')}
+                  onClick={() => setPage('mpesa' as any)}
                 >
                   Upgrade to Premium
                 </button>
               )}
+            </motion.div>
+          )}
+
+          
+          {page === 'mpesa' && (
+            <motion.div key="mpesa" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
+              <div className="overflow-hidden rounded-3xl bg-gradient-to-br from-brand-purple via-[#5b21b6] to-brand-orange p-5 text-white shadow-lg">
+                <p className="text-xs font-extrabold uppercase tracking-widest text-white/70">SafeChat Premium</p>
+                <h2 className="mt-1 text-2xl font-black">Unlock everything</h2>
+                <p className="mt-1 text-sm font-semibold text-white/85">Busy status, force receipts, badge, status ads, and more.</p>
+              </div>
+              <div className="grid gap-2">
+                {[
+                  { id: 'daily', label: 'Daily', price: 99, hint: '24 hours of Premium' },
+                  { id: 'weekly', label: 'Weekly', price: 499, hint: '7 days · best trial' },
+                  { id: 'monthly', label: 'Monthly', price: 2999, hint: '30 days · best value' },
+                ].map((plan) => (
+                  <button
+                    key={plan.id}
+                    type="button"
+                    onClick={() => (window as any).__sc_mpesa_plan = plan.id}
+                    className={`flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm ring-1 transition ${(window as any).__sc_mpesa_plan === plan.id ? 'ring-brand-purple' : 'ring-gray-100'}`}
+                    onFocus={(e) => {
+                      (window as any).__sc_mpesa_plan = plan.id
+                      e.currentTarget.parentElement?.querySelectorAll('button').forEach((b) => b.classList.remove('ring-brand-purple'))
+                      e.currentTarget.classList.add('ring-brand-purple')
+                    }}
+                  >
+                    <span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-purple/10 text-sm font-black text-brand-purple">
+                      {plan.label[0]}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-extrabold text-ink">{plan.label}</span>
+                      <span className="block text-[11px] font-semibold text-gray-400">{plan.hint}</span>
+                    </span>
+                    <span className="text-base font-black text-brand-purple">KES {plan.price}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
+                <label className="text-xs font-extrabold text-gray-400">M-Pesa number</label>
+                <input
+                  id="sc-mpesa-phone"
+                  defaultValue={(s.phone || me?.phone || '').replace(/\s/g, '')}
+                  placeholder="2547XXXXXXXX"
+                  className="mt-1.5 w-full rounded-2xl bg-gray-50 px-4 py-3 text-sm font-bold outline-none ring-1 ring-transparent focus:ring-brand-purple/30"
+                />
+                <p className="mt-2 text-[11px] font-semibold text-gray-400">You will get an STK push on this phone. Enter your M-Pesa PIN to pay.</p>
+                <button
+                  type="button"
+                  className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white shadow-md active:scale-[0.99]"
+                  onClick={async () => {
+                    const plan = (window as any).__sc_mpesa_plan || 'monthly'
+                    const phone = (document.getElementById('sc-mpesa-phone') as HTMLInputElement)?.value?.trim()
+                    if (!phone) {
+                      setToast('Enter your M-Pesa number')
+                      return
+                    }
+                    try {
+                      setToast('Sending STK push…')
+                      const res = await api.mpesaStkPush({ phone, plan })
+                      if (res?.checkoutRequestId) {
+                        setToast('Check your phone and enter M-Pesa PIN')
+                        // poll status
+                        let tries = 0
+                        const poll = async () => {
+                          tries += 1
+                          try {
+                            const st = await api.mpesaStatus(res.checkoutRequestId)
+                            if (st?.paid) {
+                              setSetting('subscriptionPlan' as any, 'premium' as never)
+                              setToast('Payment successful. Premium unlocked!')
+                              setPage('premium')
+                              return
+                            }
+                          } catch { /* */ }
+                          if (tries < 20) setTimeout(poll, 3000)
+                          else setToast('Still waiting for payment. You can retry.')
+                        }
+                        setTimeout(poll, 4000)
+                      } else {
+                        setToast('Could not start payment')
+                      }
+                    } catch (e: any) {
+                      setToast(e?.message || 'Payment failed')
+                    }
+                  }}
+                >
+                  Pay with M-Pesa
+                </button>
+              </div>
             </motion.div>
           )}
 
@@ -882,7 +1039,7 @@ export function Settings({
                         await api.upgradePremium()
                         setSetting('subscriptionPlan' as any, 'premium' as never)
                         setSetting('verifiedBadge' as any, true as never)
-                        setToast('Welcome to Premium — payment can be wired later')
+                        setToast('Welcome to Premium - payment can be wired later')
                       } catch (e: any) {
                         setToast(e?.message || 'Could not upgrade')
                       }
