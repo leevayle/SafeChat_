@@ -341,7 +341,7 @@ const defaultSettings: Settings = {
   statusValidity: '24 hours',
   statusPrivacy: 'My contacts',
   forceReadReceipts: false,
-  liveTyping: false,
+  liveTyping: true,
   hideLiveTyping: false,
   verifiedBadge: true,
   statusAdsEnabled: false,
@@ -1060,6 +1060,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
         },
         onTyping: (peerId, typing) => {
+          setTypingPeers((prev) => {
+            const on = !!typing
+            if (!!prev[peerId] === on) return prev
+            const next = { ...prev }
+            if (on) next[peerId] = true
+            else delete next[peerId]
+            return next
+          })
           try {
             window.dispatchEvent(
               new CustomEvent('sc:rt-typing', { detail: { peerId, typing } }),

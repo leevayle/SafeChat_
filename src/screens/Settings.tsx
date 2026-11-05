@@ -745,20 +745,16 @@ export function Settings({
                   Unlock live presence and stronger messaging tools.
                 </p>
               </div>
-              <Card className={((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium' ? 'opacity-55' : ''}>
+              <Card>
                 <Row
                   label="Live typing"
                   hint="See what they type in real time — every character, including deletes — before they hit send"
                   right={
                     <Toggle
-                      on={!!(s as any).liveTyping}
+                      on={(s as any).liveTyping !== false}
                       onChange={(v) => {
-                        if (((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium') {
-                          setToast('This is a premium feature')
-                          return
-                        }
                         setSetting('liveTyping' as any, v as never)
-                        void api.updatePremiumSettings({ live_typing: v })
+                        void api.updatePreferences({ live_typing: v }).catch(() => {})
                       }}
                       label="Live typing"
                     />
@@ -766,22 +762,20 @@ export function Settings({
                 />
                 <Row
                   label="Hide my live typing"
-                  hint="Premium peers won't see your draft as you type"
+                  hint="Peers won't see your draft as you type"
                   right={
                     <Toggle
                       on={!!(s as any).hideLiveTyping}
                       onChange={(v) => {
-                        if (((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium') {
-                          setToast('This is a premium feature')
-                          return
-                        }
                         setSetting('hideLiveTyping' as any, v as never)
-                        void api.updatePremiumSettings({ hide_live_typing: v })
+                        void api.updatePreferences({ hide_live_typing: v }).catch(() => {})
                       }}
                       label="Hide live typing"
                     />
                   }
                 />
+              </Card>
+              <Card className={((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium' ? 'opacity-55' : ''}>
                 <Row
                   label="Always-on read receipts"
                   hint="Always see when your messages are read, even if they turned receipts off"

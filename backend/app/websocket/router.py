@@ -257,15 +257,23 @@ async def _send_presence_snapshot(user_id: str) -> None:
 
 
 async def _handle_typing(user_id: str, data: dict) -> None:
+    """Relay typing + optional live draft text (character stream) to peer."""
     to = data.get("to")
     if not to or str(to) == str(user_id):
         return
-    await manager.send_user(
-        str(to),
-        {
-            "t": "typing",
-            "from": user_id,
-            "typing": bool(data.get("typing")),
-            "ts": _utc_iso(),
-        },
+    draft = data.get("draft")
+    live = bool(data.get("live")) or draft is not None
+    typing = bool(data.get("typing")) if data.get("typing") is not None else (
+        live and isinstance(draft, str) and len(draft) > 0
     )
+    payload: dict = {
+        "t": "typing",
+        "from": user_id,
+        "typing": typing,
+        "ts": _utc_iso(),
+    }
+    if live or draft is not None:
+        payload["live"] = True
+        # Cap length so a huge paste cannot flood peers
+        payload["draft"] = (str(draft) if draft is not None else "")[:2000]
+    await manager.send_user(str(to), payload)

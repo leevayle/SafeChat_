@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, memo, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { api, hasAccessToken, type ApiMsg } from '../api'
 import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
-import { isRealtimeOpen, wsSendMessage, wsReceipt, wsLiveTyping } from '../realtime'
+import { isRealtimeOpen, wsSendMessage, wsReceipt, wsLiveTyping, wsTyping } from '../realtime'
 import { FONT_SIZES, WALLPAPERS, useStore } from '../store'
 import { playInboxLandingChime } from '../lib/sounds'
 import { compressForWeb } from '../lib/imageProcess'
@@ -800,40 +800,51 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }, [contactId, me?.id, peerId, upsertChatPreview])
 
-  useEffect(() => {
-    let last = 0
-    const onType = () => {
-      if (!hasAccessToken()) return
-      const now = Date.now()
-      if (now - last < 1200) return
-      last = now
-      if (settings.typingIndicator) api.setTyping(contactId).catch(() => {})
-    }
-    ;(window as any).__sc_type = onType
-    return () => {
-      delete (window as any).__sc_type
-    }
-  }, [contactId, settings.typingIndicator])
-
-  useEffect(() => {
-    if (!settings.typingIndicator || !hasAccessToken()) return
-    const tick = async () => {
-      if (!hasAccessToken()) return
+  // Live typing stream (all users) — character-level draft to peer via WS
+  const liveSendRef = useRef<{ last: string; at: number }>({ last: '', at: 0 })
+  const liveClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pushLiveDraft = useCallback(
+    (draft: string) => {
+      // Optional privacy only — live character stream is for ALL users by default
+      if ((settings as any).hideLiveTyping) return
+      const to = peerId || contactId
+      if (!to || !hasAccessToken()) return
+      // Skip only exact identical re-sends (not character changes / deletes)
+      if (draft === liveSendRef.current.last) return
+      liveSendRef.current = { last: draft, at: Date.now() }
       try {
-        const { typing: t } = await api.getTyping(contactId)
-        setTyping(t)
+        if (isRealtimeOpen()) {
+          // Always stream full draft so peer sees h → hi → (delete) → "" live in the bubble
+          wsLiveTyping(to, draft)
+        } else if (settings.typingIndicator && draft.length > 0) {
+          void api.setTyping(to).catch(() => {})
+        }
       } catch {
         /* */
       }
+    },
+    [peerId, contactId, settings],
+  )
+
+  useEffect(() => {
+    return () => {
+      if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
+      // Clear peer's live preview when leaving the chat
+      const to = peerId || contactId
+      if (to && isRealtimeOpen() && !(settings as any).hideLiveTyping) {
+        try {
+          wsLiveTyping(to, '')
+          wsTyping(to, false)
+        } catch {
+          /* */
+        }
+      }
     }
-    tick()
-    const id = setInterval(tick, 2500)
-    return () => clearInterval(id)
-  }, [contactId, settings.typingIndicator])
+  }, [peerId, contactId, settings])
 
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-  }, [msgs.length, pendingImage, typing])
+  }, [msgs.length, pendingImage, typing, liveDraft])
 
   // Soft landing chime when a peer message arrives while this chat is open
   useEffect(() => {
@@ -950,6 +961,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     setEmoji(false)
     setReplyTo(null)
     setStatusReply(null)
+    // Stop live preview on peer as soon as we send
+    pushLiveDraft('')
 
     const localId = `local-${Date.now()}`
     const nowIso = utcNowIso()
@@ -1044,38 +1057,49 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }, [contactId])
 
-  // Live typing + presence from WS
+  // Live typing + presence from WS (match contactId or resolved peerId)
   useEffect(() => {
+    const isPeer = (id?: string) =>
+      !!id && (id === contactId || id === peerId || id === (c as any)?.peerId)
+
     const onTyping = (ev: Event) => {
       const d = (ev as CustomEvent).detail as { peerId?: string; typing?: boolean }
-      if (d?.peerId === contactId) setTyping(!!d.typing)
+      if (!isPeer(d?.peerId)) return
+      // Header only — never put draft text here
+      setTyping(!!d.typing)
+      // Only clear the bubble when peer fully stops (not on every keypress)
+      if (!d.typing) setLiveDraft(null)
     }
-    const onPresence = (ev: Event) => {
-      // contacts store updates; also local
-      const d = (ev as CustomEvent).detail as {
-        peerId?: string
-        online?: boolean
-        lastSeen?: string | null
-      }
-      // detail from store dispatch uses peerId
-    }
-    window.addEventListener('sc:rt-typing', onTyping)
     const onRec = (ev: Event) => {
       const d = (ev as CustomEvent).detail as { peerId?: string; recording?: boolean }
-      if (d?.peerId === contactId) setPeerRecording(!!d.recording)
+      if (isPeer(d?.peerId)) setPeerRecording(!!d.recording)
     }
     const onLive = (ev: Event) => {
       const d = (ev as CustomEvent).detail as { peerId?: string; draft?: string }
-      if (d?.peerId === contactId) setLiveDraft(d.draft ?? null)
+      if (!isPeer(d?.peerId)) return
+      // Full draft string: "h" → "hi" → "" as they type/delete
+      const draft = typeof d.draft === 'string' ? d.draft : ''
+      setLiveDraft(draft.length > 0 ? draft : null)
+      setTyping(draft.length > 0)
+      if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
+      // Safety clear if peer goes idle without sending empty draft
+      if (draft.length > 0) {
+        liveClearTimer.current = setTimeout(() => {
+          setLiveDraft(null)
+          setTyping(false)
+        }, 6000)
+      }
     }
+    window.addEventListener('sc:rt-typing', onTyping)
     window.addEventListener('sc:rt-recording', onRec)
     window.addEventListener('sc:rt-live-typing', onLive)
     return () => {
       window.removeEventListener('sc:rt-typing', onTyping)
       window.removeEventListener('sc:rt-recording', onRec)
       window.removeEventListener('sc:rt-live-typing', onLive)
+      if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
     }
-  }, [contactId])
+  }, [contactId, peerId])
 
 
   const applyEdit = async () => {
@@ -1237,18 +1261,22 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           <Avatar contact={{ ...c, online: peerOnline || c.online, premium: !!(c as any).premium || (c as any).subscriptionPlan === 'premium' }} size={44} />
           <div className="min-w-0 flex-1">
             <p className="truncate font-extrabold leading-tight">{c.name}</p>
-            <p className={`text-xs font-bold ${typing || peerRecording || peerOnline || c.online ? 'text-brand-blue' : 'text-gray-400'}`}>
+            <p
+              className={`truncate text-xs font-bold ${
+                peerRecording || liveDraft || typing || peerOnline || c.online
+                  ? 'text-brand-blue'
+                  : 'text-gray-400'
+              }`}
+            >
               {peerRecording
                 ? 'recording…'
-                : liveDraft != null && liveDraft !== ''
-                  ? liveDraft
-                  : typing
-                    ? 'typing…'
-                    : peerOnline || c.online
-                      ? 'Online'
-                      : peerLastSeen || (c as any).lastSeen
-                        ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
-                        : ''}
+                : liveDraft || typing
+                  ? 'typing…'
+                  : peerOnline || c.online
+                    ? 'Online'
+                    : peerLastSeen || (c as any).lastSeen
+                      ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
+                      : ''}
             </p>
           </div>
         </button>
@@ -1402,23 +1430,20 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               </div>
             )
           })}
-          {typing && (
+          {/* Live character bubble — recipient sees h → hi → deletes in real time */}
+          {liveDraft != null && liveDraft !== '' && (
             <motion.div
-              key="typing"
-              initial={{ opacity: 0, y: 10 }}
+              key="live-typing"
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               className="flex"
             >
-              <div className="flex gap-1 rounded-3xl rounded-bl-md bg-white px-4 py-3.5 shadow-sm">
-                {[0, 1, 2].map((i) => (
-                  <motion.span
-                    key={i}
-                    className="h-2 w-2 rounded-full bg-gray-400"
-                    animate={{ y: [0, -4, 0] }}
-                    transition={{ repeat: Infinity, duration: 0.8, delay: i * 0.15 }}
-                  />
-                ))}
+              <div className="max-w-[85%] rounded-3xl rounded-bl-md bg-white px-3.5 py-2.5 shadow-sm ring-1 ring-brand-purple/15">
+                <p className="whitespace-pre-wrap break-words text-[15px] font-medium leading-snug text-ink">
+                  {liveDraft}
+                  <span className="ml-0.5 inline-block h-[1.05em] w-[2px] translate-y-[2px] animate-pulse bg-brand-purple align-middle" />
+                </p>
               </div>
             </motion.div>
           )}
@@ -1548,8 +1573,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             <h2 className="mt-4 text-2xl font-black text-ink">{c.name}</h2>
             {c.username ? <p className="mt-1 font-bold text-brand-purple">@{c.username}</p> : null}
             {c.phone ? <p className="mt-1 text-sm font-semibold text-gray-500">{c.phone}</p> : null}
-            <p className={`mt-2 min-h-[1.25rem] text-sm font-bold ${typing || peerOnline || c.online ? 'text-brand-blue' : 'text-gray-400'}`}>
-              {typing
+            <p
+              className={`mt-2 min-h-[1.25rem] max-w-sm px-4 text-center text-sm font-bold ${
+                liveDraft || typing || peerOnline || c.online ? 'text-brand-blue' : 'text-gray-400'
+              }`}
+            >
+              {liveDraft || typing
                 ? 'typing…'
                 : peerOnline || c.online
                   ? 'Online'
@@ -1710,19 +1739,13 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                 value={text}
                 rows={1}
                 onChange={(e) => {
-                  setText(e.target.value)
+                  const val = e.target.value
+                  setText(val)
                   const el = e.target
                   el.style.height = '24px'
                   el.style.height = Math.min(120, el.scrollHeight) + 'px'
-                  ;(window as any).__sc_type?.()
-                  // Premium live typing: push draft text to peer via custom event (WS bridge)
-                  if (
-                    (settings as any).liveTyping &&
-                    !(settings as any).hideLiveTyping &&
-                    ((settings as any).subscriptionPlan || me?.subscriptionPlan) === 'premium'
-                  ) {
-                    try { wsLiveTyping(contactId, e.target.value) } catch { /* */ }
-                  }
+                  // Live typing for all users — stream each change (type + delete)
+                  pushLiveDraft(val)
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey && settings.enterIsSend) {

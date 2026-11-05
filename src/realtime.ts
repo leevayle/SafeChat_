@@ -282,8 +282,18 @@ export function wsTyping(peerId: string, typing: boolean) {
   return rawSend({ t: 'typing', to: peerId, typing: !!typing })
 }
 
-
-/** Premium live typing — send draft text to peer if socket open */
+/**
+ * Live typing for all users — stream current draft (including empty on delete/clear).
+ * Peer renders this in the chat header + in-chat live preview (not classic dots).
+ */
 export function wsLiveTyping(to: string, draft: string) {
-  rawSend({ t: 'typing', to, draft, live: true })
+  if (!to) return false
+  const text = draft == null ? '' : String(draft).slice(0, 2000)
+  return rawSend({
+    t: 'typing',
+    to,
+    draft: text,
+    live: true,
+    typing: text.length > 0,
+  })
 }
