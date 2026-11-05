@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type PointerEvent } from 'react'
 import { motion } from 'framer-motion'
 import { Check, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { cropAndCompress, defaultCenterCrop, type CropRect } from '../lib/imageProcess'
@@ -66,11 +66,11 @@ export function ImageCropper({ src, onCancel, onDone, title = 'Adjust photo' }: 
     return { x: nx, y: ny }
   }
 
-  const onPointerDown = (e: React.PointerEvent) => {
+  const onPointerDown = (e: PointerEvent) => {
     ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
     drag.current = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y }
   }
-  const onPointerMove = (e: React.PointerEvent) => {
+  const onPointerMove = (e: PointerEvent) => {
     if (!drag.current) return
     const dx = e.clientX - drag.current.x
     const dy = e.clientY - drag.current.y

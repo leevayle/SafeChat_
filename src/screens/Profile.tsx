@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type ChangeEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Camera, User } from 'lucide-react'
 import { ProgressDots } from '../components/ProgressDots'
@@ -37,7 +37,7 @@ export function Profile({ phone, countryCode, registrationToken, onBack, onSubmi
   const gallery = useRef<HTMLInputElement>(null)
   const camera = useRef<HTMLInputElement>(null)
 
-  const pick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const pick = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     e.target.value = ''
     setSheet(false)

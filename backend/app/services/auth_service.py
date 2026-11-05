@@ -207,6 +207,14 @@ class AuthService:
             "profile_photo": user.get("profile_photo"),
             "account_role": user.get("account_role"),
             "account_status": status,
+            # Appearance — client applies CSS theme before painting the shell
+            "theme": user.get("theme") or "purple",
+            "chat_accent": user.get("chat_accent") or "purple",
+            "color_mode": user.get("color_mode") or "light",
+            "liquid_glass": bool(user.get("liquid_glass", False)),
+            "bio": user.get("bio") or "",
+            "email": user.get("email"),
+            "phone_number": user.get("phone_number"),
         }
         return user_public, access_token, refresh_token
 

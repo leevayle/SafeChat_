@@ -29,16 +29,10 @@ def _utc_iso(v):
 class MessagingService:
     @staticmethod
     async def get_or_create_private_conversation(
-        user_id: str,
-        other_username: Optional[str] = None,
-        other_user_id: Optional[str] = None,
+        user_id: str, other_username: str
     ) -> dict:
         db = get_database()
-        other = None
-        if other_user_id and ObjectId.is_valid(str(other_user_id)):
-            other = await db.users.find_one({"_id": ObjectId(str(other_user_id))})
-        if not other and other_username:
-            other = await db.users.find_one({"username": other_username.lower().strip()})
+        other = await db.users.find_one({"username": other_username.lower().strip()})
         if not other:
             raise NotFoundError("User not found")
         other_id = str(other["_id"])
@@ -534,7 +528,7 @@ class MessagingService:
     @staticmethod
     async def _serialize_message(msg: dict, viewer_id: Optional[str] = None) -> dict:
         db = get_database()
-        sender = await db.users.find_one({"_id": ObjectId(msg["sender_id"])})
+        sender = await db.users.find_one({"_id": ObjectId(msg["sender_id"])}) if msg.get("sender_id") and ObjectId.is_valid(msg["sender_id"]) else None
         msg_id = str(msg["_id"])
         status = msg.get("delivery_status", DeliveryStatus.SENT.value)
 
@@ -583,6 +577,8 @@ class MessagingService:
         db = get_database()
         participants = []
         for pid in conv.get("participant_ids", []):
+            if not ObjectId.is_valid(pid):
+                continue
             u = await db.users.find_one({"_id": ObjectId(pid)})
             if u:
                 participants.append(

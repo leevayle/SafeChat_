@@ -1,5 +1,5 @@
 import { statusBgCss } from '../lib/statusBg'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Volume2, VolumeX, Heart, Trash2, Eye, Download, Repeat2, Copy } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
@@ -14,10 +14,12 @@ function mediaUrl(path?: string | null) {
 }
 
 const SEGMENT_MS = 5000
-const HOLD_MS = 220 // longer than this = pause only, no navigation on release
+const HOLD_MS = 450 // short hold = pause; quick tap navigates
 
 type Props = {
   userId: string
+  /** Jump to this status id if still available */
+  initialStatusId?: string | null
   onClose: () => void
   onReplyToStatus?: (peerId: string) => void
 }
@@ -56,23 +58,60 @@ function saveMuted(ids: string[]) {
 
 type ViewerRow = { id: string; username: string; name: string; photo: string | null; viewedAt: string | null; liked?: boolean }
 
-export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
+export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus }: Props) {
   const { statusList, refreshStatus, showToast, patchStatusList, me } = useStore()
   // Only non-expired statuses for this user, oldest first (play order)
+  // Treat naive ISO timestamps as UTC (backend sends without Z)
+  const parseUtc = (raw?: string | null) => {
+    if (!raw) return NaN
+    let s = String(raw)
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z'
+    return Date.parse(s)
+  }
   const items = statusList
     .filter((s) => {
       if (s.userId !== userId) return false
       if (!s.expiresAt) return true
-      const t = Date.parse(s.expiresAt)
+      const t = parseUtc(s.expiresAt)
       return Number.isNaN(t) || t > Date.now()
     })
     .slice()
     .sort((a, b) => {
-      const ta = a.createdAt ? Date.parse(a.createdAt) : 0
-      const tb = b.createdAt ? Date.parse(b.createdAt) : 0
-      return ta - tb
+      const ta = parseUtc(a.createdAt)
+      const tb = parseUtc(b.createdAt)
+      return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb)
     })
   const [idx, setIdx] = useState(0)
+  const jumpedRef = useRef(false)
+  useEffect(() => {
+    if (jumpedRef.current || !items.length) return
+    // Explicit status reply target wins
+    if (initialStatusId) {
+      const i = items.findIndex((s) => s.id === initialStatusId)
+      if (i >= 0) {
+        setIdx(i)
+        jumpedRef.current = true
+        return
+      }
+    }
+    // Jump to first unviewed when some (not all) are already viewed
+    const meId = me?.id
+    if (!meId || meId === userId) {
+      jumpedRef.current = true
+      return
+    }
+    const viewedFlags = items.map(
+      (s) => Array.isArray(s.views) && s.views.includes(meId),
+    )
+    const someViewed = viewedFlags.some(Boolean)
+    const allViewed = viewedFlags.every(Boolean)
+    const noneViewed = viewedFlags.every((v) => !v)
+    if (someViewed && !allViewed && !noneViewed) {
+      const firstUnseen = viewedFlags.findIndex((v) => !v)
+      if (firstUnseen >= 0) setIdx(firstUnseen)
+    }
+    jumpedRef.current = true
+  }, [initialStatusId, items, me?.id, userId])
   const [paused, setPaused] = useState(false)
   const [progress, setProgress] = useState(0)
   const [muted, setMuted] = useState(() => loadMuted().includes(userId))
@@ -100,6 +139,16 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
   pausedRef.current = paused
   itemsLenRef.current = items.length
   progressRef.current = progress
+
+  // Keep idx in range when the filtered list shrinks (delete / expire)
+  useEffect(() => {
+    if (!items.length) return
+    if (idx >= items.length) {
+      setIdx(items.length - 1)
+      setProgress(0)
+      progressRef.current = 0
+    }
+  }, [items.length, idx])
 
   const current = items[idx]
   const liked = current ? !!likes[current.id] : false
@@ -189,25 +238,37 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
     }
   }, [idx, items.length, goNext])
 
-  const onPressStart = (side: 'left' | 'right' | 'mid') => (e: React.PointerEvent) => {
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const onPressStart = (side: 'left' | 'right' | 'mid') => (e: PointerEvent) => {
     if ((e.target as HTMLElement).closest('[data-status-action]')) return
     pressStartRef.current = Date.now()
     pressSideRef.current = side
-    setPaused(true)
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current)
+    holdTimerRef.current = setTimeout(() => {
+      setPaused(true)
+    }, HOLD_MS)
   }
 
   const onPressEnd = () => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current)
+      holdTimerRef.current = null
+    }
     const held = Date.now() - pressStartRef.current
     const side = pressSideRef.current
     pressSideRef.current = null
+    const wasPaused = pausedRef.current
     setPaused(false)
     if (held < HOLD_MS && side) {
       if (side === 'left') goPrev()
       else if (side === 'right') goNext()
+    } else if (wasPaused) {
+      // long hold released — resume
     }
   }
 
-  const toggleMute = (e: React.MouseEvent) => {
+  const toggleMute = (e: MouseEvent) => {
     e.stopPropagation()
     const next = !muted
     setMuted(next)
@@ -217,7 +278,7 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
     showToast(next ? 'Status muted' : 'Status unmuted')
   }
 
-  const openViewers = async (e: React.MouseEvent) => {
+  const openViewers = async (e: MouseEvent) => {
     e.stopPropagation()
     if (!current || !isOwner) return
     setPaused(true)
@@ -239,37 +300,44 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
     setPaused(false)
   }
 
-  const deleteCurrent = async (e?: React.MouseEvent) => {
+  // Keep progress frozen while viewers sheet is open
+  useEffect(() => {
+    if (viewersOpen) {
+      setPaused(true)
+      pausedRef.current = true
+    }
+  }, [viewersOpen])
+
+  const deleteCurrent = async (e?: MouseEvent) => {
     e?.stopPropagation()
     if (!current || !isOwner || deleting) return
     setDeleting(true)
     setPaused(true)
     const id = current.id
-    // Optimistic remove
-    const remainingCount = items.filter((s) => s.id !== id).length
+    const remaining = items.filter((s) => s.id !== id)
     patchStatusList((list) => list.filter((s) => s.id !== id))
     try {
       await api.deleteStatus(id)
       showToast('Status deleted')
-      if (remainingCount === 0) {
+      if (remaining.length === 0) {
         onClose()
       } else {
-        setIdx((i) => Math.min(i, remainingCount - 1))
+        setIdx((i) => Math.min(i, remaining.length - 1))
         setProgress(0)
         progressRef.current = 0
         setPaused(false)
       }
-      void refreshStatus().catch(() => {})
+      // Don't hard-refresh immediately — optimistic list is source of truth; soft refresh later
+      window.setTimeout(() => { void refreshStatus().catch(() => {}) }, 800)
     } catch {
       showToast('Delete failed')
       void refreshStatus().catch(() => {})
-      setPaused(false)
     } finally {
       setDeleting(false)
     }
   }
 
-  const toggleLike = (e: React.MouseEvent) => {
+  const toggleLike = (e: MouseEvent) => {
     e.stopPropagation()
     if (!current) return
     if (isOwner) return
@@ -279,7 +347,7 @@ export function StatusViewer({ userId, onClose, onReplyToStatus }: Props) {
     saveLikes(next)
   }
 
-  if (!items.length) {
+  if (!items.length || !current) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-ink text-white">
         <p className="font-bold">No status available</p>

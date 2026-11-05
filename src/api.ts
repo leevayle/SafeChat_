@@ -21,9 +21,23 @@ export type ApiUser = {
   account_role?: string
   email?: string
   subscriptionPlan?: string
+  accountStatus?: string
+  verifiedBadge?: boolean
+  premiumSettings?: Record<string, unknown>
+  deactivatedAt?: string | null
+  scheduledDeletionAt?: string | null
+  /** Appearance — applied via CSS on login (no UI remount) */
+  theme?: string
+  chatAccent?: string
+  colorMode?: string
+  liquidGlass?: boolean
 }
 
 export type ApiContact = {
+  premium?: boolean
+  subscriptionPlan?: string
+  verifiedBadge?: boolean
+
   id: string
   entryId: string
   peerId: string | null
@@ -194,8 +208,25 @@ function mapUser(u: any): ApiUser {
     createdAt: u.created_at || u.createdAt,
     email: u.email || '',
     account_role: u.account_role,
-    subscriptionPlan: u.subscription_plan || u.subscriptionPlan || 'free',
-  }
+    subscriptionPlan: (u.subscription_plan || u.subscriptionPlan || 'pro').replace('free', 'pro'),
+    accountStatus: u.account_status || u.accountStatus || 'active',
+    verifiedBadge: !!(u.verified_badge ?? u.premium_settings?.verified_badge),
+    premiumSettings: u.premium_settings || u.premiumSettings || {},
+    deactivatedAt: u.deactivated_at || null,
+    scheduledDeletionAt: u.scheduled_deletion_at || null,
+    // Appearance (optional on type — used immediately on login)
+    theme: u.theme || u.settings?.theme || undefined,
+    chatAccent: u.chat_accent || u.chatAccent || u.settings?.chat_accent || undefined,
+    colorMode: u.color_mode || u.colorMode || u.settings?.color_mode || undefined,
+    liquidGlass:
+      u.liquid_glass != null
+        ? !!u.liquid_glass
+        : u.liquidGlass != null
+          ? !!u.liquidGlass
+          : u.settings?.liquid_glass != null
+            ? !!u.settings.liquid_glass
+            : undefined,
+  } as ApiUser
 }
 
 function mapContact(c: any): ApiContact {
@@ -215,6 +246,9 @@ function mapContact(c: any): ApiContact {
     lastSeen: c.last_seen || c.lastSeen || null,
     hue: hueFor(peerId || c.username || 'x'),
     createdAt: c.created_at,
+    premium: c.subscription_plan === 'premium' && c.verified_badge !== false,
+    subscriptionPlan: c.subscription_plan,
+    verifiedBadge: c.verified_badge,
   }
 }
 
@@ -259,8 +293,8 @@ function mapMessage(m: any, meId?: string): ApiMsg {
     mine: meId ? from === meId : !!m.mine,
     conversationId: m.conversation_id,
     messageType: m.message_type,
-    edited: !!m.edited,
     deleted: !!(m.deleted || m.deleted_at),
+    edited: !!(m.edited || m.is_edited || m.edited_at),
     forwarded: !!(m.forwarded_from || m.forwarded),
     reactions: m.reactions || [],
     replyToId: m.reply_to_message_id || m.replyToId || null,
@@ -345,6 +379,8 @@ function mapStatus(s: any): any {
     expiresAt: s.expires_at || s.expiresAt,
     type: s.status_type || s.type || 'text',
     views: Array.isArray(s.viewer_ids) ? s.viewer_ids : Array.isArray(s.views) ? s.views : [],
+    isAd: !!(s.is_ad || s.isAd),
+    adReach: s.ad_reach || s.adReach || null,
     user: {
       id: userId,
       name,
@@ -439,14 +475,14 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
     }
     // Refresh failed or already retried → kill session so polls stop
     markSessionDead()
-    const err = new Error(friendlyError(body.message || 'Session expired — log in again', 401))
+    const err = new Error(friendlyError(body.message || 'Session expired — log in again', 401, path))
     ;(err as any).status = 401
     throw err
   }
 
   if (!res.ok || body.success === false) {
     const raw = body.message || (body as any).error || res.statusText || 'Request failed'
-    const err = new Error(friendlyError(raw, res.status))
+    const err = new Error(friendlyError(raw, res.status, path))
     ;(err as any).status = res.status
     throw err
   }
@@ -454,9 +490,26 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
 }
 
 /** Map technical API errors to short, user-friendly copy. */
-function friendlyError(raw: string, status?: number): string {
+function friendlyError(raw: string, status?: number, path?: string): string {
   const t = (raw || '').toLowerCase()
-  if (status === 401 || t.includes('unauthorized') || t.includes('not authenticated') || t.includes('invalid token')) {
+  const isAuthForm =
+    path?.includes('/auth/login') ||
+    path?.includes('/auth/register') ||
+    path?.includes('/auth/verify')
+  if (
+    t.includes('invalid username') ||
+    t.includes('invalid password') ||
+    t.includes('incorrect password') ||
+    t.includes('invalid credentials') ||
+    t.includes('wrong password') ||
+    (isAuthForm && (status === 401 || status === 400 || t.includes('unauthorized')))
+  ) {
+    return 'Wrong username or password'
+  }
+  if (t.includes('invalid token') || t.includes('not authenticated') || t.includes('token expired')) {
+    return 'Session expired — log in again'
+  }
+  if (!isAuthForm && (status === 401 || t.includes('unauthorized'))) {
     return 'Session expired — log in again'
   }
   if (status === 403 || t.includes('forbidden')) return 'You don’t have permission for that'
@@ -578,7 +631,28 @@ export const api = {
       theme: prefs.theme || theme,
       email: data?.email || '',
       phone: data?.phone_number || data?.phone || '',
-      subscriptionPlan: data?.subscription_plan || 'free',
+      subscriptionPlan: (data?.subscription_plan || 'pro').replace('free', 'pro'),
+      // flatten server settings for client store
+      ...(data?.settings
+        ? {
+            theme: data.settings.theme,
+            chatAccent: data.settings.chat_accent,
+            wallpaper: data.settings.wallpaper,
+            colorMode: data.settings.color_mode,
+            liquidGlass: data.settings.liquid_glass,
+            statusValidity: data.settings.status_validity,
+            statusPrivacy: data.settings.status_privacy,
+            verifiedBadge: data.settings.verified_badge !== false,
+            forceReadReceipts: !!data.settings.force_read_receipts,
+            liveTyping: !!data.settings.live_typing,
+            statusAdsEnabled: !!data.settings.status_ads_enabled,
+          }
+        : {}),
+      accountStatus: data?.account_status || 'active',
+      verifiedBadge: !!(data?.premium_settings?.verified_badge ?? true),
+      premiumSettings: data?.premium_settings || {},
+      deactivatedAt: data?.deactivated_at || null,
+      scheduledDeletionAt: data?.scheduled_deletion_at || null,
     }
     for (const [k, v] of Object.entries(prefs)) {
       const fe = map[k] || k
@@ -612,6 +686,21 @@ export const api = {
       body: JSON.stringify(payload),
     })
   },
+
+  upgradePremium: () =>
+    req<any>('/api/v1/users/me/upgrade-premium', { method: 'POST' }),
+  reactivateAccount: () =>
+    req<any>('/api/v1/users/me/reactivate', { method: 'POST' }),
+  deletePermanently: (password: string) =>
+    req<any>('/api/v1/users/me/delete-permanently', {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    }),
+  updatePremiumSettings: (body: Record<string, unknown>) =>
+    req<any>('/api/v1/users/me/premium-settings', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
 
   deactivateAccount: async (password: string) => {
     return req<any>('/api/v1/users/me/deactivate', {
@@ -691,6 +780,15 @@ export const api = {
         hue: hueFor(String(r.to_user_id || r.to_username || 'x')),
       })),
     }
+  },
+
+  blockUser: async (userId: string) => {
+    await req(`/api/v1/contacts/block/${userId}`, { method: 'POST' })
+    return { ok: true }
+  },
+  unblockUser: async (userId: string) => {
+    await req(`/api/v1/contacts/block/${userId}`, { method: 'DELETE' })
+    return { ok: true }
   },
 
   acceptContactRequest: async (requestId: string) => {
@@ -807,6 +905,17 @@ export const api = {
   markDelivered: async (messageId: string) => {
     await req(`/api/v1/messages/${messageId}/delivered`, { method: 'POST' })
     return { ok: true }
+  },
+
+  groupInvites: async () => {
+    const list = await req<any[]>('/api/v1/groups/invites/mine')
+    return { invites: list || [] }
+  },
+  acceptGroupInvite: async (id: string) => {
+    return req<any>(`/api/v1/groups/invites/${id}/accept`, { method: 'POST' })
+  },
+  rejectGroupInvite: async (id: string) => {
+    return req<any>(`/api/v1/groups/invites/${id}/reject`, { method: 'POST' })
   },
 
   groups: async () => {
@@ -931,6 +1040,19 @@ export const api = {
 
   likeStatus: async (id: string) => {
     return req<any>(`/api/v1/statuses/${id}/like`, { method: 'POST' })
+  },
+
+  iceServers: async () => {
+    try {
+      const data = await req<any>('/api/v1/calls/ice-servers')
+      const list = data?.iceServers || data?.data?.iceServers || data || []
+      return Array.isArray(list) ? list : []
+    } catch {
+      return [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+      ]
+    }
   },
 
   calls: async () => {

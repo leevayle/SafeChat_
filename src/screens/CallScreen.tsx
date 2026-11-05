@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent, type ReactNode } from 'react'
 import { Mic, MicOff, Volume2, VolumeX, PhoneOff, Video, VideoOff } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { useStore } from '../store'
@@ -29,7 +29,7 @@ function Ctl({
   label,
   danger,
 }: {
-  children: React.ReactNode
+  children: ReactNode
   active?: boolean
   onClick: () => void
   label: string
@@ -107,6 +107,11 @@ export function CallScreen({
   const localVideoRef = useRef<HTMLVideoElement | null>(null)
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null)
   const intentionalEndRef = useRef(false)
+  const iceServersRef = useRef<RTCIceServer[]>([
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+  ])
   const connectedRef = useRef(false)
   const startedAtRef = useRef(Date.now())
   const loggedRef = useRef(false)
@@ -253,15 +258,18 @@ export function CallScreen({
     throw lastErr || new Error('Mic/camera permission needed')
   }, [isVideo])
 
+  useEffect(() => {
+    void api.iceServers().then((list) => {
+      if (Array.isArray(list) && list.length) iceServersRef.current = list as RTCIceServer[]
+    }).catch(() => {})
+  }, [])
+
   const ensurePc = useCallback(async () => {
     if (pcRef.current) return pcRef.current
 
     const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-      ],
+      iceServers: iceServersRef.current,
+      iceCandidatePoolSize: 4,
     })
     pcRef.current = pc
 
@@ -455,6 +463,17 @@ export function CallScreen({
           fromUsername: me?.username,
         } as any)
         setStatusText(isRealtimeOpen() ? 'Ringing…' : 'Ringing (waiting for network)…')
+        // If ICE never connects, surface a clear error (usually NAT without TURN)
+        window.setTimeout(() => {
+          if (!alive || intentionalEndRef.current || connectedRef.current) return
+          const st = pcRef.current?.iceConnectionState
+          if (st === 'connected' || st === 'completed') return
+          setStatusText(
+            st === 'checking' || st === 'connected'
+              ? 'Connecting…'
+              : 'Still connecting — use same Wi‑Fi or enable TURN on the server',
+          )
+        }, 12000)
       } catch (e: any) {
         if (alive) {
           const msg = String(e?.message || e?.name || 'Mic/camera permission needed')
@@ -463,7 +482,6 @@ export function CallScreen({
       }
     })()
     return () => {
-      // Only mark dead on unmount — not on re-render
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -535,11 +553,11 @@ export function CallScreen({
 
   useEffect(() => () => cleanupMedia(), [cleanupMedia])
 
-  const onPipPointerDown = (e: React.PointerEvent) => {
+  const onPipPointerDown = (e: PointerEvent) => {
     e.currentTarget.setPointerCapture(e.pointerId)
     dragRef.current = { ox: e.clientX, oy: e.clientY, sx: pip.x, sy: pip.y }
   }
-  const onPipPointerMove = (e: React.PointerEvent) => {
+  const onPipPointerMove = (e: PointerEvent) => {
     if (!dragRef.current) return
     const dx = e.clientX - dragRef.current.ox
     const dy = e.clientY - dragRef.current.oy

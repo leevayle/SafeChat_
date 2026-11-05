@@ -24,13 +24,8 @@ async def create_private_conversation(
     body: CreatePrivateConversationRequest,
     user: dict = Depends(get_current_user),
 ):
-    if not body.participant_username and not body.participant_user_id:
-        from app.core.exceptions import ValidationError
-        raise ValidationError("participant_username or participant_user_id is required")
     conv = await MessagingService.get_or_create_private_conversation(
-        user["id"],
-        other_username=body.participant_username,
-        other_user_id=body.participant_user_id,
+        user["id"], body.participant_username
     )
     return success_response("Conversation ready", conv)
 

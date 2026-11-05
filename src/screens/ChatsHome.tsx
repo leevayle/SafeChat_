@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Search,
@@ -46,7 +46,7 @@ export function ChatsHome({
   onNotifications,
   onSupport,
 }: Props) {
-  const { chats, contacts, statusList, me, listsReady, saveRequestPending } = useStore()
+  const { chats, contacts, statusList, me, listsReady, saveRequestPending , typingPeers } = useStore()
   /** System-only: save requests etc. Chat unreads live on the bottom nav. */
   const systemNotifCount = saveRequestPending
   const [filter, setFilter] = useState<Filter>('All chats')
@@ -270,7 +270,7 @@ export function ChatsHome({
         ) : (
           <>
             {statusUsers.length > 0 && (
-              <div className="no-scrollbar flex gap-4 overflow-x-auto border-b border-gray-200 px-5 pb-3 pt-3">
+              <div data-no-tab-swipe="1" className="no-scrollbar flex gap-4 overflow-x-auto border-b border-gray-200 px-5 pb-3 pt-3">
                 {statusUsers.map((c: any, i: number) => {
                   const meta = statusMeta[c.id] || { total: 1, viewed: 0 }
                   return (
@@ -354,11 +354,11 @@ export function ChatsHome({
                           aria-label="View status"
                         >
                           <StatusRing total={meta.total} viewed={meta.viewed} size={56}>
-                            <Avatar contact={ct} size={46} />
+                            <Avatar contact={{ ...ct, premium: !!(ct as any).premium || (ct as any).verifiedBadge || (ct as any).subscriptionPlan === 'premium' }} size={46} />
                           </StatusRing>
                         </span>
                       ) : (
-                        <Avatar contact={ct} size={52} />
+                        <Avatar contact={{ ...ct, premium: !!(ct as any).premium || (ct as any).verifiedBadge || (ct as any).subscriptionPlan === 'premium' }} size={52} />
                       )}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
@@ -388,7 +388,11 @@ export function ChatsHome({
                         <div className="flex items-center justify-between gap-2">
                           <p className="truncate text-sm font-semibold text-gray-500">
                             {c.mine ? 'You: ' : ''}
-                            {c.last}
+                            {(typingPeers?.[ct.id] || typingPeers?.[c.contactId] || typingPeers?.[(ct as any).peerId]) ? (
+                              <span className="font-bold text-brand-blue">typing…</span>
+                            ) : (
+                              c.last
+                            )}
                           </p>
                           {c.unread > 0 && (
                             <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-orange px-1.5 text-[11px] font-black text-white">
@@ -426,7 +430,7 @@ export function IconBtn({
   label,
   className = '',
 }: {
-  children: React.ReactNode
+  children: ReactNode
   onClick?: () => void
   label: string
   className?: string

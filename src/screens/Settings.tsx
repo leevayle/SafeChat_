@@ -35,6 +35,8 @@ type Page =
   | 'language'
   | 'help'
   | 'blocked'
+  | 'premium'
+  | 'account'
 
 function Row({
   label,
@@ -69,9 +71,9 @@ function Row({
   )
 }
 
-function Card({ children }: { children: ReactNode }) {
+function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className="divide-y divide-gray-100 overflow-hidden rounded-3xl bg-white shadow-sm">
+    <div className={`divide-y divide-gray-100 overflow-hidden rounded-3xl bg-white shadow-sm ${className}`}>
       {children}
     </div>
   )
@@ -90,7 +92,7 @@ export function Settings({
   onLogout: () => void
   onSupport?: () => void
 }) {
-  const { settings: s, setSetting, saveProfile, contacts } = useStore()
+  const { settings: s, setSetting, saveProfile, contacts, me } = useStore()
   const [page, setPage] = useState<Page>('home')
   const [picker, setPicker] = useState<{ title: string; options: string[]; key: keyof S } | null>(null)
   const [confirm, setConfirm] = useState<'logout' | 'delete' | null>(null)
@@ -158,7 +160,7 @@ export function Settings({
           : page === 'notifications'
             ? 'Notifications'
             : page === 'chats'
-              ? 'Chats'
+              ? 'Themes'
               : page === 'storage'
                 ? 'Storage'
                 : page === 'security'
@@ -210,7 +212,13 @@ export function Settings({
                 className="flex w-full items-center gap-4 rounded-3xl bg-white p-4 text-left shadow-sm"
               >
                 <Avatar
-                  contact={{ id: 'me', name: s.name, photo: s.photo, hue: ['#7B2CBF', '#6389EB'] }}
+                  contact={{
+                    id: 'me',
+                    name: s.name,
+                    photo: s.photo,
+                    hue: ['#7B2CBF', '#6389EB'],
+                    premium: ((s as any).subscriptionPlan || me?.subscriptionPlan) === 'premium' && (s as any).verifiedBadge !== false,
+                  }}
                   size={64}
                 />
                 <div className="min-w-0 flex-1">
@@ -234,7 +242,7 @@ export function Settings({
                 <SectionLabel>Preferences</SectionLabel>
                 <Card>
                   <Row label="Notifications" onClick={() => setPage('notifications')} />
-                  <Row label="Chats" hint="Wallpaper, font size" onClick={() => setPage('chats')} />
+                  <Row label="Themes" hint="Wallpaper, colors, liquid glass" onClick={() => setPage('chats')} />
                   <Row label="Storage & data" onClick={() => setPage('storage')} />
                   <Row label="Language" value={String(s.language || 'English')} onClick={() => setPage('language')} />
                 </Card>
@@ -249,9 +257,21 @@ export function Settings({
               </div>
 
               <div>
+                <SectionLabel>Premium</SectionLabel>
+                <Card>
+                  <Row label="Premium features" hint="Receipts, live typing, ads, badge" onClick={() => setPage('premium')} />
+                  <Row
+                    label="Membership"
+                    value={((s as any).subscriptionPlan || me?.subscriptionPlan || 'pro') === 'premium' ? 'Premium' : 'Pro'}
+                    onClick={() => setPage('account')}
+                  />
+                </Card>
+              </div>
+
+              <div>
                 <Card>
                   <Row label="Log out" danger onClick={() => setConfirm('logout')} />
-                  <Row label="Delete account" danger onClick={() => setConfirm('delete')} />
+                  <Row label="Deactivate my account" danger onClick={() => setConfirm('delete')} />
                 </Card>
               </div>
             </motion.div>
@@ -714,6 +734,177 @@ export function Settings({
             </motion.div>
           )}
 
+          
+          {page === 'premium' && (
+            <motion.div key="premium" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
+              <div className="rounded-3xl bg-gradient-to-br from-brand-purple/15 to-brand-orange/10 p-4">
+                <p className="text-sm font-extrabold text-ink">
+                  {((s as any).subscriptionPlan || me?.subscriptionPlan) === 'premium' ? 'Premium member' : 'Pro · Free plan'}
+                </p>
+                <p className="mt-1 text-xs font-semibold text-gray-500">
+                  Unlock live presence and stronger messaging tools.
+                </p>
+              </div>
+              <Card className={((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium' ? 'opacity-55' : ''}>
+                <Row
+                  label="Live typing"
+                  hint="See what they type in real time — every character, including deletes — before they hit send"
+                  right={
+                    <Toggle
+                      on={!!(s as any).liveTyping}
+                      onChange={(v) => {
+                        if (((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium') {
+                          setToast('This is a premium feature')
+                          return
+                        }
+                        setSetting('liveTyping' as any, v as never)
+                        void api.updatePremiumSettings({ live_typing: v })
+                      }}
+                      label="Live typing"
+                    />
+                  }
+                />
+                <Row
+                  label="Hide my live typing"
+                  hint="Premium peers won't see your draft as you type"
+                  right={
+                    <Toggle
+                      on={!!(s as any).hideLiveTyping}
+                      onChange={(v) => {
+                        if (((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium') {
+                          setToast('This is a premium feature')
+                          return
+                        }
+                        setSetting('hideLiveTyping' as any, v as never)
+                        void api.updatePremiumSettings({ hide_live_typing: v })
+                      }}
+                      label="Hide live typing"
+                    />
+                  }
+                />
+                <Row
+                  label="Always-on read receipts"
+                  hint="Always see when your messages are read, even if they turned receipts off"
+                  right={
+                    <Toggle
+                      on={!!(s as any).forceReadReceipts}
+                      onChange={(v) => {
+                        if (((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium') {
+                          setToast('This is a premium feature')
+                          return
+                        }
+                        setSetting('forceReadReceipts' as any, v as never)
+                        void api.updatePremiumSettings({ force_read_receipts: v })
+                      }}
+                      label="Always-on read receipts"
+                    />
+                  }
+                />
+                <Row
+                  label="Verification checkmark"
+                  hint="Blue check on your photo in chats and profile"
+                  right={
+                    <Toggle
+                      on={(s as any).verifiedBadge !== false}
+                      onChange={(v) => {
+                        if (((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium') {
+                          setToast('This is a premium feature')
+                          return
+                        }
+                        setSetting('verifiedBadge' as any, v as never)
+                        void api.updatePremiumSettings({ verified_badge: v })
+                      }}
+                      label="Verification checkmark"
+                    />
+                  }
+                />
+                <Row
+                  label="Status ads"
+                  hint="Boost a status to more people (business reach)"
+                  right={
+                    <Toggle
+                      on={!!(s as any).statusAdsEnabled}
+                      onChange={(v) => {
+                        if (((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium') {
+                          setToast('This is a premium feature')
+                          return
+                        }
+                        setSetting('statusAdsEnabled' as any, v as never)
+                        void api.updatePremiumSettings({ status_ads_enabled: v })
+                      }}
+                      label="Status ads"
+                    />
+                  }
+                />
+              </Card>
+              {((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium' && (
+                <button
+                  type="button"
+                  className="w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white shadow-md"
+                  onClick={() => setPage('account')}
+                >
+                  Upgrade to Premium
+                </button>
+              )}
+            </motion.div>
+          )}
+
+          {page === 'account' && (
+            <motion.div key="account" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
+              <div className="overflow-hidden rounded-3xl bg-white p-5 shadow-sm ring-1 ring-gray-100">
+                <div className="flex items-center gap-4">
+                  <Avatar
+                    contact={{
+                      id: 'me',
+                      name: s.name,
+                      photo: s.photo,
+                      hue: ['#7B2CBF', '#6389EB'],
+                      premium: ((s as any).subscriptionPlan || me?.subscriptionPlan) === 'premium' && (s as any).verifiedBadge !== false,
+                    }}
+                    size={64}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-lg font-black">{s.name}</p>
+                    <p className="text-sm font-bold text-gray-500">@{s.username}</p>
+                    <span className={`mt-2 inline-flex rounded-full px-3 py-1 text-[11px] font-extrabold ${
+                      ((s as any).subscriptionPlan || me?.subscriptionPlan) === 'premium'
+                        ? 'bg-brand-purple/15 text-brand-purple'
+                        : 'bg-gray-100 text-gray-600'
+                    }`}>
+                      {((s as any).subscriptionPlan || me?.subscriptionPlan) === 'premium' ? 'Premium member' : 'Pro · Free plan'}
+                    </span>
+                  </div>
+                </div>
+                <ul className="mt-4 space-y-2 text-xs font-semibold text-gray-500">
+                  <li>• Pro: core chat, status, calls</li>
+                  <li>• Premium: live typing, force receipts, badge, status ads</li>
+                </ul>
+                {((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium' ? (
+                  <button
+                    type="button"
+                    className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white shadow-md"
+                    onClick={async () => {
+                      try {
+                        await api.upgradePremium()
+                        setSetting('subscriptionPlan' as any, 'premium' as never)
+                        setSetting('verifiedBadge' as any, true as never)
+                        setToast('Welcome to Premium — payment can be wired later')
+                      } catch (e: any) {
+                        setToast(e?.message || 'Could not upgrade')
+                      }
+                    }}
+                  >
+                    Upgrade to Premium
+                  </button>
+                ) : (
+                  <p className="mt-4 rounded-2xl bg-brand-purple/10 px-3 py-2 text-center text-xs font-bold text-brand-purple">
+                    You are on Premium. Thank you for supporting SafeChat.
+                  </p>
+                )}
+              </div>
+            </motion.div>
+          )}
+
           {page === 'blocked' && (
             <motion.div key="blocked" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
               <Card>
@@ -773,7 +964,7 @@ export function Settings({
           setDeletePassword('')
           setDeletePhrase('')
         }}
-        title={confirm === 'logout' ? 'Log out?' : 'Delete account'}
+        title={confirm === 'logout' ? 'Log out?' : 'Deactivate account?'}
       >
         {confirm === 'logout' ? (
           <>
@@ -793,7 +984,7 @@ export function Settings({
         ) : (
           <>
             <p className="mb-3 text-sm font-semibold text-gray-500">
-              This deactivates your account. You will be signed out on all devices.
+              Your account will be deactivated. After 6 months without reactivation it may be permanently deleted. Monthly reminder emails can be sent while deactivated.
             </p>
             {deleteStep === 'password' ? (
               <>

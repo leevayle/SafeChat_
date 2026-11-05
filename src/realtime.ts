@@ -193,6 +193,13 @@ export function connectRealtime(handlers?: RtHandlers) {
     }
     if (t === 'typing' && data.from) {
       state.handlers.onTyping?.(String(data.from), !!data.typing)
+      if (data.live || data.draft != null) {
+        window.dispatchEvent(
+          new CustomEvent('sc:rt-live-typing', {
+            detail: { peerId: String(data.from), draft: data.draft ?? '' },
+          }),
+        )
+      }
       return
     }
     if (t === 'presence' && data.userId) {
@@ -273,4 +280,10 @@ export function wsCall(packet: {
 
 export function wsTyping(peerId: string, typing: boolean) {
   return rawSend({ t: 'typing', to: peerId, typing: !!typing })
+}
+
+
+/** Premium live typing — send draft text to peer if socket open */
+export function wsLiveTyping(to: string, draft: string) {
+  rawSend({ t: 'typing', to, draft, live: true })
 }

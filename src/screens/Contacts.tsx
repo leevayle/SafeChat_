@@ -21,6 +21,8 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const [draft, setDraft] = useState({ savedName: '', note: '', phone: '' })
   const [adding, setAdding] = useState(false)
   const [addForm, setAddForm] = useState({ username: '', phone: '', savedName: '', sharePhone: true })
+  const [addMode, setAddMode] = useState<'username' | 'phone'>('username')
+  const [phoneCountry, setPhoneCountry] = useState('+254')
   const [searchHits, setSearchHits] = useState<any[]>([])
   const [busy, setBusy] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -109,14 +111,20 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
     setBusy(true)
     try {
       const username = (peer?.username || addForm.username || '').replace(/^@/, '').trim()
-      if (!username) {
+      const phoneFull = peer?.phone || (addForm.phone ? `${phoneCountry}${addForm.phone}` : '')
+      if (addMode === 'username' && !username) {
         showToast('Enter a username to send a save request')
+        return
+      }
+      if (addMode === 'phone' && !phoneFull) {
+        showToast('Enter a phone number')
         return
       }
       const res = await api.addContact({
         peerId: peer?.id,
-        username,
-        savedName: addForm.savedName || peer?.name || username,
+        username: username || undefined,
+        phone: addMode === 'phone' ? phoneFull : undefined,
+        savedName: addForm.savedName || peer?.name || username || phoneFull,
         sharePhone: addForm.sharePhone,
       })
       await refreshContacts()
@@ -213,7 +221,21 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
       {/* Add contact sheet */}
       {adding && (
         <div className="fixed inset-0 z-[90] flex flex-col bg-white">
-          <ScreenHeader title="Add contact" onBack={() => setAdding(false)} />
+          <ScreenHeader
+            title="Add contact"
+            onBack={() => setAdding(false)}
+            right={
+              <select
+                value={addMode}
+                onChange={(e) => setAddMode(e.target.value as 'username' | 'phone')}
+                className="rounded-full bg-gray-100 px-2.5 py-1.5 text-xs font-extrabold text-ink outline-none"
+                aria-label="Search by"
+              >
+                <option value="username">Username</option>
+                <option value="phone">Phone</option>
+              </select>
+            }
+          />
           <div className="space-y-3 px-5 pt-2">
             <label className="block text-xs font-extrabold text-gray-500">Username on SafeChat</label>
             <input

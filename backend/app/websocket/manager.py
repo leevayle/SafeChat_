@@ -76,20 +76,19 @@ manager = ConnectionManager()
 
 def packet_msg(conversation_id: str, message: dict) -> dict:
     """Minimal new-message packet for peers."""
-    m = {
-        "id": message.get("id") or message.get("_id"),
-        "from": message.get("sender_id") or message.get("from"),
-        "text": message.get("content") or message.get("text") or "",
-        "time": message.get("created_at") or message.get("time"),
-        "type": message.get("message_type") or message.get("type") or "text",
-        "image": _first_media_url(message),
-        "state": message.get("delivery_status") or "sent",
+    return {
+        "t": "msg",
+        "c": conversation_id,
+        "m": {
+            "id": message.get("id") or message.get("_id"),
+            "from": message.get("sender_id") or message.get("from"),
+            "text": message.get("content") or message.get("text") or "",
+            "time": message.get("created_at") or message.get("time"),
+            "type": message.get("message_type") or message.get("type") or "text",
+            "image": _first_media_url(message),
+            "state": message.get("delivery_status") or "sent",
+        },
     }
-    if message.get("reply_to_message_id"):
-        m["reply_to_message_id"] = message.get("reply_to_message_id")
-    if message.get("reply_to_text"):
-        m["reply_to_text"] = message.get("reply_to_text")
-    return {"t": "msg", "c": conversation_id, "m": m}
 
 
 def packet_rcpt(conversation_id: str, message_id: str, state: str) -> dict:

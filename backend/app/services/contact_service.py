@@ -250,20 +250,20 @@ class ContactService:
             contact_user = users.get(c["contact_user_id"])
             if not contact_user:
                 continue
-            # Only surface a number if this contact edge explicitly shared it.
-            # Username + display_name are enough for chat / calls without a number.
-            phone = (c.get("shared_phone") or "").strip()
+            phone = (
+                c.get("shared_phone")
+                or contact_user.get("phone_number")
+                or contact_user.get("phone")
+                or ""
+            )
             results.append(
                 {
                     "id": str(c["_id"]),
                     "contact_user_id": c["contact_user_id"],
-                    "username": contact_user.get("username") or "",
-                    "display_name": contact_user.get("display_name")
-                    or contact_user.get("username")
-                    or "User",
+                    "username": contact_user["username"],
+                    "display_name": contact_user["display_name"],
                     "profile_photo": contact_user.get("profile_photo"),
                     "phone_number": phone,
-                    "phone_shared": bool(phone),
                     "nickname": c.get("nickname"),
                     "contact_status": c["contact_status"],
                     "created_at": _iso(c.get("created_at")),

@@ -24,12 +24,35 @@ import {
 } from './api'
 import { playIncomingMessageChime } from './lib/sounds'
 
-export type Settings = {
+export 
+const LS_OWNER_KEY = 'sc_user_id'
+
+function wipeForeignLocalState() {
+  try {
+    // Keep per-user appearance map so the next login can paint the right theme instantly
+    const keep = new Set(['sc_appearance_by_user'])
+    const keys: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && (k.startsWith('sc_') || k.startsWith('safechat')) && !keep.has(k)) keys.push(k)
+    }
+    keys.forEach((k) => localStorage.removeItem(k))
+  } catch {
+    /* ignore */
+  }
+}
+
+type Settings = {
   messageNotifs?: boolean
   callNotifs?: boolean
   statusNotifs?: boolean
   about?: string
   statusPrivacy?: string
+  forceReadReceipts?: boolean
+  liveTyping?: boolean
+  hideLiveTyping?: boolean
+  verifiedBadge?: boolean
+  statusAdsEnabled?: boolean
   autoDownload?: string
   enterIsSend?: boolean
   language?: string
@@ -49,7 +72,7 @@ export type Settings = {
   statusValidity: string
   statusPrivacy: string
   email: string
-  subscriptionPlan: string
+  subscriptionPlan: string // pro | premium
   liquidGlass: boolean
   colorMode: string
   appLock: boolean
@@ -171,6 +194,7 @@ function hexToRgb(hex: string): string {
   return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`
 }
 
+/** CSS-only theme — mutates documentElement, never remounts React. */
 export function applyTheme(themeId: string) {
   const t = THEMES[themeId as ThemeId] || THEMES.purple
   const root = document.documentElement
@@ -178,6 +202,12 @@ export function applyTheme(themeId: string) {
   root.style.setProperty('--color-brand-magenta', t.accent)
   root.style.setProperty('--brand-shadow-rgb', hexToRgb(t.primary))
   root.dataset.theme = t.id
+  try {
+    const meta = document.querySelector('meta[name="theme-color"]')
+    if (meta) meta.setAttribute('content', t.primary)
+  } catch {
+    /* ignore */
+  }
 }
 
 export function applyLiquidGlass(on: boolean) {
@@ -200,6 +230,101 @@ export function applyChatAccent(accentId: string) {
   document.documentElement.style.setProperty('--chat-accent-rgb', hexToRgb(a.color))
 }
 
+export type Appearance = {
+  theme: string
+  chatAccent: string
+  colorMode: string
+  liquidGlass: boolean
+}
+
+const APPEARANCE_MAP_KEY = 'sc_appearance_by_user'
+
+export function defaultAppearance(): Appearance {
+  return {
+    theme: 'purple',
+    chatAccent: 'purple',
+    colorMode: 'light',
+    liquidGlass: false,
+  }
+}
+
+/** Apply full appearance via CSS variables / data attrs only (no React re-render). */
+export function applyAppearance(a: Partial<Appearance> | null | undefined) {
+  const base = defaultAppearance()
+  const next: Appearance = {
+    theme: String(a?.theme || base.theme),
+    chatAccent: String(a?.chatAccent || base.chatAccent),
+    colorMode: String(a?.colorMode || base.colorMode),
+    liquidGlass: !!(a?.liquidGlass ?? base.liquidGlass),
+  }
+  applyTheme(next.theme)
+  applyChatAccent(next.chatAccent)
+  applyColorMode(next.colorMode)
+  applyLiquidGlass(next.liquidGlass)
+  return next
+}
+
+function readAppearanceMap(): Record<string, Appearance> {
+  try {
+    const raw = localStorage.getItem(APPEARANCE_MAP_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Per-user appearance cache — survives account switch so login never flashes the wrong palette. */
+export function loadUserAppearance(userId: string | null | undefined): Appearance | null {
+  if (!userId) return null
+  const map = readAppearanceMap()
+  const a = map[userId]
+  if (!a || typeof a !== 'object') return null
+  return {
+    theme: String(a.theme || 'purple'),
+    chatAccent: String(a.chatAccent || 'purple'),
+    colorMode: String(a.colorMode || 'light'),
+    liquidGlass: !!a.liquidGlass,
+  }
+}
+
+export function saveUserAppearance(userId: string | null | undefined, a: Partial<Appearance>) {
+  if (!userId) return
+  try {
+    const map = readAppearanceMap()
+    const prev = map[userId] || defaultAppearance()
+    map[userId] = {
+      theme: String(a.theme ?? prev.theme),
+      chatAccent: String(a.chatAccent ?? prev.chatAccent),
+      colorMode: String(a.colorMode ?? prev.colorMode),
+      liquidGlass: !!(a.liquidGlass ?? prev.liquidGlass),
+    }
+    localStorage.setItem(APPEARANCE_MAP_KEY, JSON.stringify(map))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Resolve appearance: server settings > per-user cache > defaults. Apply CSS immediately. */
+export function resolveAndApplyAppearance(
+  userId: string | null | undefined,
+  server?: Partial<Appearance> | null,
+): Appearance {
+  const cached = loadUserAppearance(userId)
+  const merged: Appearance = {
+    ...defaultAppearance(),
+    ...(cached || {}),
+    ...(server?.theme ? { theme: String(server.theme) } : {}),
+    ...(server?.chatAccent ? { chatAccent: String(server.chatAccent) } : {}),
+    ...(server?.colorMode ? { colorMode: String(server.colorMode) } : {}),
+    ...(server?.liquidGlass != null ? { liquidGlass: !!server.liquidGlass } : {}),
+  }
+  applyAppearance(merged)
+  if (userId) saveUserAppearance(userId, merged)
+  return merged
+}
+
 const defaultSettings: Settings = {
   name: '',
   username: '',
@@ -215,6 +340,11 @@ const defaultSettings: Settings = {
   disappearing: 'Off',
   statusValidity: '24 hours',
   statusPrivacy: 'My contacts',
+  forceReadReceipts: false,
+  liveTyping: false,
+  hideLiveTyping: false,
+  verifiedBadge: true,
+  statusAdsEnabled: false,
   appLock: false,
   twoStep: false,
   msgNotif: true,
@@ -228,7 +358,7 @@ const defaultSettings: Settings = {
   wallpaper: 'Cloud',
   theme: 'purple',
   email: '',
-  subscriptionPlan: 'free',
+  subscriptionPlan: 'pro',
   liquidGlass: false,
   colorMode: 'light',
   chatAccent: 'purple',
@@ -303,24 +433,45 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   )
   const [settings, setSettings] = useState<Settings>(() => {
     try {
+      const owner = localStorage.getItem(LS_OWNER_KEY)
+      const storedUser = hasAccessToken() ? getStoredUser() : null
+      // Only restore palette when we know who owns this device session
+      const ownerId = storedUser?.id || owner || null
+      if (ownerId && storedUser?.id && owner && owner !== storedUser.id) {
+        // Stale owner vs stored user mismatch — neutral defaults until login resolves
+        applyAppearance(defaultAppearance())
+        return defaultSettings
+      }
+      const cached = ownerId ? loadUserAppearance(ownerId) : null
       const raw = localStorage.getItem('sc_settings')
       if (raw) {
-        const merged = { ...defaultSettings, ...JSON.parse(raw) }
-        applyTheme(merged.theme || 'purple')
-        applyLiquidGlass(!!merged.liquidGlass)
-        applyColorMode(merged.colorMode || 'light')
-        applyChatAccent(merged.chatAccent || 'purple')
+        const parsed = JSON.parse(raw)
+        const merged = {
+          ...defaultSettings,
+          ...parsed,
+          ...(cached || {}),
+        }
+        applyAppearance({
+          theme: merged.theme,
+          chatAccent: merged.chatAccent,
+          colorMode: merged.colorMode,
+          liquidGlass: merged.liquidGlass,
+        })
         return merged
+      }
+      if (cached) {
+        applyAppearance(cached)
+        return { ...defaultSettings, ...cached }
       }
     } catch {
       /* ignore */
     }
-    applyTheme(defaultSettings.theme)
-    applyChatAccent(defaultSettings.chatAccent)
+    applyAppearance(defaultAppearance())
     return defaultSettings
   })
   const [contacts, setContacts] = useState<ApiContact[]>([])
   const [chats, setChats] = useState<ChatPreview[]>([])
+  const [typingPeers, setTypingPeers] = useState<Record<string, boolean>>({})
   const [groups, setGroups] = useState<any[]>([])
   const [statusList, setStatusList] = useState<any[]>([])
   const [calls, setCalls] = useState<any[]>([])
@@ -347,22 +498,55 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const applyUser = useCallback((user: ApiUser, s?: Record<string, unknown>) => {
+    // If stored prefs belong to another account, wipe immediately — first thing after auth
+    try {
+      const prevOwner = localStorage.getItem(LS_OWNER_KEY)
+      if (prevOwner && prevOwner !== user.id) {
+        wipeForeignLocalState()
+      }
+      localStorage.setItem(LS_OWNER_KEY, user.id)
+    } catch {
+      /* ignore */
+    }
+
+    // CSS-only appearance BEFORE any React state that paints the shell
+    const serverAppearance: Partial<Appearance> = {
+      theme: (s?.theme as string) || (user as any).theme || undefined,
+      chatAccent: (s?.chatAccent as string) || (user as any).chatAccent || undefined,
+      colorMode: (s?.colorMode as string) || (user as any).colorMode || undefined,
+      liquidGlass:
+        s?.liquidGlass != null
+          ? !!s.liquidGlass
+          : (user as any).liquidGlass != null
+            ? !!(user as any).liquidGlass
+            : undefined,
+    }
+    const appearance = resolveAndApplyAppearance(user.id, serverAppearance)
+
     setMe(user)
     setSettings((prev) => {
+      const plan = ((user as any).subscriptionPlan || 'pro').replace('free', 'pro')
       const next = {
+        ...defaultSettings,
         ...prev,
         name: user.name,
         username: user.username,
         bio: user.bio,
         phone: user.phone,
         photo: user.photo,
+        verifiedBadge: (user as any).verifiedBadge !== false,
         ...(s || {}),
+        subscriptionPlan: plan,
+        // Appearance always wins from resolve (server > cache > defaults)
+        theme: appearance.theme,
+        chatAccent: appearance.chatAccent,
+        colorMode: appearance.colorMode,
+        liquidGlass: appearance.liquidGlass,
       } as Settings
-      if (next.theme) applyTheme(String(next.theme))
-      if (next.chatAccent) applyChatAccent(String(next.chatAccent))
       try {
         localStorage.setItem('sc_settings', JSON.stringify(next))
         localStorage.setItem('sc_has_logged_in', '1')
+        localStorage.setItem(LS_OWNER_KEY, user.id)
       } catch {
         /* ignore */
       }
@@ -445,7 +629,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!hasAccessToken() || isSessionDead()) return
     try {
       const { contacts: c } = await api.contacts()
-      setContacts((prev) => (prev.length === c.length && JSON.stringify(prev) === JSON.stringify(c) ? prev : c))
+      // Cheap equality: id + name + photo + phone — avoid full JSON.stringify on every poll
+      setContacts((prev) => {
+        if (prev.length === c.length) {
+          let same = true
+          for (let i = 0; i < prev.length; i++) {
+            const a = prev[i] as any
+            const b = c[i] as any
+            if (
+              a.id !== b.id ||
+              a.name !== b.name ||
+              a.photo !== b.photo ||
+              a.phone_number !== b.phone_number ||
+              a.username !== b.username
+            ) {
+              same = false
+              break
+            }
+          }
+          if (same) return prev
+        }
+        return c
+      })
     } catch {
       /* */
     }
@@ -455,7 +660,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!hasAccessToken() || isSessionDead()) return
     try {
       const { groups: g } = await api.groups()
-      setGroups((prev) => (prev.length === g.length && JSON.stringify(prev) === JSON.stringify(g) ? prev : g))
+      setGroups((prev) => {
+        if (prev.length === g.length) {
+          let same = true
+          for (let i = 0; i < prev.length; i++) {
+            const a = prev[i] as any
+            const b = g[i] as any
+            if (
+              a.id !== b.id ||
+              a.name !== b.name ||
+              a.photo !== b.photo ||
+              a.last !== b.last ||
+              a.iso !== b.iso ||
+              a.unread !== b.unread ||
+              (a.members?.length ?? 0) !== (b.members?.length ?? 0)
+            ) {
+              same = false
+              break
+            }
+          }
+          if (same) return prev
+        }
+        return g
+      })
     } catch {
       /* */
     }
@@ -480,9 +707,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const tb = b.createdAt ? Date.parse(b.createdAt) : 0
           return ta - tb
         })
-      setStatusList((prev) =>
-        prev.length === active.length && JSON.stringify(prev) === JSON.stringify(active) ? prev : active,
-      )
+      // Cheap equality: id + views length + text/image — avoid full JSON.stringify on every poll
+      setStatusList((prev) => {
+        if (prev.length === active.length) {
+          let same = true
+          for (let i = 0; i < prev.length; i++) {
+            const a = prev[i] as any
+            const b = active[i] as any
+            if (
+              a.id !== b.id ||
+              a.text !== b.text ||
+              a.image !== b.image ||
+              (a.views?.length ?? 0) !== (b.views?.length ?? 0) ||
+              a.expiresAt !== b.expiresAt
+            ) {
+              same = false
+              break
+            }
+          }
+          if (same) return prev
+        }
+        return active
+      })
     } catch (e: any) {
       if ((e as any)?.status === 401) wipeSession()
     }
@@ -848,10 +1094,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const { access_token, refresh_token, user } = session
     markSessionAlive()
     setSession(access_token, refresh_token, user)
-    applyUser(user)
+
+    // 1) Theme first (CSS only) — never flash another user's palette
+    const loginTheme = (user as any).theme as string | undefined
+    const loginAccent = (user as any).chatAccent as string | undefined
+    resolveAndApplyAppearance(user.id, {
+      ...(loginTheme ? { theme: loginTheme } : {}),
+      ...(loginAccent ? { chatAccent: loginAccent } : {}),
+      colorMode: (user as any).colorMode,
+      liquidGlass: (user as any).liquidGlass,
+    })
+    applyUser(user, {
+      ...(loginTheme ? { theme: loginTheme } : {}),
+      ...(loginAccent ? { chatAccent: loginAccent } : {}),
+    })
+
+    // 2) Chats hydrate IMMEDIATELY in parallel with /me — first login must fill inbox now
     setSessionOk(true)
     setListsReady(false)
-    void hydrateAfterAuth()
+    const hydrateP = hydrateAfterAuth()
+    const meP = (async () => {
+      try {
+        const { user: fresh, settings: s } = await api.me()
+        if (!isSessionDead()) applyUser(fresh, s as Record<string, unknown>)
+      } catch {
+        /* soft — cached appearance already applied */
+      }
+    })()
+    // Wait for chats (critical path) so home is populated on first paint after login
+    await hydrateP
+    void meP
     return user
   }
 
@@ -916,10 +1188,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     markSessionAlive()
     setSession(access_token, refresh_token, user)
+    resolveAndApplyAppearance(user.id, (user as any).theme ? { theme: (user as any).theme } : null)
     applyUser(user)
     setSessionOk(true)
     setListsReady(false)
-    void hydrateAfterAuth()
+    const hydrateP = hydrateAfterAuth()
+    void (async () => {
+      try {
+        const { user: fresh, settings: s } = await api.me()
+        if (!isSessionDead()) applyUser(fresh, s as Record<string, unknown>)
+      } catch {
+        /* soft */
+      }
+    })()
+    await hydrateP
     return user
   }
 
@@ -970,8 +1252,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       setSettings(defaultSettings)
     }
-    applyTheme(defaultSettings.theme)
-    applyChatAccent(defaultSettings.chatAccent)
+    // Neutral device palette after logout (login will restore the next user's colors)
+    applyAppearance(defaultAppearance())
   }
 
   const meRef = useRef(me)
@@ -981,10 +1263,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const setSetting = useCallback(<K extends keyof Settings>(k: K, v: Settings[K]) => {
     const next = { ...settings, [k]: v }
     setSettings(next)
-    if (k === 'theme') applyTheme(String(v))
-    if (k === 'chatAccent') applyChatAccent(String(v))
-    if (k === 'liquidGlass') applyLiquidGlass(!!v)
-    if (k === 'colorMode') applyColorMode(String(v))
+    // Appearance keys: CSS variables only — no component remount
+    if (k === 'theme' || k === 'chatAccent' || k === 'liquidGlass' || k === 'colorMode') {
+      applyAppearance({
+        theme: String(next.theme),
+        chatAccent: String(next.chatAccent),
+        colorMode: String(next.colorMode),
+        liquidGlass: !!next.liquidGlass,
+      })
+      const uid = meRef.current?.id || localStorage.getItem(LS_OWNER_KEY)
+      saveUserAppearance(uid, {
+        theme: String(next.theme),
+        chatAccent: String(next.chatAccent),
+        colorMode: String(next.colorMode),
+        liquidGlass: !!next.liquidGlass,
+      })
+    }
     try {
       localStorage.setItem('sc_settings', JSON.stringify(next))
     } catch {
@@ -1073,6 +1367,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       saveProfile,
       contacts,
       chats,
+      typingPeers,
       groups,
       statusList,
       calls,
@@ -1105,6 +1400,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       settings,
       contacts,
       chats,
+      typingPeers,
       groups,
       statusList,
       calls,

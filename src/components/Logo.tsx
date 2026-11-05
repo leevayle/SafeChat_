@@ -42,10 +42,11 @@ export function LogoIcon({ size = 112, animate = true }: { size?: number; animat
           cy={51}
           r={5.5}
           fill="#fff"
+          initial={{ opacity: 0.35, cy: 51 }}
           animate={
             animate
               ? { opacity: [0.35, 1, 0.35], cy: [51, 46, 51] }
-              : undefined
+              : { opacity: 1, cy: 51 }
           }
           transition={{
             duration: 1.4,

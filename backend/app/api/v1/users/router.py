@@ -37,6 +37,30 @@ class ProfileUpdate(BaseModel):
     bio: Optional[str] = Field(None, max_length=256)
     profile_photo: Optional[str] = None
     theme: Optional[str] = Field(None, max_length=32)
+    chat_accent: Optional[str] = Field(None, max_length=32)
+    color_mode: Optional[str] = Field(None, max_length=16)
+    liquid_glass: Optional[bool] = None
+    wallpaper: Optional[str] = Field(None, max_length=64)
+
+
+class PreferencesUpdate(BaseModel):
+    """Loose bag for client preference keys (theme, notifs, etc.)."""
+    theme: Optional[str] = None
+    chat_accent: Optional[str] = None
+    color_mode: Optional[str] = None
+    liquid_glass: Optional[bool] = None
+    wallpaper: Optional[str] = None
+    font_size: Optional[str] = None
+    language: Optional[str] = None
+    status_privacy: Optional[str] = None
+    status_validity: Optional[str] = None
+    msg_notif: Optional[bool] = None
+    group_notif: Optional[bool] = None
+    call_notif: Optional[bool] = None
+    enter_is_send: Optional[bool] = None
+    typing_indicator: Optional[bool] = None
+    auto_download: Optional[str] = None
+    sound: Optional[str] = None
 
 
 class PrivacySettingsUpdate(BaseModel):
@@ -70,10 +94,6 @@ async def get_my_profile(user: dict = Depends(get_current_user)):
             "account_status": user.get("account_status"),
             "privacy_settings": user.get("privacy_settings"),
             "notification_settings": user.get("notification_settings"),
-            "theme": user.get("theme") or "purple",
-            "subscription_plan": user.get("subscription_plan") or "free",
-            "preferences": user.get("preferences") or {},
-            "email": user.get("email"),
             "created_at": user.get("created_at").isoformat()
             if user.get("created_at")
             else None,
@@ -89,12 +109,8 @@ async def update_my_profile(
     body: ProfileUpdate,
     user: dict = Depends(get_current_user),
 ):
-    raw = body.model_dump(exclude_unset=True)
-    # Allow clearing profile_photo with null; other fields still skip null
     updates = {
-        k: v
-        for k, v in raw.items()
-        if v is not None or k == "profile_photo"
+        k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None
     }
     if not updates:
         return success_response("Nothing to update")
@@ -115,43 +131,27 @@ async def update_my_profile(
     return success_response("Profile updated", updates)
 
 
-
-class PreferencesUpdate(BaseModel):
-    theme: Optional[str] = Field(None, max_length=32)
-    chat_accent: Optional[str] = Field(None, max_length=32)
-    wallpaper: Optional[str] = Field(None, max_length=64)
-    font_size: Optional[str] = Field(None, max_length=32)
-    language: Optional[str] = Field(None, max_length=64)
-    status_privacy: Optional[str] = Field(None, max_length=64)
-    status_validity: Optional[str] = Field(None, max_length=32)
-    msg_notif: Optional[bool] = None
-    group_notif: Optional[bool] = None
-    call_notif: Optional[bool] = None
-    enter_is_send: Optional[bool] = None
-    read_receipts: Optional[bool] = None
-    typing_indicator: Optional[bool] = None
-    auto_download: Optional[str] = Field(None, max_length=64)
-    sound: Optional[str] = Field(None, max_length=64)
-
-
 @router.patch("/me/preferences")
-async def update_preferences(
+async def update_my_preferences(
     body: PreferencesUpdate,
     user: dict = Depends(get_current_user),
 ):
-    updates = {
-        k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None
-    }
-    if not updates:
+    """Persist appearance + device prefs on the user doc (and preferences subdoc)."""
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
         return success_response("Nothing to update")
+    # Top-level appearance fields for fast login/me reads
+    top_keys = {"theme", "chat_accent", "color_mode", "liquid_glass", "wallpaper"}
+    set_ops: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
+    for k, v in raw.items():
+        if v is None:
+            continue
+        if k in top_keys:
+            set_ops[k] = v
+        set_ops[f"preferences.{k}"] = v
     db = get_database()
-    set_ops = {f"preferences.{k}": v for k, v in updates.items()}
-    # Also mirror theme at top-level for quick access
-    if "theme" in updates:
-        set_ops["theme"] = updates["theme"]
-    set_ops["updated_at"] = datetime.now(timezone.utc)
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
-    return success_response("Preferences updated", updates)
+    return success_response("Preferences updated", raw)
 
 
 @router.patch("/me/privacy")

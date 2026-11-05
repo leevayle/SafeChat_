@@ -1,6 +1,6 @@
 import { Toast } from './components/ui'
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { useCallback, useEffect, useRef, useState, type TouchEvent } from 'react'
+import { DeactivatedGate } from './screens/DeactivatedGate'
 import { Splash } from './screens/Splash'
 import { Welcome } from './screens/Welcome'
 import { Signup } from './screens/Signup'
@@ -89,13 +89,65 @@ function Shell() {
   const [registrationToken, setRegistrationToken] = useState('')
   const [developmentCode, setDevelopmentCode] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('chats')
+  const TAB_ORDER: Tab[] = ['chats', 'groups', 'status', 'calls']
+  const swipeX = useRef<number | null>(null)
+  const swipeY = useRef<number | null>(null)
+  const swipeBlocked = useRef(false)
+  const isHorizScrollZone = (target: EventTarget | null) => {
+    let el = target as HTMLElement | null
+    while (el && el !== document.body) {
+      if ((el as HTMLElement).dataset?.noTabSwipe === '1') return true
+      try {
+        const style = window.getComputedStyle(el)
+        const ox = style.overflowX
+        if ((ox === 'auto' || ox === 'scroll') && el.scrollWidth > el.clientWidth + 4) return true
+      } catch { /* */ }
+      if (el.classList?.contains('overflow-x-auto') || el.classList?.contains('overflow-x-scroll')) return true
+      el = el.parentElement
+    }
+    return false
+  }
+
+  const goTab = (next: Tab, _dir?: 1 | -1) => {
+    if (next === 'calls') markMissedSeen()
+    setTab(next)
+  }
+
+  const onTabTouchStart = (e: TouchEvent) => {
+    if (isHorizScrollZone(e.target)) {
+      swipeBlocked.current = true
+      swipeX.current = null
+      return
+    }
+    swipeBlocked.current = false
+    swipeX.current = e.touches[0].clientX
+    swipeY.current = e.touches[0].clientY
+  }
+  const onTabTouchEnd = (e: TouchEvent) => {
+    if (swipeBlocked.current || swipeX.current == null) {
+      swipeX.current = null
+      swipeY.current = null
+      swipeBlocked.current = false
+      return
+    }
+    const dx = e.changedTouches[0].clientX - swipeX.current
+    const dy = e.changedTouches[0].clientY - (swipeY.current ?? e.changedTouches[0].clientY)
+    swipeX.current = null
+    swipeY.current = null
+    if (Math.abs(dy) > Math.abs(dx) * 0.85) return
+    if (Math.abs(dx) < 72) return
+    const i = TAB_ORDER.indexOf(tab)
+    if (i < 0) return
+    if (dx < 0 && i < TAB_ORDER.length - 1) goTab(TAB_ORDER[i + 1], 1)
+    else if (dx > 0 && i > 0) goTab(TAB_ORDER[i - 1], -1)
+  }
 
   const [chat, setChat] = useState<string | null>(null)
   const [group, setGroup] = useState<string | null>(null)
   const [overlay, setOverlay] = useState<Overlay>(null)
   const [call, setCall] = useState<Call | null>(null)
   const [incoming, setIncoming] = useState<(Call & { ringId?: string }) | null>(null)
-  const [statusUser, setStatusUser] = useState<string | null>(null)
+  const [statusUser, setStatusUser] = useState<{ userId: string; statusId?: string } | null>(null)
 
   const restored = useRef(false)
   const chatRef = useRef<string | null>(null)
@@ -347,12 +399,36 @@ function Shell() {
     )
   }
 
+  const planStatus = (me as any)?.accountStatus || 'active'
+  if (planStatus === 'deactivated' && stage === 'app') {
+    return (
+      <div className="flex min-h-dvh justify-center bg-[#f0f2f5]">
+        <main className="relative h-dvh w-full max-w-[430px] overflow-hidden bg-white">
+          <DeactivatedGate
+            onActivated={() => {
+              /* session refreshed via reload */
+              window.location.reload()
+            }}
+            onLogout={() => {
+              void (logout as any)?.()
+              window.location.reload()
+            }}
+          />
+        </main>
+      </div>
+    )
+  }
+
   // ── Main app — no stage AnimatePresence (no hop) ───────
   return (
     <div className="flex min-h-dvh justify-center bg-[#f0f2f5]">
       <main className="relative h-dvh w-full min-h-[568px] max-w-[430px] overflow-hidden bg-white">
-        {/* Tab pages stay mounted under overlays */}
-        <div className="relative h-full">
+        {/* Tab pages */}
+        <div
+          className="relative h-full"
+          onTouchStart={onTabTouchStart}
+          onTouchEnd={onTabTouchEnd}
+        >
           <div className={tab === 'chats' ? 'h-full' : 'hidden'}>
             <ChatsHome
               onOpenChat={(id) => {
@@ -371,7 +447,7 @@ function Shell() {
               onSettings={() => setOverlay('settings')}
               onContacts={() => setOverlay('contacts')}
               onSaveRequests={() => setOverlay('saveRequests')}
-              onOpenStatus={(id) => id && setStatusUser(id)}
+              onOpenStatus={(id) => id && setStatusUser({ userId: id })}
               onNotifications={() => setOverlay('notifications')}
               onSupport={() => setOverlay('support')}
             />
@@ -380,7 +456,7 @@ function Shell() {
             <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
           </div>
           <div className={tab === 'status' ? 'h-full' : 'hidden'}>
-            <StatusTab onOpenStatus={(id) => id && setStatusUser(id)} />
+            <StatusTab onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
           </div>
           <div className={tab === 'calls' ? 'h-full' : 'hidden'}>
             <CallsTab
@@ -393,7 +469,14 @@ function Shell() {
             />
           </div>
           {!chat && !group && !call && !overlay && !statusUser && (
-            <BottomNav tab={tab} onChange={(t) => { if (t === 'calls') markMissedSeen(); setTab(t) }} badges={{ chats: chatUnread, groups: groupUnread, calls: missedCallBadge }} />
+            <BottomNav
+              tab={tab}
+              onChange={(t) => {
+                if (t === 'calls') markMissedSeen()
+                setTab(t)
+              }}
+              badges={{ chats: chatUnread, groups: groupUnread, calls: 0 }}
+            />
           )}
         </div>
 
@@ -405,9 +488,9 @@ function Shell() {
               onBack={() => setChat(null)}
               onCall={(kind) => placeCall(chat, kind)}
               onOpenCalls={() => { setChat(null); setTab('calls') }}
-              onOpenStatus={(userId) => {
+              onOpenStatus={(userId, statusId) => {
                 setChat(null)
-                if (userId) setStatusUser(userId)
+                if (userId) setStatusUser({ userId, statusId })
               }}
             />
           </div>
@@ -519,7 +602,8 @@ function Shell() {
         {statusUser && (
           <div className="absolute inset-0 z-[45]">
             <StatusViewer
-              userId={statusUser}
+              userId={statusUser.userId}
+              initialStatusId={statusUser.statusId}
               onClose={() => setStatusUser(null)}
               onReplyToStatus={(peerId) => {
                 setStatusUser(null)

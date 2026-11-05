@@ -93,12 +93,42 @@ export function GroupInfo({ groupId, onBack, onLeft }: { groupId: string; onBack
           <div className="overflow-hidden rounded-3xl bg-white shadow-sm">
             <div className="flex items-center gap-2 border-b border-gray-100 px-5 py-3"><Search size={16} className="text-gray-400" /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search members" className="w-full bg-transparent text-sm font-semibold outline-none placeholder:text-gray-400" /></div>
             {isAdmin && <button onClick={() => { setAdding([]); setSheet('add') }} className="flex w-full items-center gap-3 px-5 py-3 text-left hover:bg-gray-50"><span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-purple text-white"><UserPlus size={20} /></span><span className="font-extrabold">Add members</span></button>}
-            {shown.map((m) => { const c = whoById(m.id); return (
-              <button key={m.id} onClick={() => m.id !== 'me' && setSheet({ member: m.id })} className="flex w-full items-center gap-3 border-t border-gray-100 px-5 py-3 text-left hover:bg-gray-50">
-                <Avatar contact={c} size={44} />
-                <div className="min-w-0 flex-1"><p className="truncate font-extrabold">{m.id === 'me' ? settings.name + ' (You)' : c.name}</p><p className="truncate text-xs font-semibold text-gray-400">{m.id === 'me' ? settings.bio : c.status}</p></div>
+            {shown.map((m) => {
+              const c = whoById(m.id)
+              const username = (c as any).username || m.username || ''
+              const phone = (c as any).phone || m.phone || ''
+              const isMe = m.id === 'me'
+              return (
+              <div key={m.id} className="flex w-full items-center gap-3 border-t border-gray-100 px-5 py-3">
+                <button type="button" onClick={() => !isMe && setSheet({ member: m.id })} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+                  <Avatar contact={c} size={44} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-extrabold">{isMe ? settings.name + ' (You)' : (c.name || username || 'User')}</p>
+                    <p className="truncate text-xs font-semibold text-gray-400">
+                      {isMe ? (settings.bio || 'You') : (username ? `@${String(username).replace(/^@/, '')}` : 'Member')}
+                      {!isMe && phone ? ` · ${phone}` : ''}
+                    </p>
+                  </div>
+                </button>
                 {m.admin && <span className="flex items-center gap-1 rounded-full bg-brand-orange-2/10 px-2.5 py-1 text-xs font-extrabold text-brand-orange-2"><Crown size={12} />Admin</span>}
-              </button>) })}
+                {!isMe && username && !contacts.some((x) => x.id === m.id || x.username === username) && (
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-full bg-brand-purple/10 px-3 py-1.5 text-[11px] font-extrabold text-brand-purple"
+                    onClick={async () => {
+                      try {
+                        await (await import('../api')).api.sendContactRequest({ username: String(username).replace(/^@/, ''), sharePhone: false })
+                        setToast('Save request sent')
+                      } catch (e: any) {
+                        setToast(e?.message || 'Could not send save request')
+                      }
+                    }}
+                  >
+                    Save
+                  </button>
+                )}
+              </div>
+            )})}
           </div>
         </section>
 

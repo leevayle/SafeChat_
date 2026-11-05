@@ -1,161 +1,45 @@
-import { useEffect, useState } from 'react'
-import { motion } from 'framer-motion'
-import { Bell, UserPlus, MessageSquare, Phone, Info } from 'lucide-react'
 import { ScreenHeader } from '../components/ui'
-import { useStore } from '../store'
-import { api } from '../api'
 
-type Notif = {
-  id: string
-  type: 'request' | 'message' | 'call' | 'system'
-  title: string
-  body: string
-  time: string
-  unread?: boolean
-  /** Peer user id — required to open a chat */
-  contactId?: string
-  conversationId?: string
-}
+type Props = { onBack: () => void }
 
-type Props = {
-  onClose: () => void
-  onOpenSaveRequests?: () => void
-  onOpenChat?: (id: string) => void
-}
+const SYSTEM = [
+  {
+    id: '1',
+    title: 'System update',
+    body: 'SafeChat performance improvements are rolling out this week.',
+    when: 'Today',
+  },
+  {
+    id: '2',
+    title: 'Scheduled maintenance',
+    body: 'Brief maintenance window may occur Sunday 02:00–03:00 local time.',
+    when: 'This week',
+  },
+  {
+    id: '3',
+    title: 'Subscription',
+    body: 'Premium renews automatically unless cancelled. Manage plan in Settings → Membership.',
+    when: 'Info',
+  },
+]
 
-export function Notifications({ onClose, onOpenSaveRequests, onOpenChat }: Props) {
-  const { chats, showToast } = useStore()
-  const [items, setItems] = useState<Notif[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    let alive = true
-    // Fire immediately on open — no artificial delay; single lightweight request
-    const load = async () => {
-      setLoading(true)
-      try {
-        const notifs: Notif[] = []
-        const { requests } = await api.incomingContactRequests()
-        for (const r of requests || []) {
-          if (r.status !== 'pending') continue
-          notifs.push({
-            id: `req-${r.id}`,
-            type: 'request',
-            title: 'Save request',
-            body: `${r.name || r.username || 'Someone'} wants to save you as a contact`,
-            time: r.createdAt || '',
-            unread: true,
-          })
-        }
-        if (!notifs.length) {
-          notifs.push({
-            id: 'sys-1',
-            type: 'system',
-            title: "You're all caught up",
-            body: 'New save requests, messages, and calls will show up here.',
-            time: new Date().toISOString(),
-          })
-        }
-        if (alive) setItems(notifs)
-      } catch {
-        if (alive) {
-          setItems([
-            {
-              id: 'sys-1',
-              type: 'system',
-              title: "You're all caught up",
-              body: 'New save requests, messages, and calls will show up here.',
-              time: new Date().toISOString(),
-            },
-          ])
-        }
-      } finally {
-        if (alive) setLoading(false)
-      }
-    }
-    void load()
-    return () => {
-      alive = false
-    }
-  }, [])
-
-  const icon = (t: Notif['type']) => {
-    if (t === 'request') return UserPlus
-    if (t === 'message') return MessageSquare
-    if (t === 'call') return Phone
-    return Info
-  }
-
-  const timeLabel = (iso: string) => {
-    if (!iso) return ''
-    try {
-      const d = new Date(iso)
-      if (isNaN(d.getTime())) return ''
-      return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-    } catch {
-      return ''
-    }
-  }
-
+export function Notifications({ onBack }: Props) {
   return (
     <div className="flex h-full flex-col bg-white">
-      <ScreenHeader title="Notifications" onBack={onClose} />
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-10 pt-2">
-        {loading && (
-          <p className="py-12 text-center text-sm font-bold text-gray-400">Loading…</p>
-        )}
-        {!loading && items.length === 0 && (
-          <div className="flex flex-col items-center gap-2 py-16 text-gray-400">
-            <Bell size={28} />
-            <p className="font-bold">No notifications</p>
+      <ScreenHeader title="Notifications" onBack={onBack} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6 pt-2">
+        {SYSTEM.map((n) => (
+          <div key={n.id} className="mb-2 rounded-2xl bg-gray-50 px-4 py-3">
+            <div className="flex items-start justify-between gap-2">
+              <p className="font-extrabold text-ink">{n.title}</p>
+              <span className="shrink-0 text-[11px] font-bold text-gray-400">{n.when}</span>
+            </div>
+            <p className="mt-1 text-sm font-semibold text-gray-600">{n.body}</p>
           </div>
-        )}
-        <ul className="space-y-1">
-          {items.map((n, i) => {
-            const I = icon(n.type)
-            return (
-              <motion.li
-                key={n.id}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.03 }}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (n.type === 'request') {
-                      onOpenSaveRequests?.()
-                      return
-                    }
-                    if (n.type === 'message') {
-                      // Always open by contact/peer id (ChatWindow expects contactId)
-                      const peerId = n.contactId || (n.id.startsWith('chat-') ? n.id.replace(/^chat-/, '') : '')
-                      if (peerId) onOpenChat?.(peerId)
-                      return
-                    }
-                    // system / call: no deep-link yet
-                  }}
-                  className={`flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left hover:bg-gray-50 ${
-                    n.unread ? 'bg-brand-purple/5' : ''
-                  }`}
-                >
-                  <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-brand-purple/10 text-brand-purple">
-                    <I size={18} />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="truncate font-extrabold">{n.title}</p>
-                      <span className="shrink-0 text-[11px] font-bold text-gray-400">
-                        {timeLabel(n.time)}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-sm font-semibold text-gray-500">{n.body}</p>
-                  </div>
-                </button>
-              </motion.li>
-            )
-          })}
-        </ul>
+        ))}
+        <p className="mt-6 text-center text-xs font-semibold text-gray-400">
+          Save requests appear under Contacts · Save requests — not here.
+        </p>
       </div>
     </div>
   )

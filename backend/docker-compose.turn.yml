@@ -1,0 +1,37 @@
+# Self-hosted TURN (no third-party API, no domain required).
+# Uses your server PUBLIC IP. Free and fully under your control.
+#
+# 1) Set PUBLIC_IP to this machine's public IP (or LAN IP for same-network tests):
+#      export PUBLIC_IP=203.0.113.10
+# 2) Optional shared secret (must match env below):
+#      export TURN_SECRET=safechat-turn-secret-change-me
+# 3) Start:
+#      docker compose -f docker-compose.turn.yml up -d
+# 4) Point SafeChat backend .env at it:
+#      TURN_SERVER=turn:${PUBLIC_IP}:3478,turns:${PUBLIC_IP}:5349
+#      TURN_USERNAME=safechat
+#      TURN_CREDENTIAL=safechat-pass
+# 5) Open firewall UDP/TCP 3478 and 5349, plus UDP 49160-49200
+# 6) Restart SafeChat API
+
+services:
+  coturn:
+    image: coturn/coturn:4.6.2
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - -n
+      - --log-file=stdout
+      - --listening-port=3478
+      - --tls-listening-port=5349
+      - --fingerprint
+      - --lt-cred-mech
+      - --user=safechat:safechat-pass
+      - --realm=safechat.local
+      - --external-ip=${PUBLIC_IP}
+      - --min-port=49160
+      - --max-port=49200
+      - --no-multicast-peers
+      - --no-cli
+      - --no-tls
+      - --no-dtls

@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { AnimatePresence, motion, useMotionValue, useTransform } from 'framer-motion'
 import { ArrowLeft, Check } from 'lucide-react'
 
 export function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
@@ -11,13 +11,46 @@ export function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boo
 }
 
 export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title?: string; children: ReactNode }) {
+  const y = useMotionValue(0)
+  const backdropOpacity = useTransform(y, [0, 220], [1, 0.25])
+
   return (
     <AnimatePresence>
       {open && (
         <>
-          <motion.div className="absolute inset-0 z-[100] bg-ink/40" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose} />
-          <motion.div className="absolute inset-x-0 bottom-0 z-[110] max-h-[85%] overflow-y-auto rounded-t-[2rem] bg-white p-6 pb-8 shadow-2xl" initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }} transition={{ type: 'spring', stiffness: 320, damping: 32 }}>
-            <div className="mx-auto mb-4 h-1.5 w-12 rounded-full bg-gray-200" />
+          <motion.div
+            className="absolute inset-0 z-[100] bg-ink/40"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{ opacity: backdropOpacity }}
+            onClick={onClose}
+          />
+          <motion.div
+            className="absolute inset-x-0 bottom-0 z-[110] max-h-[85%] overflow-y-auto rounded-t-[2rem] bg-white p-6 pb-8 shadow-2xl"
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            exit={{ y: '100%' }}
+            transition={{ type: 'spring', stiffness: 380, damping: 36 }}
+            style={{ y }}
+            drag="y"
+            dragConstraints={{ top: 0, bottom: 320 }}
+            dragElastic={0.12}
+            onDrag={(_, info) => {
+              if (info.offset.y < 0) y.set(0)
+            }}
+            onDragEnd={(_, info) => {
+              // Dismiss if dragged down enough or flung
+              if (info.offset.y > 56 || info.velocity.y > 400) {
+                onClose()
+              } else {
+                y.set(0)
+              }
+            }}
+          >
+            <div className="mx-auto mb-4 flex touch-none justify-center pb-1 pt-0.5">
+              <div className="h-1.5 w-12 rounded-full bg-gray-200" />
+            </div>
             {title && <h3 className="mb-3 text-xl font-black">{title}</h3>}
             {children}
           </motion.div>
@@ -42,7 +75,6 @@ export function OptionList({ options, value, onPick }: { options: string[]; valu
 }
 
 export function Toast({ msg, clear }: { msg: string | null; clear: () => void }) {
-  // Auto-dismiss is owned by the store timer; this is a safety net if clear is delayed
   useEffect(() => {
     if (!msg) return
     const t = setTimeout(() => clear(), 2800)
@@ -50,38 +82,59 @@ export function Toast({ msg, clear }: { msg: string | null; clear: () => void })
   }, [msg, clear])
   return (
     <AnimatePresence mode="wait">
-      {msg ? (
+      {msg && (
         <motion.div
-          key={String(msg)}
-          initial={{ y: 28, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: 20, opacity: 0 }}
-          transition={{ duration: 0.22 }}
           className="pointer-events-none absolute inset-x-0 bottom-24 z-[80] flex justify-center px-4"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 8 }}
         >
-          <span className="max-w-[90%] rounded-full bg-ink px-5 py-2.5 text-center text-sm font-bold text-white shadow-xl">
-            {msg}
-          </span>
+          <div className="rounded-full bg-ink/90 px-4 py-2 text-sm font-bold text-white shadow-lg">{msg}</div>
         </motion.div>
-      ) : null}
+      )}
     </AnimatePresence>
   )
 }
 
-export function ScreenHeader({ title, onBack, right }: { title: string; onBack: () => void; right?: ReactNode }) {
+export function ScreenHeader({ title, onBack, right }: { title: string; onBack?: () => void; right?: ReactNode }) {
   return (
-    <header className="flex shrink-0 items-center gap-1 border-b border-gray-100 bg-white px-2 pb-3.5 pt-[max(1.5rem,calc(env(safe-area-inset-top)+0.75rem))] shadow-sm">
-      <motion.button whileTap={{ scale: 0.88 }} onClick={onBack} aria-label="Back" className="flex h-10 w-10 items-center justify-center rounded-full text-brand-purple hover:bg-gray-100"><ArrowLeft size={22} /></motion.button>
-      <h2 className="flex-1 text-xl font-black">{title}</h2>
+    <header className="sticky top-0 z-10 flex min-h-14 shrink-0 items-center gap-2 border-b border-gray-100 bg-white/95 px-3 pt-[max(8px,env(safe-area-inset-top))] backdrop-blur">
+      {onBack ? (
+        <button type="button" onClick={onBack} className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-gray-100" aria-label="Back">
+          <ArrowLeft size={22} />
+        </button>
+      ) : (
+        <span className="w-2" />
+      )}
+      <h1 className="min-w-0 flex-1 truncate text-lg font-black">{title}</h1>
       {right}
     </header>
   )
 }
 
-export function PrimaryButton({ children, onClick, disabled, danger }: { children: ReactNode; onClick: () => void; disabled?: boolean; danger?: boolean }) {
+export function PrimaryButton({
+  children,
+  onClick,
+  disabled,
+  danger,
+  className = '',
+}: {
+  children: ReactNode
+  onClick?: () => void
+  disabled?: boolean
+  danger?: boolean
+  className?: string
+}) {
   return (
-    <motion.button whileTap={{ scale: 0.97 }} whileHover={{ y: -1 }} disabled={disabled} onClick={onClick} className={`h-13 w-full rounded-full py-3.5 font-extrabold text-white shadow-lg transition disabled:opacity-50 ${danger ? 'bg-brand-red shadow-brand-red/30' : 'bg-linear-to-r from-brand-orange to-brand-orange-2 shadow-brand-orange-2/30'}`}>
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`w-full rounded-full py-3.5 text-sm font-extrabold text-white shadow-md disabled:opacity-40 ${
+        danger ? 'bg-brand-red' : 'bg-brand-purple'
+      } ${className}`}
+    >
       {children}
-    </motion.button>
+    </button>
   )
 }

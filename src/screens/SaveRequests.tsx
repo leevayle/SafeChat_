@@ -92,6 +92,20 @@ export function SaveRequests({ onClose, onChat }: Props) {
     }
   }
 
+  const revoke = async (peerId: string, requestId: string) => {
+    setBusyId(requestId)
+    try {
+      await api.deleteContact(peerId)
+      setOutgoing((list) => list.filter((r) => r.id !== requestId))
+      showToast('Contact removed')
+      void refreshContacts()
+    } catch (e: any) {
+      showToast(e?.message || 'Could not remove')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const decline = async (id: string) => {
     const snapshot = incoming
     setIncoming((list) => list.filter((r) => r.id !== id))
@@ -241,14 +255,24 @@ export function SaveRequests({ onClose, onChat }: Props) {
                     </div>
                   )}
 
-                  {tab === 'outgoing' && onChat && r.status === 'accepted' && (
-                    <div className="border-t border-gray-100 px-3 py-2">
+                  {tab === 'outgoing' && r.status === 'accepted' && (
+                    <div className="flex gap-2 border-t border-gray-100 px-3 py-2">
+                      {onChat && (
+                        <button
+                          type="button"
+                          onClick={() => onChat(r.toUserId)}
+                          className="flex-1 rounded-xl py-2 text-sm font-bold text-brand-purple hover:bg-brand-purple/5"
+                        >
+                          Message
+                        </button>
+                      )}
                       <button
                         type="button"
-                        onClick={() => onChat(r.toUserId)}
-                        className="w-full rounded-xl py-2 text-sm font-bold text-brand-purple hover:bg-brand-purple/5"
+                        disabled={busyId === r.id}
+                        onClick={() => revoke(r.toUserId, r.id)}
+                        className="flex-1 rounded-xl py-2 text-sm font-bold text-brand-red hover:bg-red-50 disabled:opacity-50"
                       >
-                        Message
+                        Remove
                       </button>
                     </div>
                   )}

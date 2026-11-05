@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, ImagePlus, X, Settings as SettingsIcon, Eye, Camera } from 'lucide-react'
 import { BrandMark } from '../components/AppHeaderLogo'
@@ -22,20 +22,32 @@ const VALIDITY = ['1 hour', '6 hours', '12 hours', '24 hours'] as const
 const PRIVACY = ['My contacts', 'Contacts except…', 'Only share with…'] as const
 
 type Props = {
-  onOpenStatus?: (userId: string) => void
+  onOpenStatus?: (userId: string, statusId?: string) => void
 }
 
 export function StatusTab({ onOpenStatus }: Props) {
   const { statusList, me, refreshStatus, settings, setSetting, showToast, patchStatusList } = useStore()
+  const isPremium = ((settings as any)?.subscriptionPlan || me?.subscriptionPlan) === 'premium'
+
   const [bgCode, setBgCode] = useState(() => themeDefaultStatusBg('purple'))
   const [validity, setValidity] = useState<(typeof VALIDITY)[number]>('24 hours')
   const [privacy, setPrivacy] = useState<(typeof PRIVACY)[number]>('My contacts')
   const [text, setText] = useState('')
   const [image, setImage] = useState<string | null>(null)
   const [composing, setComposing] = useState(false)
+  const [postMenu, setPostMenu] = useState(false)
+  const [adMode, setAdMode] = useState(false)
   const [busy, setBusy] = useState(false)
   const [statusSettings, setStatusSettings] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // Derived from bgCode — must come AFTER useState (TDZ)
+  const lightBg = bgCode === 'white'
+  const onLight = lightBg
+    ? 'bg-black/10 text-ink ring-black/15'
+    : 'bg-white/25 text-white ring-white/40'
+  const textOnLight = lightBg ? 'text-ink' : 'text-white'
+  const mutedOnLight = lightBg ? 'text-ink/55' : 'text-white/55'
 
   const isActive = (s: any) => {
     if (!s?.expiresAt) return true
@@ -43,7 +55,8 @@ export function StatusTab({ onOpenStatus }: Props) {
     return !d || d.getTime() > Date.now()
   }
   const mine = statusList.filter((s) => s.userId === me?.id && isActive(s))
-  const others = statusList.filter((s) => s.userId !== me?.id && isActive(s))
+  const others = statusList.filter((s) => s.userId !== me?.id && isActive(s) && !(s as any).isAd)
+  const adStatuses = statusList.filter((s) => s.userId !== me?.id && isActive(s) && !!(s as any).isAd)
 
   /** one row per user — segment ring by status count (same as chats home) */
   const recentUsers = useMemo(() => {
@@ -73,7 +86,7 @@ export function StatusTab({ onOpenStatus }: Props) {
     return Array.from(map.values())
   }, [others, me])
 
-  const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onPick = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     e.target.value = ''
     if (!f || !f.type.startsWith('image/')) return
@@ -145,7 +158,13 @@ export function StatusTab({ onOpenStatus }: Props) {
     try {
       const { status } = await api.postStatus(body, img, bgCode, {
         expiresInHours: hours,
-        visibility: visibilityFromPrivacy(privacy),
+        is_ad: !!adMode,
+        ad_reach: adMode ? 'international' : undefined,
+        visibility: visibilityFromPrivacy(
+          (typeof localStorage !== 'undefined' &&
+            (JSON.parse(localStorage.getItem('sc_settings') || '{}').statusPrivacy as string)) ||
+            'My contacts',
+        ),
       })
       // Keep the same list slot — swap id/metadata only so the bubble never disappears
       patchStatusList((list) =>
@@ -195,12 +214,12 @@ export function StatusTab({ onOpenStatus }: Props) {
 
         {/* My statuses — horizontal rounded rectangles + trailing + */}
         <p className="mb-2 text-sm font-extrabold text-gray-500">My status</p>
-        <div className="no-scrollbar -mx-1 flex gap-3 overflow-x-auto pb-2 pt-1">
+        <div data-no-tab-swipe="1" className="no-scrollbar -mx-1 flex gap-3 overflow-x-auto pb-2 pt-1">
           {mine.map((s) => (
             <button
               key={s.id}
               type="button"
-              onClick={() => me?.id && onOpenStatus?.(me.id)}
+              onClick={() => me?.id && onOpenStatus?.(me.id, s.id)}
               className="flex w-[88px] shrink-0 flex-col items-center gap-1.5 text-left"
             >
               <div
@@ -211,7 +230,7 @@ export function StatusTab({ onOpenStatus }: Props) {
                   <img src={mediaUrl(s.image)} alt="" className="h-full w-full object-cover" />
                 ) : (
                   <div className="flex h-full items-center justify-center px-2 text-center">
-                    <p className="line-clamp-4 text-[11px] font-bold leading-snug text-white">
+                    <p className={`line-clamp-4 text-[11px] font-bold leading-snug ${(s.background || '') === 'white' ? 'text-ink' : 'text-white'}`}>
                       {s.text || 'Status'}
                     </p>
                   </div>
@@ -278,6 +297,35 @@ export function StatusTab({ onOpenStatus }: Props) {
             </motion.button>
           )
         })}
+
+      {/* Business / ads in your region */}
+      {adStatuses.length > 0 && (
+        <div className="mt-2 px-2">
+          <p className="mb-2 px-2 text-xs font-extrabold uppercase tracking-wide text-brand-orange/90">Sponsored</p>
+          {adStatuses
+            .reduce((acc: any[], s: any) => {
+              if (!acc.find((x) => x.userId === s.userId)) acc.push(s)
+              return acc
+            }, [])
+            .map((s: any) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => onOpenStatus?.(s.userId)}
+                className="mb-1 flex w-full items-center gap-3 rounded-2xl px-2 py-2 text-left hover:bg-gray-50"
+              >
+                <Avatar contact={s.user || { id: s.userId, name: s.user?.name || 'Ad' }} size={48} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-extrabold">{s.user?.name || 'Business'}</p>
+                  <p className="text-xs font-semibold text-brand-orange">
+                    Ad · {(s.adReach || s.ad_reach || 'international') === 'local' ? 'Local' : 'International'}
+                  </p>
+                </div>
+              </button>
+            ))}
+        </div>
+      )}
+
       </div>
 
       {/* Composer — full-screen modern status editor */}
@@ -287,47 +335,73 @@ export function StatusTab({ onOpenStatus }: Props) {
             className="relative flex min-h-0 flex-1 flex-col"
             style={{ background: statusBgCss(bgCode) }}
           >
-            <div className="flex items-center justify-between px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
+                        <div className="flex items-center gap-2 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
               <button
                 type="button"
                 onClick={() => setComposing(false)}
                 aria-label="Close"
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm"
+                className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full backdrop-blur-sm ${lightBg ? 'bg-black/10 text-ink' : 'bg-black/30 text-white'}`}
               >
                 <X size={20} />
               </button>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (fileRef.current) {
-                      fileRef.current.removeAttribute('capture')
-                      fileRef.current.click()
-                    }
-                  }}
-                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-white shadow-sm ring-1 ring-white/30 backdrop-blur-md transition active:scale-95"
-                  aria-label="Add photo"
-                >
-                  <ImagePlus size={18} strokeWidth={2.2} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (fileRef.current) {
-                      fileRef.current.setAttribute('capture', 'environment')
-                      fileRef.current.click()
-                    }
-                  }}
-                  className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-white shadow-sm ring-1 ring-white/30 backdrop-blur-md transition active:scale-95"
-                  aria-label="Take photo"
-                >
-                  <Camera size={18} strokeWidth={2.2} />
-                </button>
-                <PillButton onClick={post} loading={busy} variant="orange" className="!px-5 !py-2 text-sm shadow-lg">
-                  Post
+              <button
+                type="button"
+                onClick={() => {
+                  if (fileRef.current) {
+                    fileRef.current.removeAttribute('capture')
+                    fileRef.current.click()
+                  }
+                }}
+                className={`inline-flex h-11 min-w-0 flex-1 items-center justify-center gap-1 rounded-full px-2 shadow-sm ring-1 backdrop-blur-md active:scale-95 ${onLight}`}
+                aria-label="Add photo"
+              >
+                <ImagePlus size={18} strokeWidth={2.2} />
+                <span className="text-[11px] font-extrabold">Photo</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (fileRef.current) {
+                    fileRef.current.setAttribute('capture', 'environment')
+                    fileRef.current.click()
+                  }
+                }}
+                className={`inline-flex h-11 min-w-0 flex-1 items-center justify-center gap-1 rounded-full px-2 shadow-sm ring-1 backdrop-blur-md active:scale-95 ${onLight}`}
+                aria-label="Take photo"
+              >
+                <Camera size={18} strokeWidth={2.2} />
+                <span className="text-[11px] font-extrabold">Cam</span>
+              </button>
+              <div className="relative flex shrink-0 items-center">
+                <PillButton onClick={post} loading={busy} variant="orange" className={`!h-11 !px-4 !text-sm shadow-lg ${isPremium ? '!rounded-r-none' : ''}`}>
+                  {adMode ? 'Ad' : 'Post'}
                 </PillButton>
+                {isPremium && (
+                  <>
+                    <button
+                      type="button"
+                      className="flex h-11 items-center rounded-r-full bg-brand-orange px-2.5 text-white shadow-lg"
+                      onClick={() => setPostMenu((v) => !v)}
+                      aria-label="More post options"
+                    >
+                      ▾
+                    </button>
+                    {postMenu && (
+                      <div className="absolute right-0 top-12 z-30 min-w-[170px] overflow-hidden rounded-2xl bg-white py-1 shadow-xl ring-1 ring-black/10">
+                        <button type="button" className="block w-full px-4 py-2.5 text-left text-sm font-bold" onClick={() => { setAdMode(false); setPostMenu(false) }}>Normal status</button>
+                        <button type="button" className="block w-full px-4 py-2.5 text-left text-sm font-bold text-brand-orange" onClick={() => { setAdMode(true); setPostMenu(false) }}>Make ad…</button>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </div>
+            {isPremium && adMode && (
+              <div className="mx-3 mb-2 space-y-1 rounded-2xl bg-black/25 p-3 text-white backdrop-blur-sm">
+                <p className="text-xs font-extrabold uppercase tracking-wide text-white/70">Ad options</p>
+                <p className="text-[11px] font-semibold text-white/80">Reach & billing configure at post time. Validity uses duration below.</p>
+              </div>
+            )}
 
             <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-6">
               {image ? (
@@ -345,7 +419,7 @@ export function StatusTab({ onOpenStatus }: Props) {
                     value={text}
                     onChange={(e) => setText(e.target.value.slice(0, 140))}
                     placeholder="Add a caption…"
-                    className="mt-4 w-full resize-none bg-transparent text-center text-base font-bold text-white outline-none placeholder:text-white/55"
+                    className={`mt-4 w-full resize-none bg-transparent text-center text-base font-bold outline-none ${lightBg ? 'text-ink placeholder:text-ink/40' : 'text-white placeholder:text-white/55'}`}
                     rows={2}
                   />
                 </div>
@@ -355,7 +429,7 @@ export function StatusTab({ onOpenStatus }: Props) {
                   value={text}
                   onChange={(e) => setText(e.target.value.slice(0, 140))}
                   placeholder="Type a status…"
-                  className="w-full max-w-md resize-none bg-transparent text-center text-3xl font-black leading-snug text-white outline-none placeholder:text-white/45"
+                  className={`w-full max-w-md resize-none bg-transparent text-center text-3xl font-black leading-snug outline-none ${lightBg ? 'text-ink placeholder:text-ink/40' : 'text-white placeholder:text-white/45'}`}
                   rows={4}
                 />
               )}
@@ -364,15 +438,21 @@ export function StatusTab({ onOpenStatus }: Props) {
             <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPick} />
 
             <div className="space-y-5 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4">
-              <div className="flex gap-3 overflow-x-auto no-scrollbar px-1 py-1">
+              <div className="no-scrollbar -mx-5 flex justify-center gap-2.5 overflow-x-auto px-5 py-1">
                 {STATUS_BG_OPTIONS.map((o) => (
                   <button
                     key={o.id}
                     type="button"
                     onClick={() => setBgCode(o.id)}
                     title={o.label}
-                    className={`h-10 w-10 shrink-0 rounded-lg ring-2 transition ${
-                      bgCode === o.id ? 'ring-white ring-offset-2 ring-offset-black/25' : 'ring-white/25'
+                    className={`h-11 w-11 shrink-0 rounded-full ring-2 transition ${
+                      bgCode === o.id
+                        ? o.id === 'white'
+                          ? 'ring-gray-800 ring-offset-2 ring-offset-white/40'
+                          : 'ring-white ring-offset-2 ring-offset-black/20'
+                        : o.id === 'white'
+                          ? 'ring-gray-300'
+                          : 'ring-white/30'
                     }`}
                     style={{ background: statusBgCss(o.id) }}
                   />
@@ -389,37 +469,20 @@ export function StatusTab({ onOpenStatus }: Props) {
                     }}
                     className={`shrink-0 rounded-full px-3.5 py-1.5 text-[11px] font-extrabold backdrop-blur-md transition ${
                       validity === v
-                        ? 'bg-white text-ink shadow-lg'
-                        : 'bg-white/15 text-white ring-1 ring-white/20'
+                        ? lightBg
+                          ? 'bg-ink text-white shadow-md'
+                          : 'bg-white text-ink shadow-lg'
+                        : lightBg
+                          ? 'bg-black/8 text-ink ring-1 ring-black/10'
+                          : 'bg-white/15 text-white ring-1 ring-white/20'
                     }`}
                   >
                     {v}
                   </button>
                 ))}
               </div>
-              <div className="flex justify-center gap-2 flex-wrap px-1">
-                {PRIVACY.map((v) => (
-                  <button
-                    key={v}
-                    type="button"
-                    onClick={() => {
-                      setPrivacy(v)
-                      setSetting('statusPrivacy', v)
-                    }}
-                    className={`shrink-0 rounded-full px-3.5 py-1.5 text-[11px] font-extrabold backdrop-blur-md transition ${
-                      privacy === v
-                        ? 'bg-white text-ink shadow-lg'
-                        : 'bg-white/15 text-white ring-1 ring-white/20'
-                    }`}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-              <p className="pt-1 text-center text-[11px] font-semibold leading-relaxed text-white/55">
-                Visible to {privacy}
-                <span className="mx-1.5 opacity-40">·</span>
-                expires in {validity} (UTC)
+              <p className={`pt-1 text-center text-[11px] font-semibold leading-relaxed ${mutedOnLight}`}>
+                Expires in {validity}
               </p>
             </div>
           </div>

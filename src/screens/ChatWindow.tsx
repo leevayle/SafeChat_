@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, memo } from 'react'
+import { useEffect, useRef, useState, memo, type ChangeEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2 } from 'lucide-react'
+import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { api, hasAccessToken, type ApiMsg } from '../api'
 import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
-import { isRealtimeOpen, wsSendMessage, wsReceipt } from '../realtime'
+import { isRealtimeOpen, wsSendMessage, wsReceipt, wsLiveTyping } from '../realtime'
 import { FONT_SIZES, WALLPAPERS, useStore } from '../store'
 import { playInboxLandingChime } from '../lib/sounds'
 import { compressForWeb } from '../lib/imageProcess'
@@ -52,6 +52,14 @@ const STATE_RANK: Record<string, number> = {
 
 function rankState(s?: string) {
   return STATE_RANK[s || ''] ?? 0
+}
+
+/** Never downgrade delivery state (pending → sent → delivered → read). */
+function pickState(a?: string, b?: string): ApiMsg['state'] | undefined {
+  if (!a && !b) return undefined
+  if (!a) return b as ApiMsg['state']
+  if (!b) return a as ApiMsg['state']
+  return rankState(a) >= rankState(b) ? (a as ApiMsg['state']) : (b as ApiMsg['state'])
 }
 
 function sameMsgList(a: ApiMsg[], b: ApiMsg[]) {
@@ -121,8 +129,10 @@ type BubbleProps = {
   onReply?: (m: ApiMsg) => void
   onOpenCalls?: () => void
   onJumpTo?: (id: string) => void
+  highlight?: boolean
   onOpenAction?: () => void
   onOpenStatusReply?: (sr: { preview: string; time?: string; statusId?: string }) => void
+  onOpenImage?: (url: string) => void
 }
 
 /** One mount animation only; later receipt updates re-render ticks in place */
@@ -135,8 +145,10 @@ const MessageBubble = memo(function MessageBubble({
   onReply,
   onOpenCalls,
   onJumpTo,
+  highlight,
   onOpenAction,
   onOpenStatusReply,
+  onOpenImage,
 }: BubbleProps) {
   const startX = useRef(0)
   const startY = useRef(0)
@@ -202,7 +214,7 @@ const MessageBubble = memo(function MessageBubble({
         if (dx > 28) onReply?.(m)
         setDx(0)
       }}
-      className={`flex ${mine ? 'justify-end' : 'justify-start'}`}
+      className={`relative flex ${mine ? 'justify-end' : 'justify-start'} ${highlight ? 'z-10' : ''}`}
     >
       <div
         role={mine && m.state === 'failed' ? 'button' : undefined}
@@ -210,11 +222,13 @@ const MessageBubble = memo(function MessageBubble({
         onClick={() => {
           if (mine && m.state === 'failed') onRetry(m)
         }}
-        className={`max-w-[76%] overflow-hidden ${
+        className={`relative max-w-[76%] ${
           mine
             ? 'bubble-mine rounded-2xl rounded-br-sm text-white shadow-[0_4px_18px_-6px_rgba(0,0,0,0.28)]'
             : 'rounded-2xl rounded-bl-sm bg-white text-ink shadow-[0_4px_16px_-8px_rgba(15,23,42,0.18)] ring-1 ring-black/[0.04]'
-        } ${mine && m.state === 'failed' ? 'ring-2 ring-red-300/80' : ''}`}
+        } ${mine && m.state === 'failed' ? 'ring-2 ring-red-300/80' : ''} ${
+          highlight ? 'ring-2 ring-brand-purple shadow-[0_0_0_6px_rgba(var(--brand-shadow-rgb),0.22)] transition-shadow duration-700' : 'transition-shadow duration-700'
+        }`}
       >
         {m.statusReply && (
           <button
@@ -251,21 +265,65 @@ const MessageBubble = memo(function MessageBubble({
           </button>
         )}
         {m.image && (
-          <img
-            src={mediaUrl(m.image)}
-            alt=""
-            className={`max-h-60 w-full object-cover ${m.text && m.text !== '📷 Photo' ? '' : 'rounded-b-none'}`}
-            loading="lazy"
-          />
+          <button
+            type="button"
+            className="block w-full overflow-hidden"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenImage?.(mediaUrl(m.image))
+            }}
+          >
+            <img
+              src={mediaUrl(m.image)}
+              alt=""
+              className={`max-h-60 w-full object-cover ${m.text && m.text !== '📷 Photo' ? '' : 'rounded-b-none'}`}
+              loading="lazy"
+            />
+          </button>
         )}
-        {m.text && m.text !== '📷 Photo' && (
+
+        {m.text && /^🎤 Voice note/.test(m.text) && (
+          <div className={`flex items-center gap-3 px-3 py-2.5 ${mine ? '' : ''}`}>
+            <button
+              type="button"
+              className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${
+                mine ? 'bg-white/25 text-white' : 'bg-brand-purple/15 text-brand-purple'
+              }`}
+              aria-label="Play voice note"
+              onClick={(e) => {
+                e.stopPropagation()
+                // placeholder: real audio src when media attached
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            </button>
+            <div className="min-w-0 flex-1">
+              <div className={`flex h-8 items-center gap-0.5 ${mine ? 'opacity-90' : 'opacity-70'}`}>
+                {Array.from({ length: 28 }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`w-[3px] rounded-full ${mine ? 'bg-white' : 'bg-brand-purple'}`}
+                    style={{ height: `${6 + ((i * 7) % 18)}px` }}
+                  />
+                ))}
+              </div>
+              <p className={`mt-0.5 text-[11px] font-bold ${mine ? 'text-white/75' : 'text-gray-500'}`}>
+                {m.text.replace(/^🎤\s*/, '') || 'Voice note'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {m.text && m.text !== '📷 Photo' && !/^🎤 Voice note/.test(m.text) && (
           <p className="px-3.5 pt-2.5 text-[15px] font-semibold leading-[1.35] tracking-[-0.01em]">{m.text}</p>
         )}
+
         <p
           className={`flex items-center justify-end gap-1 px-3.5 pb-1.5 pt-0.5 text-[10px] font-bold tracking-wide ${
             mine ? 'text-white/70' : 'text-gray-400'
           }`}
         >
+          {(m as any).edited ? <span className="mr-0.5 opacity-80">edited</span> : null}
           {m.timeLabel ||
             new Date(m.time).toLocaleTimeString([], {
               hour: '2-digit',
@@ -275,6 +333,32 @@ const MessageBubble = memo(function MessageBubble({
           <ReceiptTicks state={m.state} readReceipts={readReceipts} mine={mine} />
         </p>
       </div>
+      {!!(m.reactions && m.reactions.length) && (
+        <div
+          className={`pointer-events-none absolute -top-2 flex items-center ${
+            mine ? 'left-0 -translate-x-1/3' : 'right-0 translate-x-1/3'
+          }`}
+        >
+          {Object.entries(
+            (m.reactions || []).reduce((acc: Record<string, number>, r: any) => {
+              const e = typeof r === 'string' ? r : r.emoji
+              if (!e) return acc
+              acc[e] = (acc[e] || 0) + 1
+              return acc
+            }, {} as Record<string, number>),
+          ).map(([emoji, count]) => (
+            <span
+              key={emoji}
+              className="flex h-7 min-w-7 items-center justify-center rounded-full bg-white px-1.5 text-[13px] shadow-md ring-1 ring-black/5"
+            >
+              {emoji}
+              {(count as number) > 1 ? (
+                <span className="ml-0.5 text-[10px] font-black text-gray-500">{count as number}</span>
+              ) : null}
+            </span>
+          ))}
+        </div>
+      )}
     </motion.div>
   )
 })
@@ -321,7 +405,18 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [msgs, setMsgs] = useState<ApiMsg[]>([])
   const [text, setText] = useState('')
   const [typing, setTyping] = useState(false)
+  const [peerRecording, setPeerRecording] = useState(false)
+  const [liveDraft, setLiveDraft] = useState<string | null>(null)
   const [actionMsg, setActionMsg] = useState<ApiMsg | null>(null)
+  const [highlightId, setHighlightId] = useState<string | null>(null)
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
+  const [blockOpen, setBlockOpen] = useState(false)
+  const [blocking, setBlocking] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const [recordSecs, setRecordSecs] = useState(0)
+  const mediaRecRef = useRef<MediaRecorder | null>(null)
+  const recordChunks = useRef<Blob[]>([])
+  const recordTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const [editText, setEditText] = useState('')
   const [editing, setEditing] = useState(false)
   const [forwardOpen, setForwardOpen] = useState(false)
@@ -344,7 +439,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   })
   const [statusReply, setStatusReply] = useState<{ preview: string; time?: string; statusId?: string } | null>(null)
   const prevMsgCountRef = useRef(0)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement | HTMLInputElement>(null)
 
   // Auto-focus composer when starting a reply (message swipe or status)
   useEffect(() => {
@@ -429,60 +524,94 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         }
       }
       setMsgs((prev) => {
-        // Preserve clientKey / pending state across polls so bubbles never remount
+        // Merge server history into UI — never drop a bubble that is already on screen
         const prevById = new Map(prev.map((m) => [m.id, m]))
-        const prevByKey = new Map(
-          prev.filter((m) => m.clientKey).map((m) => [m.clientKey as string, m]),
-        )
         const claimedKeys = new Set<string>()
+        const claimedLocalIds = new Set<string>()
         const mapped = messages.map((sm) => {
           const prior = prevById.get(sm.id)
           if (prior?.clientKey) {
             claimedKeys.add(prior.clientKey)
+            if (String(prior.id).startsWith('local-')) claimedLocalIds.add(prior.id)
             return {
               ...sm,
               clientKey: prior.clientKey,
               mine: prior.mine ?? sm.mine,
-              // Prefer higher delivery state from either side
-              state: rankState(sm.state) >= rankState(prior.state) ? sm.state : prior.state,
+              state: pickState(sm.state, prior.state),
+              edited: !!(prior as any).edited || !!(sm as any).edited,
+              text: sm.text || prior.text,
+              image: sm.image ?? prior.image,
+              timeLabel: sm.timeLabel || prior.timeLabel,
             }
           }
-          // Match optimistic local by same body + mine flag
-          const match = prev.find(
-            (p) =>
-              p.id.startsWith('local-') &&
-              p.clientKey &&
-              !claimedKeys.has(p.clientKey) &&
-              (p.mine ?? true) &&
-              p.text === sm.text &&
-              (!!p.image === !!sm.image),
-          )
+          // Match optimistic local by clientKey on server payload, else body+mine
+          const byCk =
+            (sm as any).clientKey &&
+            prev.find(
+              (p) =>
+                p.clientKey === (sm as any).clientKey &&
+                !claimedKeys.has(p.clientKey as string),
+            )
+          const match =
+            byCk ||
+            prev.find(
+              (p) =>
+                String(p.id).startsWith('local-') &&
+                p.clientKey &&
+                !claimedKeys.has(p.clientKey) &&
+                (p.mine ?? true) &&
+                (p.text === sm.text ||
+                  (!!p.image && !!sm.image && p.image === sm.image)) &&
+                (!!p.image === !!sm.image),
+            )
           if (match?.clientKey) {
             claimedKeys.add(match.clientKey)
+            claimedLocalIds.add(match.id)
             return {
               ...sm,
               clientKey: match.clientKey,
               mine: true,
-              state: rankState(sm.state) >= rankState(match.state) ? sm.state : match.state,
+              state: pickState(sm.state, match.state),
+              text: sm.text || match.text,
+              image: sm.image ?? match.image,
+              timeLabel: sm.timeLabel || match.timeLabel,
             }
           }
-          return { ...sm, clientKey: sm.clientKey || sm.id }
+          return { ...sm, clientKey: (sm as any).clientKey || sm.id }
         })
-        const stillPending = prev.filter(
+        // Keep EVERY unclaimed local/optimistic row (any state) — never vanish after print
+        const stillLocal = prev.filter(
           (m) =>
-            m.id.startsWith('local-') &&
-            m.clientKey &&
-            !claimedKeys.has(m.clientKey) &&
-            (m.state === 'pending' || m.state === 'failed'),
+            String(m.id).startsWith('local-') &&
+            !claimedLocalIds.has(m.id) &&
+            !(m.clientKey && claimedKeys.has(m.clientKey)),
         )
-        const callRows = prev.filter((m) => m.callLog)
-        const merged = [...mapped, ...stillPending, ...callRows].sort((a, b) => {
+        const callRows = prev.filter((m) => m.callLog && !mapped.some((x) => x.id === m.id))
+        const merged = [...mapped, ...stillLocal, ...callRows].sort((a, b) => {
           const ta = Date.parse(a.time) || 0
           const tb = Date.parse(b.time) || 0
           return ta - tb
         })
         if (sameMsgList(prev, merged)) return prev
-        return merged
+        if (!merged.length && prev.length) return prev
+        const byId = new Map(prev.map((m) => [m.id, m]))
+        const byKey = new Map(
+          prev.filter((m) => m.clientKey).map((m) => [m.clientKey as string, m]),
+        )
+        const stable = merged.map((m) => {
+          const old = byId.get(m.id) || (m.clientKey ? byKey.get(m.clientKey) : undefined)
+          if (!old) return m
+          return {
+            ...m,
+            clientKey: old.clientKey || m.clientKey,
+            state: pickState(m.state, old.state),
+            edited: !!(old as any).edited || !!(m as any).edited,
+            text: m.text || old.text,
+            image: m.image ?? old.image,
+          }
+        })
+        if (sameMsgList(prev, stable)) return prev
+        return stable
       })
       api.markRead(cid).catch(() => {})
     } catch (e: any) {
@@ -516,8 +645,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
     load(false)
     const t = setInterval(() => {
-      if (hasAccessToken()) load(true)
-    }, 12000)
+      if (hasAccessToken() && document.visibilityState === 'visible') load(true)
+    }, 20000)
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId])
@@ -572,6 +701,27 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       // Delivered was already fired in the store handler before this event.
       setMsgs((prev) => {
         if (prev.some((x) => x.id === incoming.id || x.clientKey === incoming.id)) return prev
+        // Dedupe optimistic / near-duplicate (same body + direction within a few seconds)
+        const near = prev.find((x) => {
+          if ((x.mine ?? false) !== mine) return false
+          if ((x.text || '') !== (incoming.text || '')) return false
+          if (!!x.image !== !!incoming.image) return false
+          const dt = Math.abs((Date.parse(x.time) || 0) - (Date.parse(incoming.time) || 0))
+          return dt < 15000
+        })
+        if (near) {
+          return prev.map((x) =>
+            x === near || x.id === near.id || (near.clientKey && x.clientKey === near.clientKey)
+              ? {
+                  ...x,
+                  id: incoming.id || x.id,
+                  clientKey: x.clientKey || near.clientKey || incoming.id,
+                  state: rankState(incoming.state) >= rankState(x.state) ? (incoming.state as any) : x.state,
+                  time: incoming.time || x.time,
+                }
+              : x,
+          )
+        }
         return [...prev, incoming as any]
       })
       if (!mine && openCid) {
@@ -626,7 +776,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                 ...x,
                 id: detail.id || x.id,
                 clientKey: x.clientKey || detail.ck,
-                state: (detail.s as any) || 'sent',
+                state: pickState((detail.s as any) || 'sent', x.state),
                 time: detail.ts || x.time,
                 timeLabel: detail.ts ? formatLocalTime(detail.ts) : x.timeLabel,
               }
@@ -742,17 +892,20 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         return
       }
       const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img, opts)
+      // In-place receipt update only — never replace/remove the printed bubble
       setMsgs((m) =>
         m.map((x) =>
           x.id === localId || x.clientKey === localId
             ? {
                 ...x,
-                ...message,
                 id: message.id || x.id,
                 clientKey: x.clientKey || localId,
                 mine: true,
-                state: message.state || 'sent',
-                timeLabel: message.timeLabel || x.timeLabel,
+                state: pickState(message.state || 'sent', x.state),
+                timeLabel: x.timeLabel || message.timeLabel,
+                time: x.time || message.time,
+                text: x.text || message.text,
+                image: x.image ?? message.image,
               }
             : x,
         ),
@@ -851,7 +1004,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     void deliverMessage(key, m.text === '📷 Photo' ? '' : m.text, m.image || null)
   }
 
-  const onPickImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onPickImage = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     e.target.value = ''
     if (!f || !f.type.startsWith('image/')) return
@@ -907,7 +1060,21 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       // detail from store dispatch uses peerId
     }
     window.addEventListener('sc:rt-typing', onTyping)
-    return () => window.removeEventListener('sc:rt-typing', onTyping)
+    const onRec = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as { peerId?: string; recording?: boolean }
+      if (d?.peerId === contactId) setPeerRecording(!!d.recording)
+    }
+    const onLive = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as { peerId?: string; draft?: string }
+      if (d?.peerId === contactId) setLiveDraft(d.draft ?? null)
+    }
+    window.addEventListener('sc:rt-recording', onRec)
+    window.addEventListener('sc:rt-live-typing', onLive)
+    return () => {
+      window.removeEventListener('sc:rt-typing', onTyping)
+      window.removeEventListener('sc:rt-recording', onRec)
+      window.removeEventListener('sc:rt-live-typing', onLive)
+    }
   }, [contactId])
 
 
@@ -944,10 +1111,17 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const applyReact = async (emoji: string) => {
     if (!actionMsg) return
     const id = actionMsg.id
+    const meId = me?.id
     setMsgs((list) =>
       list.map((m) => {
         if (m.id !== id) return m
-        const reactions = [...(m.reactions || []).filter((r) => r.emoji !== emoji), { emoji }]
+        // One reaction per user: drop my previous, set new (or clear if same)
+        const others = (m.reactions || []).filter((r: any) => r.user_id && meId && r.user_id !== meId)
+        const minePrev = (m.reactions || []).find((r: any) => !r.user_id || (meId && r.user_id === meId))
+        const same = minePrev && (minePrev.emoji === emoji)
+        const reactions = same
+          ? others
+          : [...others, { emoji, user_id: meId }]
         return { ...m, reactions }
       }),
     )
@@ -1046,7 +1220,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
   return (
     <div className="flex h-full flex-col" style={{ background: WALLPAPERS[settings.wallpaper] || '#F3F4F6' }}>
-      <header className="z-10 flex shrink-0 items-center gap-1 border-b border-gray-100 bg-white px-2 pb-3.5 pt-[max(1.5rem,calc(env(safe-area-inset-top)+0.75rem))] shadow-sm">
+      <header className="z-10 flex shrink-0 items-center gap-1 border-b border-white/40 bg-white/80 backdrop-blur-md px-2 pb-3.5 pt-[max(1.5rem,calc(env(safe-area-inset-top)+0.75rem))] shadow-sm">
         <button
           type="button"
           aria-label="Back"
@@ -1060,17 +1234,21 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           onClick={() => setProfileOpen(true)}
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
-          <Avatar contact={{ ...c, online: peerOnline || c.online }} size={44} />
+          <Avatar contact={{ ...c, online: peerOnline || c.online, premium: !!(c as any).premium || (c as any).subscriptionPlan === 'premium' }} size={44} />
           <div className="min-w-0 flex-1">
             <p className="truncate font-extrabold leading-tight">{c.name}</p>
-            <p className={`text-xs font-bold ${typing || peerOnline || c.online ? 'text-brand-blue' : 'text-gray-400'}`}>
-              {typing
-                ? 'typing…'
-                : peerOnline || c.online
-                  ? 'Online'
-                  : peerLastSeen || (c as any).lastSeen
-                    ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
-                    : ''}
+            <p className={`text-xs font-bold ${typing || peerRecording || peerOnline || c.online ? 'text-brand-blue' : 'text-gray-400'}`}>
+              {peerRecording
+                ? 'recording…'
+                : liveDraft != null && liveDraft !== ''
+                  ? liveDraft
+                  : typing
+                    ? 'typing…'
+                    : peerOnline || c.online
+                      ? 'Online'
+                      : peerLastSeen || (c as any).lastSeen
+                        ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
+                        : ''}
             </p>
           </div>
         </button>
@@ -1139,6 +1317,17 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                   <Volume2 size={18} className="text-brand-purple" />
                   Custom ringtone
                 </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold text-brand-red hover:bg-red-50"
+                  onClick={() => {
+                    setChatMenu(false)
+                    setBlockOpen(true)
+                  }}
+                >
+                  <Ban size={18} />
+                  Block
+                </button>
               </div>
             </>
           )}
@@ -1184,7 +1373,14 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                     requestAnimationFrame(() => inputRef.current?.focus())
                   }}
                   onOpenCalls={onOpenCalls}
-                  onJumpTo={(id) => msgRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+                  onJumpTo={(id) => {
+                    const el = msgRefs.current[id]
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                    setHighlightId(id)
+                    window.setTimeout(() => setHighlightId((h) => (h === id ? null : h)), 1200)
+                  }}
+                  highlight={highlightId === m.id}
+                  onOpenImage={(url) => setLightboxUrl(url)}
                   onOpenStatusReply={(sr) => {
                     if (!sr.statusId) {
                       showToast('This status is no longer available')
@@ -1260,6 +1456,22 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               {actionMsg.mine && !actionMsg.deleted && (
                 <button type="button" className="flex w-full px-4 py-3.5 text-left font-bold" onClick={() => { setEditText(actionMsg.text || ''); setEditing(true) }}>Edit</button>
               )}
+              <button
+                type="button"
+                className="flex w-full px-4 py-3.5 text-left font-bold"
+                onClick={async () => {
+                  const t = actionMsg.text || ''
+                  try {
+                    await navigator.clipboard.writeText(t)
+                    showToast('Copied')
+                  } catch {
+                    showToast('Could not copy')
+                  }
+                  setActionMsg(null)
+                }}
+              >
+                Copy
+              </button>
               <button type="button" className="flex w-full px-4 py-3.5 text-left font-bold" onClick={() => setForwardOpen(true)}>Forward</button>
               {actionMsg.mine && !actionMsg.deleted && (
                 <button type="button" className="flex w-full px-4 py-3.5 text-left font-bold text-brand-red" onClick={() => void applyDelete()}>Delete for everyone</button>
@@ -1318,8 +1530,20 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             <p className="text-lg font-black">Contact info</p>
           </div>
           <div className="flex flex-1 flex-col items-center overflow-y-auto px-6 pb-10 pt-8">
-            <div className="rounded-full bg-gradient-to-br from-brand-purple/15 to-brand-orange/10 p-1.5">
-              <Avatar contact={{ ...c, online: peerOnline || c.online }} size={120} />
+            <div className="flex w-full items-center justify-center">
+              <div className="flex h-[140px] w-[140px] items-center justify-center rounded-full bg-gradient-to-br from-brand-purple/15 to-brand-orange/10">
+                <Avatar
+                  contact={{
+                    ...c,
+                    online: peerOnline || c.online,
+                    premium:
+                      !!(c as any).premium ||
+                      !!(c as any).verifiedBadge ||
+                      (c as any).subscriptionPlan === 'premium',
+                  }}
+                  size={120}
+                />
+              </div>
             </div>
             <h2 className="mt-4 text-2xl font-black text-ink">{c.name}</h2>
             {c.username ? <p className="mt-1 font-bold text-brand-purple">@{c.username}</p> : null}
@@ -1408,9 +1632,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         </div>
       )}
 
-      <div className="shrink-0 border-t border-gray-100 bg-white safe-pb">
+      <div className="shrink-0 safe-pb bg-transparent">
+        <div className="bg-transparent pt-1">
         {(replyTo || statusReply) && (
-          <div className="flex items-start gap-2 border-b border-gray-100 px-3 py-2.5">
+          <div className="mx-2 mb-1 flex items-start gap-2 rounded-2xl bg-white/90 px-3 py-2.5 shadow-sm backdrop-blur-md">
             <div className="min-w-0 flex-1 border-l-4 border-brand-purple pl-2.5">
               <p className="text-[11px] font-black uppercase tracking-wide text-brand-purple">
                 {statusReply ? 'Status reply' : 'Replying'}
@@ -1435,49 +1660,220 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             </button>
           </div>
         )}
-        <div className="flex items-center gap-1.5 px-2 py-3">
-        <button
-          type="button"
-          onClick={() => setEmoji((e) => !e)}
-          className="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100"
-        >
-          <Smile size={22} />
-        </button>
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          className="flex h-10 w-10 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100"
-          aria-label="Send picture"
-        >
-          <ImagePlus size={22} />
-        </button>
-        <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPickImage} />
-        <input
-          ref={inputRef}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value)
-            ;(window as any).__sc_type?.()
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && settings.enterIsSend) {
-              e.preventDefault()
-              send()
-            }
-          }}
-          placeholder="Message"
-          className="h-11 flex-1 rounded-full bg-gray-100 px-4 text-[15px] font-semibold outline-none"
-        />
-        <button
-          type="button"
-          onClick={send}
-          disabled={!text.trim() && !pendingImage}
-          className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-purple text-white shadow-md disabled:opacity-40"
-        >
-          <Send size={18} />
-        </button>
+        {recording ? (
+          <div className="flex items-center gap-3 px-3 py-2.5">
+            <button
+              type="button"
+              className="text-sm font-extrabold text-brand-red"
+              onClick={() => {
+                try { mediaRecRef.current?.stop() } catch { /* */ }
+                mediaRecRef.current = null
+                recordChunks.current = []
+                if (recordTimer.current) clearInterval(recordTimer.current)
+                setRecording(false)
+                setRecordSecs(0)
+                ;(window as any).__sc_rec?.(false)
+              }}
+            >
+              Cancel
+            </button>
+            <div className="flex flex-1 items-center gap-2">
+              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-brand-red" />
+              <span className="text-sm font-bold tabular-nums text-ink">
+                {String(Math.floor(recordSecs / 60)).padStart(2, '0')}:{String(recordSecs % 60).padStart(2, '0')}
+              </span>
+              <span className="text-xs font-semibold text-gray-400">Recording…</span>
+            </div>
+            <button
+              type="button"
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-purple text-white shadow-md"
+              onClick={() => {
+                try { mediaRecRef.current?.stop() } catch { /* */ }
+              }}
+              aria-label="Send voice note"
+            >
+              <Send size={20} />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-end gap-1.5 px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5">
+            <div className="flex min-h-[48px] min-w-0 flex-1 items-end gap-0.5 rounded-[24px] bg-white px-1.5 py-1 ring-1 ring-black/8">
+              <button
+                type="button"
+                onClick={() => setEmoji((e) => !e)}
+                className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-black/5"
+              >
+                <Smile size={22} />
+              </button>
+              <textarea
+                ref={inputRef as any}
+                value={text}
+                rows={1}
+                onChange={(e) => {
+                  setText(e.target.value)
+                  const el = e.target
+                  el.style.height = '24px'
+                  el.style.height = Math.min(120, el.scrollHeight) + 'px'
+                  ;(window as any).__sc_type?.()
+                  // Premium live typing: push draft text to peer via custom event (WS bridge)
+                  if (
+                    (settings as any).liveTyping &&
+                    !(settings as any).hideLiveTyping &&
+                    ((settings as any).subscriptionPlan || me?.subscriptionPlan) === 'premium'
+                  ) {
+                    try { wsLiveTyping(contactId, e.target.value) } catch { /* */ }
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && settings.enterIsSend) {
+                    e.preventDefault()
+                    send()
+                  }
+                }}
+                placeholder="Message"
+                className="max-h-[120px] min-h-[24px] flex-1 resize-none bg-transparent py-2.5 text-[16px] font-medium leading-5 text-ink outline-none placeholder:text-gray-400"
+              />
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-black/5"
+                aria-label="Send picture"
+              >
+                <ImagePlus size={22} />
+              </button>
+              <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPickImage} />
+            </div>
+            {(text.trim() || pendingImage) ? (
+              <button
+                type="button"
+                onClick={send}
+                className="mb-0.5 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-brand-purple text-white"
+                aria-label="Send"
+              >
+                <Send size={20} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="mb-0.5 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-brand-purple text-white active:scale-95"
+                aria-label="Record voice note"
+                onClick={async () => {
+                  try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+                    const rec = new MediaRecorder(stream)
+                    recordChunks.current = []
+                    rec.ondataavailable = (ev) => {
+                      if (ev.data.size) recordChunks.current.push(ev.data)
+                    }
+                    rec.onstop = async () => {
+                      stream.getTracks().forEach((t) => t.stop())
+                      if (recordTimer.current) clearInterval(recordTimer.current)
+                      setRecording(false)
+                      ;(window as any).__sc_rec?.(false)
+                      const blob = new Blob(recordChunks.current, { type: rec.mimeType || 'audio/webm' })
+                      if (blob.size < 400) {
+                        setRecordSecs(0)
+                        return
+                      }
+                      // Send as data URL voice note (backend stores as media attachment text for now)
+                      const reader = new FileReader()
+                      reader.onload = () => {
+                        const dataUrl = String(reader.result || '')
+                        setText('')
+                        void (async () => {
+                          showToast('Voice note ready')
+                          // Optimistic: show duration as message body with voice prefix
+                          const secs = recordSecs
+                          setRecordSecs(0)
+                          const body = `🎤 Voice note (${secs}s)`
+                          // Reuse send path with body only — media upload path may be added later
+                          setText(body)
+                          setTimeout(() => {
+                            send()
+                          }, 30)
+                        })()
+                      }
+                      reader.readAsDataURL(blob)
+                    }
+                    mediaRecRef.current = rec
+                    rec.start()
+                    setRecording(true)
+                    setRecordSecs(0)
+                    ;(window as any).__sc_rec?.(true)
+                    recordTimer.current = setInterval(() => setRecordSecs((s) => s + 1), 1000)
+                  } catch {
+                    showToast('Microphone permission needed')
+                  }
+                }}
+              >
+                <Mic size={22} />
+              </button>
+            )}
+          </div>
+        )}
         </div>
       </div>
+
+      {lightboxUrl && (
+        <div
+          className="absolute inset-0 z-[60] flex items-center justify-center bg-black/85"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <button
+            type="button"
+            className="absolute right-4 top-[max(1rem,env(safe-area-inset-top))] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white"
+            onClick={() => setLightboxUrl(null)}
+            aria-label="Close"
+          >
+            <X size={22} />
+          </button>
+          <img
+            src={lightboxUrl}
+            alt=""
+            className="max-h-[92%] max-w-[96%] object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
+
+      {blockOpen && (
+        <div className="absolute inset-0 z-[55] flex flex-col justify-end bg-black/40" onClick={() => setBlockOpen(false)}>
+          <div className="rounded-t-3xl bg-white px-5 pb-8 pt-4" onClick={(e) => e.stopPropagation()}>
+            <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-gray-200" />
+            <p className="text-lg font-black">Block {c.name.split(' ')[0]}?</p>
+            <p className="mt-2 text-sm font-semibold text-gray-500">
+              They won&apos;t be able to message or call you. Existing chats stay on your device but they can&apos;t reach you until you unblock.
+            </p>
+            <button
+              type="button"
+              disabled={blocking}
+              className="mt-5 w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white disabled:opacity-50"
+              onClick={async () => {
+                setBlocking(true)
+                try {
+                  await api.blockUser(peerId || contactId)
+                  showToast('User blocked')
+                  setBlockOpen(false)
+                  onBack()
+                } catch (e: any) {
+                  showToast(e?.message || 'Could not block')
+                } finally {
+                  setBlocking(false)
+                }
+              }}
+            >
+              {blocking ? 'Blocking…' : 'Block'}
+            </button>
+            <button
+              type="button"
+              className="mt-2 w-full rounded-full bg-gray-100 py-3.5 text-sm font-extrabold text-gray-600"
+              onClick={() => setBlockOpen(false)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
