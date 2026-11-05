@@ -13,9 +13,10 @@ router = APIRouter(prefix="/conversations", tags=["Conversations"])
 async def list_conversations(
     limit: int = Query(50, ge=1, le=100),
     cursor: Optional[str] = None,
+    lean: bool = Query(False, description="Skip profile photos for fast first paint"),
     user: dict = Depends(get_current_user),
 ):
-    data = await MessagingService.list_conversations(user["id"], limit, cursor)
+    data = await MessagingService.list_conversations(user["id"], limit, cursor, lean=lean)
     return success_response("Conversations", data)
 
 

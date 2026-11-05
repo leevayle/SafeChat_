@@ -77,11 +77,16 @@ class MessagingService:
         return await MessagingService._serialize_conversation(doc, user_id)
 
     @staticmethod
-    async def list_conversations(user_id: str, limit: int = 50, cursor: Optional[str] = None) -> dict:
+    async def list_conversations(
+        user_id: str,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+        lean: bool = False,
+    ) -> dict:
+        """List conversations. lean=True omits profile photos for a fast first paint."""
         db = get_database()
         query: Dict[str, Any] = {"participant_ids": user_id}
         if cursor and ObjectId.is_valid(cursor):
-            # cursor is last_message_at iso or conversation _id; use last_message_at for ordering
             pass  # simple limit for now
 
         cursor_q = (
@@ -91,7 +96,9 @@ class MessagingService:
         )
         items = []
         async for conv in cursor_q:
-            items.append(await MessagingService._serialize_conversation(conv, user_id))
+            items.append(
+                await MessagingService._serialize_conversation(conv, user_id, lean=lean)
+            )
         return {"conversations": items, "next_cursor": None}
 
     @staticmethod
@@ -573,20 +580,28 @@ class MessagingService:
         }
 
     @staticmethod
-    async def _serialize_conversation(conv: dict, viewer_id: str) -> dict:
+    async def _serialize_conversation(
+        conv: dict, viewer_id: str, lean: bool = False
+    ) -> dict:
         db = get_database()
         participants = []
+        # lean: only id + display_name (no photo bytes / heavy fields) for first paint
+        user_projection = (
+            {"username": 1, "display_name": 1}
+            if lean
+            else {"username": 1, "display_name": 1, "profile_photo": 1}
+        )
         for pid in conv.get("participant_ids", []):
             if not ObjectId.is_valid(pid):
                 continue
-            u = await db.users.find_one({"_id": ObjectId(pid)})
+            u = await db.users.find_one({"_id": ObjectId(pid)}, user_projection)
             if u:
                 participants.append(
                     {
                         "id": str(u["_id"]),
                         "username": u["username"],
                         "display_name": u["display_name"],
-                        "profile_photo": u.get("profile_photo"),
+                        "profile_photo": None if lean else u.get("profile_photo"),
                     }
                 )
 

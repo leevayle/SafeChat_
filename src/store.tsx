@@ -23,6 +23,19 @@ import {
   saveStoredUser,
 } from './api'
 import { playIncomingMessageChime } from './lib/sounds'
+import {
+  clearAllCaches,
+  loadCachedChats,
+  saveCachedChats,
+  loadCachedContacts,
+  saveCachedContacts,
+  loadCachedStatuses,
+  saveCachedStatuses,
+  setCacheOwner,
+  cacheOwnerId,
+} from './lib/appCache'
+import { setCachedMessages, clearMessageCache } from './lib/messageCache'
+import { warmPhoto } from './lib/photoCache'
 
 export 
 const LS_OWNER_KEY = 'sc_user_id'
@@ -503,8 +516,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const prevOwner = localStorage.getItem(LS_OWNER_KEY)
       if (prevOwner && prevOwner !== user.id) {
         wipeForeignLocalState()
+        void clearAllCaches()
+        clearMessageCache()
       }
       localStorage.setItem(LS_OWNER_KEY, user.id)
+      setCacheOwner(user.id)
     } catch {
       /* ignore */
     }
@@ -569,6 +585,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setCalls([])
     setSaveRequestPending(0)
     setListsReady(true)
+    clearMessageCache()
+    void clearAllCaches()
     // Do not inherit previous user's theme after session expiry / forced logout
     setSettings((prev) => {
       const next = {
@@ -592,23 +610,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     applyChatAccent(defaultSettings.chatAccent)
   }, [])
 
-  const refreshChats = useCallback(async () => {
+  const refreshChats = useCallback(async (opts?: { lean?: boolean }) => {
     if (!hasAccessToken() || isSessionDead()) return
     try {
-      const { chats: c } = await api.chats()
-      // Cheap equality: length + last message iso/unread — avoid full JSON.stringify on every poll
+      const { chats: c } = await api.chats({ lean: !!opts?.lean, limit: 50 })
+      // Merge network into UI; keep richer cached fields (e.g. photo) when lean response omits them
       setChats((prev) => {
-        if (prev.length === c.length) {
+        const byId = new Map(prev.map((p) => [p.contactId, p]))
+        const merged = c.map((row) => {
+          const old = byId.get(row.contactId)
+          if (!old) return row
+          return {
+            ...old,
+            ...row,
+            // Prefer non-empty photo/name from whichever side has them
+            photo: row.photo || old.photo,
+            name: row.name || old.name,
+            hue: row.hue || old.hue,
+          }
+        })
+        if (prev.length === merged.length) {
           let same = true
           for (let i = 0; i < prev.length; i++) {
             const a = prev[i]
-            const b = c[i]
+            const b = merged[i]
             if (
               a.contactId !== b.contactId ||
               a.unread !== b.unread ||
               a.last !== b.last ||
               a.iso !== b.iso ||
-              (a as any).receipt !== (b as any).receipt
+              a.state !== b.state ||
+              a.photo !== b.photo
             ) {
               same = false
               break
@@ -616,7 +648,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           if (same) return prev
         }
-        return c
+        void saveCachedChats(merged)
+        return merged
       })
     } catch (e: any) {
       if ((e as any)?.status === 401 || String(e?.message || '').toLowerCase().includes('unauthorized')) {
@@ -629,7 +662,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!hasAccessToken() || isSessionDead()) return
     try {
       const { contacts: c } = await api.contacts()
-      // Cheap equality: id + name + photo + phone — avoid full JSON.stringify on every poll
       setContacts((prev) => {
         if (prev.length === c.length) {
           let same = true
@@ -649,6 +681,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           if (same) return prev
         }
+        void saveCachedContacts(c)
         return c
       })
     } catch {
@@ -727,6 +760,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
           if (same) return prev
         }
+        void saveCachedStatuses(active)
         return active
       })
     } catch (e: any) {
@@ -838,17 +872,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [wipeSession])
 
   /**
-   * Ordered hydrate after auth is known-good:
-   * chats → listsReady → calls → statuses → groups → save requests → contacts
-   * (notifications stay on-demand when the screen opens)
+   * Phased hydrate (stale-while-revalidate):
+   *  0. Cached chats already painted on boot (if any)
+   *  1. Lean chat list (names + last message, no photos) → home interactive
+   *  2. Prefetch last 50 messages for top conversations (+ full chat list with photos)
+   *  3. Contacts / status / groups / calls / save requests in parallel
+   *  4. Warm profile photos in background
    */
   const hydrateAfterAuth = useCallback(async () => {
     if (!hasAccessToken() || isSessionDead()) {
       setListsReady(true)
       return
     }
-    // 1. Chats only on the critical path — home can paint as soon as this returns
-    await refreshChats()
+
+    // Phase 1 — lean inbox (fast, low traffic)
+    await refreshChats({ lean: true })
     if (isSessionDead()) {
       setListsReady(true)
       return
@@ -856,7 +894,42 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setListsReady(true)
     setSessionOk(true)
 
-    // 2–6 in parallel (not sequential) so secondary lists fill without blocking each other
+    // Phase 2 — full list + last 50 msgs per recent thread (bounded concurrency)
+    if (isSessionDead()) return
+    void refreshChats({ lean: false })
+
+    const snapshot = await (async () => {
+      // Read current chats from state via a one-shot promise
+      return new Promise<ChatPreview[]>((resolve) => {
+        setChats((cur) => {
+          resolve(cur)
+          return cur
+        })
+      })
+    })()
+
+    const toPrefetch = (snapshot || [])
+      .filter((c) => c.conversationId)
+      .slice(0, 20)
+
+    const CONCURRENCY = 4
+    for (let i = 0; i < toPrefetch.length; i += CONCURRENCY) {
+      if (isSessionDead()) break
+      const batch = toPrefetch.slice(i, i + CONCURRENCY)
+      await Promise.all(
+        batch.map(async (ch) => {
+          const cid = ch.conversationId!
+          try {
+            const { messages } = await api.messages(cid, { limit: 50 })
+            setCachedMessages(cid, messages)
+          } catch {
+            /* soft */
+          }
+        }),
+      )
+    }
+
+    // Phase 3 — secondary lists
     if (isSessionDead()) return
     await Promise.all([
       refreshCalls(),
@@ -865,6 +938,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshSaveRequests(),
       refreshContacts(),
     ])
+
+    // Phase 4 — warm photos (does not block UI)
+    try {
+      const origin = (import.meta as any).env?.VITE_API_URL || ''
+      setContacts((cur) => {
+        for (const c of cur.slice(0, 40)) {
+          if (c.photo) warmPhoto(c.id, c.photo, origin)
+        }
+        return cur
+      })
+      setChats((cur) => {
+        for (const ch of cur.slice(0, 40)) {
+          if (ch.photo) warmPhoto(ch.contactId, ch.photo, origin)
+        }
+        return cur
+      })
+    } catch {
+      /* */
+    }
   }, [refreshChats, refreshCalls, refreshStatus, refreshGroups, refreshSaveRequests, refreshContacts])
 
   const bootStarted = useRef(false)
@@ -886,6 +978,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
 
       if (stored) applyUser(stored)
+
+      // Paint cached inbox / contacts / statuses BEFORE network (stale-while-revalidate)
+      try {
+        const owner = cacheOwnerId()
+        if (stored?.id && (!owner || owner === stored.id)) {
+          const [cachedChats, cachedContacts, cachedStatuses] = await Promise.all([
+            loadCachedChats<ChatPreview>(),
+            loadCachedContacts<ApiContact>(),
+            loadCachedStatuses<any>(),
+          ])
+          if (cachedChats.length) {
+            setChats(cachedChats)
+            setListsReady(true)
+          }
+          if (cachedContacts.length) setContacts(cachedContacts)
+          if (cachedStatuses.length) setStatusList(cachedStatuses)
+          setCacheOwner(stored.id)
+        }
+      } catch {
+        /* */
+      }
+
       setReady(true)
 
       // Prove the token with the first real data call (chats), not a separate /auth/me

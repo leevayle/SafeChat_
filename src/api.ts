@@ -826,8 +826,12 @@ export const api = {
     return { ok: true }
   },
 
-  chats: async () => {
-    const data = await req<any>('/api/v1/conversations')
+  chats: async (opts?: { lean?: boolean; limit?: number }) => {
+    const q = new URLSearchParams()
+    if (opts?.lean) q.set('lean', 'true')
+    if (opts?.limit) q.set('limit', String(opts.limit))
+    const qs = q.toString()
+    const data = await req<any>(`/api/v1/conversations${qs ? `?${qs}` : ''}`)
     const list = data.conversations || data || []
     const mid = meId()
     const mapped = list.map((c: any) => mapConversation(c, mid))
@@ -860,11 +864,19 @@ export const api = {
     return mapConversation(conv, meId())
   },
 
-  messages: async (conversationId: string) => {
-    const data = await req<any>(`/api/v1/messages/conversations/${conversationId}`)
+  messages: async (conversationId: string, opts?: { limit?: number; beforeId?: string }) => {
+    const q = new URLSearchParams()
+    q.set('limit', String(opts?.limit ?? 50))
+    if (opts?.beforeId) q.set('before_id', opts.beforeId)
+    const data = await req<any>(
+      `/api/v1/messages/conversations/${conversationId}?${q.toString()}`,
+    )
     const list = data.messages || data || []
     const mid = meId()
-    return { messages: list.map((m: any) => mapMessage(m, mid)) }
+    return {
+      messages: list.map((m: any) => mapMessage(m, mid)),
+      nextCursor: data.next_cursor || null,
+    }
   },
 
   send: async (

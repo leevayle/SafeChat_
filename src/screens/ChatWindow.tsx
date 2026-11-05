@@ -8,6 +8,8 @@ import { isRealtimeOpen, wsSendMessage, wsReceipt, wsLiveTyping, wsTyping } from
 import { FONT_SIZES, WALLPAPERS, useStore } from '../store'
 import { playInboxLandingChime } from '../lib/sounds'
 import { compressForWeb } from '../lib/imageProcess'
+import { getCachedMessages, setCachedMessages, hydrateThreadFromDisk } from '../lib/messageCache'
+import { putOutbox, removeOutbox } from '../lib/appCache'
 
 type Props = { contactId: string; onBack: () => void; onCall: (kind: 'audio' | 'video') => void; onOpenCalls?: () => void; onOpenStatus?: (userId: string, statusId?: string) => void }
 
@@ -515,7 +517,13 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     try {
       const cid = await ensureConversation()
       if (!cid) return
-      const { messages } = await api.messages(cid)
+      // Paint disk/memory cache immediately (no blank thread)
+      const cached = getCachedMessages(cid)
+      if (cached?.length) {
+        setMsgs((prev) => (prev.length ? prev : cached))
+        if (!silent) setLoading(false)
+      }
+      const { messages } = await api.messages(cid, { limit: 50 })
       // Incoming messages we just pulled: ack delivered before/while painting (no await)
       for (const m of messages) {
         const mine = m.mine ?? m.from === me?.id
@@ -611,6 +619,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           }
         })
         if (sameMsgList(prev, stable)) return prev
+        setCachedMessages(cid, stable)
         return stable
       })
       api.markRead(cid).catch(() => {})
@@ -623,10 +632,27 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
   useEffect(() => {
     setLoading(true)
-    setMsgs([])
     animatedKeys.current = new Set()
     setConversationId(knownConv)
     convRef.current = knownConv
+    // Instant paint from memory/disk cache for this thread
+    if (knownConv) {
+      const mem = getCachedMessages(knownConv)
+      if (mem?.length) {
+        setMsgs(mem)
+        setLoading(false)
+      } else {
+        setMsgs([])
+        void hydrateThreadFromDisk(knownConv).then((disk) => {
+          if (disk?.length && convRef.current === knownConv) {
+            setMsgs(disk)
+            setLoading(false)
+          }
+        })
+      }
+    } else {
+      setMsgs([])
+    }
     // Instant blue ticks for the sender: as soon as this chat surface is open,
     // mark read — do not wait for message history to finish loading.
     if (knownConv && hasAccessToken()) {
@@ -783,6 +809,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             : x,
         ),
       )
+      if (detail.ck) void removeOutbox(detail.ck)
       upsertChatPreview({
         contactId: peerId,
         conversationId: convRef.current || undefined,
@@ -921,6 +948,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             : x,
         ),
       )
+      void removeOutbox(localId)
       upsertChatPreview({
         contactId: (c as any).peerId || contactId,
         conversationId: cid,
@@ -999,6 +1027,15 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       name: c.name,
       photo: c.photo,
       hue: c.hue,
+    })
+    // Persist unsent until server ack (survives refresh)
+    void putOutbox({
+      id: localId,
+      conversationId: conversationId || knownConv || '',
+      contactId: (c as any).peerId || contactId,
+      text: body,
+      image: img,
+      createdAt: nowIso,
     })
     // Backend later
     void deliverMessage(localId, body, img, {
