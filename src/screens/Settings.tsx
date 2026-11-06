@@ -94,8 +94,20 @@ export function Settings({
   onLogout: () => void
   onSupport?: () => void
 }) {
-  const { settings: s, setSetting, saveProfile, contacts, me } = useStore()
-  const [page, setPage] = useState<Page>('home')
+  const { settings: s, setSetting, saveProfile, contacts, me , syncSubscription } = useStore()
+  useEffect(() => {
+    void syncSubscription?.()
+  }, [syncSubscription])
+  const [page, setPage] = useState<Page>(() => {
+    try {
+      const p = sessionStorage.getItem('sc_settings_page') as Page | null
+      if (p) {
+        sessionStorage.removeItem('sc_settings_page')
+        return p
+      }
+    } catch { /* */ }
+    return 'home'
+  })
   const [picker, setPicker] = useState<{ title: string; options: string[]; key: keyof S } | null>(null)
   const [confirm, setConfirm] = useState<'logout' | 'delete' | null>(null)
   const [deleteStep, setDeleteStep] = useState<'password' | 'phrase'>('password')
@@ -104,6 +116,7 @@ export function Settings({
   const [deletingAccount, setDeletingAccount] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [savingProfile, setSavingProfile] = useState(false)
+  const [busyUpdating, setBusyUpdating] = useState(false)
   const [draft, setDraft] = useState({ name: s.name, username: s.username, bio: s.bio })
   const [usernameStatus, setUsernameStatus] = useState<
     'idle' | 'checking' | 'available' | 'taken' | 'invalid' | 'own'
@@ -906,13 +919,24 @@ export function Settings({
                           return
                         }
                         setSetting('busyEnabled' as any, v as never)
+                        // Turning off publishes immediately so peers stop seeing the custom message
+                        if (!v) {
+                          void api
+                            .updatePreferences({
+                              busy_enabled: false,
+                              busy_message: '',
+                              busy_until: null as any,
+                            })
+                            .then(() => setToast('Busy status turned off'))
+                            .catch(() => setToast('Could not update busy status'))
+                        }
                       }}
                       label="Busy status"
                     />
                   }
                 />
                 {!!(s as any).busyEnabled && (
-                  <div className="space-y-2 px-1 pb-2">
+                  <div className="space-y-3 px-1 pb-3">
                     <label className="block text-[11px] font-extrabold text-gray-400">Who sees busy</label>
                     <Select
                       value={(s as any).busyScope || 'everyone'}
@@ -920,18 +944,68 @@ export function Settings({
                       options={[
                         { value: 'everyone', label: 'Everyone' },
                         { value: 'contacts', label: 'My contacts' },
-                        { value: 'specific', label: 'Specific contacts' },
                       ]}
                     />
-                    <label className="block text-[11px] font-extrabold text-gray-400">Short message</label>
+                    <label className="block text-[11px] font-extrabold text-gray-400">Custom message</label>
                     <input
                       value={(s as any).busyMessage || ''}
                       maxLength={28}
                       onChange={(e) => setSetting('busyMessage' as any, e.target.value.slice(0, 28) as never)}
-                      placeholder="e.g. in bed · in a meeting"
-                      className="w-full rounded-2xl bg-gray-50 px-3 py-2.5 text-sm font-bold outline-none"
+                      placeholder="e.g. in a meeting"
+                      className="w-full rounded-2xl bg-gray-50 px-3 py-2.5 text-sm font-bold outline-none ring-1 ring-black/5 focus:ring-brand-purple/30"
                     />
-                    <p className="text-[11px] font-semibold text-gray-400">Max 28 characters · shows under your name</p>
+                    <label className="block text-[11px] font-extrabold text-gray-400">Duration (max 1 hour)</label>
+                    <div className="flex gap-2">
+                      {[
+                        { m: 15, label: '15 min' },
+                        { m: 30, label: '30 min' },
+                        { m: 60, label: '1 hour' },
+                      ].map((d) => {
+                        const active = Number((s as any).busyDurationMin || 30) === d.m
+                        return (
+                          <button
+                            key={d.m}
+                            type="button"
+                            onClick={() => setSetting('busyDurationMin' as any, d.m as never)}
+                            className={`flex-1 rounded-2xl py-2.5 text-xs font-extrabold transition ${
+                              active
+                                ? 'bg-brand-purple text-white shadow-md'
+                                : 'bg-gray-50 text-ink ring-1 ring-black/5'
+                            }`}
+                          >
+                            {d.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <button
+                      type="button"
+                      disabled={busyUpdating}
+                      className="w-full rounded-full bg-gradient-to-r from-brand-purple to-brand-orange py-3 text-sm font-extrabold text-white shadow-md active:scale-[0.98] disabled:opacity-60 disabled:active:scale-100"
+                      onClick={() => {
+                        if (busyUpdating) return
+                        const mins = Number((s as any).busyDurationMin || 30)
+                        const until = new Date(Date.now() + mins * 60 * 1000).toISOString()
+                        setSetting('busyUntil' as any, until as never)
+                        setSetting('busyEnabled' as any, true as never)
+                        setBusyUpdating(true)
+                        void api
+                          .updatePreferences({
+                            busy_enabled: true,
+                            busy_message: (s as any).busyMessage || '',
+                            busy_until: until,
+                            busy_scope: (s as any).busyScope || 'everyone',
+                          })
+                          .then(() => setToast('Busy status updated — contacts see your message'))
+                          .catch(() => setToast('Could not update busy status'))
+                          .finally(() => setBusyUpdating(false))
+                      }}
+                    >
+                      {busyUpdating ? 'Updating…' : 'Update busy status'}
+                    </button>
+                    <p className="text-[11px] font-semibold text-gray-400">
+                      Overrides Online for contacts. Typing still shows. Expires after the duration.
+                    </p>
                   </div>
                 )}
               </Card>

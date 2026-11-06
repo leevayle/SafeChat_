@@ -124,7 +124,7 @@ async def me(user: dict = Depends(get_current_user)):
                 "verified_badge": bool(ps.get("verified_badge", True)),
                 "force_read_receipts": bool(ps.get("force_read_receipts", False)),
                 "live_typing": bool(ps.get("live_typing", True)),
-                "status_ads_enabled": bool(ps.get("status_ads_enabled", False)),
+                "status_ads_enabled": bool(ps.get("status_ads_enabled", True)),
             },
             # Appearance (theme is CSS-only on client)
             "theme": doc.get("theme") or "purple",
@@ -142,7 +142,7 @@ async def me(user: dict = Depends(get_current_user)):
                 "verified_badge": bool(ps.get("verified_badge", True)) if premium else False,
                 "force_read_receipts": bool(ps.get("force_read_receipts", False)) if premium else False,
                 "live_typing": bool(ps.get("live_typing", True)) if premium else False,
-                "status_ads_enabled": bool(ps.get("status_ads_enabled", False)) if premium else False,
+                "status_ads_enabled": bool(ps.get("status_ads_enabled", True)) if premium else False,
             },
             "preferences": doc.get("preferences") or {},
         },

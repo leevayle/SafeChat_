@@ -215,7 +215,7 @@ class AuthService:
                 "verified_badge": bool(ps.get("verified_badge", True)),
                 "force_read_receipts": bool(ps.get("force_read_receipts", False)),
                 "live_typing": bool(ps.get("live_typing", True)),
-                "status_ads_enabled": bool(ps.get("status_ads_enabled", False)),
+                "status_ads_enabled": bool(ps.get("status_ads_enabled", True)),
             },
             "premium_expires_at": (
                 user.get("premium_expires_at").isoformat()

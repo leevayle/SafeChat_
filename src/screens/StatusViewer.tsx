@@ -142,6 +142,7 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
   const [progress, setProgress] = useState(0)
   const [muted, setMuted] = useState(() => loadMuted().includes(userId))
   const [likes, setLikes] = useState<Record<string, boolean>>(() => loadLikes())
+  const [likePulse, setLikePulse] = useState(false)
   const [viewersOpen, setViewersOpen] = useState(false)
   const swipeStartY = useRef(0)
   const [swipeDy, setSwipeDy] = useState(0)
@@ -269,11 +270,9 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
       )
     }
 
-    api
-      .viewStatus(current.id)
-      .then(() => refreshStatus().catch(() => {}))
-      .catch(() => {})
-  }, [current?.id, current?.views, isOwner, me?.id, patchStatusList, refreshStatus])
+    // Server register only — local list already patched above (no full refresh flash)
+    api.viewStatus(current.id).catch(() => {})
+  }, [current?.id, current?.views, isOwner, me?.id, patchStatusList])
 
   // Sync video element with pause / resume
   useEffect(() => {
@@ -416,7 +415,8 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
         progressRef.current = 0
         setPaused(false)
       }
-      window.setTimeout(() => { void refreshStatus().catch(() => {}) }, 800)
+      // Soft revalidate later — keep optimistic list (no glitchy refetch)
+      window.setTimeout(() => { void refreshStatus().catch(() => {}) }, 2500)
     } catch {
       // Rollback optimistic remove
       patchStatusList((list) => {
@@ -441,6 +441,9 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
     const next = { ...likes, [id]: !was }
     setLikes(next)
     saveLikes(next)
+    setLikePulse(true)
+    window.setTimeout(() => setLikePulse(false), 450)
+    if (!was) showToast('Sending like…')
     void api.likeStatus(id).catch(() => {
       const rolled = { ...likes, [id]: was }
       setLikes(rolled)
@@ -685,12 +688,12 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
                 type="button"
                 data-status-action
                 onClick={toggleLike}
-                className={`flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-sm ${
+                className={`flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-sm transition-transform duration-200 ${
                   liked ? 'bg-brand-red/90 text-white' : 'bg-white/10 text-white'
-                }`}
+                } ${likePulse ? 'scale-125' : 'scale-100'}`}
                 aria-label={liked ? 'Unlike' : 'Like'}
               >
-                <Heart size={20} fill={liked ? 'currentColor' : 'none'} />
+                <Heart size={20} fill={liked ? 'currentColor' : 'none'} className={likePulse ? 'animate-pulse' : ''} />
               </button>
             </div>
           </>

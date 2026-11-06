@@ -359,7 +359,7 @@ const MessageBubble = memo(function MessageBubble({
 })
 
 function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus }: Props) {
-  const { settings, contacts, chats, me, showToast, upsertChatPreview, statusList, setActiveConversationId } = useStore()
+  const { settings, contacts, chats, me, showToast, upsertChatPreview, statusList, setActiveConversationId, busyMap, presenceMap } = useStore()
   // Resolve peer from contacts, or from an existing chat preview (notifications may pass contactId)
   const chatPreview =
     chats.find(
@@ -422,6 +422,11 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [typing, setTyping] = useState(false)
   const [peerRecording, setPeerRecording] = useState(false)
   const [liveDraft, setLiveDraft] = useState<string | null>(null)
+  const [subtitleTick, setSubtitleTick] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => setSubtitleTick((n) => n + 1), 3200)
+    return () => clearInterval(id)
+  }, [contactId])
   const [actionMsg, setActionMsg] = useState<ApiMsg | null>(null)
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
@@ -456,6 +461,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   }, [onBack, profileOpen, actionMsg])
 
   const [peerOnline, setPeerOnline] = useState(false)
+  const [peerBusy, setPeerBusy] = useState<{ message?: string; until?: string | null } | null>(null)
   const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null)
   const [chatMenu, setChatMenu] = useState(false)
   const [chatMuted, setChatMuted] = useState(() => {
@@ -780,9 +786,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         statusReply = { preview: sr[1], time: sr[2] || undefined, statusId: sr[3] || undefined }
         text = sr[4]
       }
+      const ck = (detail.m as any).client_key || (detail.m as any).clientKey || detail.m.id
       const incoming = {
         id: detail.m.id,
-        clientKey: detail.m.id,
+        clientKey: ck,
         from: detail.m.from,
         to: contactId,
         text,
@@ -797,14 +804,37 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       }
       // Delivered was already fired in the store handler before this event.
       setMsgs((prev) => {
-        if (prev.some((x) => x.id === incoming.id || x.clientKey === incoming.id)) return prev
-        // Dedupe optimistic / near-duplicate (same body + direction within a few seconds)
+        // Already have this server id or clientKey — never append a second bubble
+        const exists = prev.some(
+          (x) =>
+            x.id === incoming.id ||
+            x.clientKey === incoming.id ||
+            (incoming.clientKey && (x.clientKey === incoming.clientKey || x.id === incoming.clientKey)),
+        )
+        if (exists) {
+          return prev.map((x) =>
+            x.id === incoming.id ||
+            x.clientKey === incoming.id ||
+            (incoming.clientKey && (x.clientKey === incoming.clientKey || x.id === incoming.clientKey))
+              ? {
+                  ...x,
+                  id: incoming.id,
+                  clientKey: x.clientKey || incoming.clientKey,
+                  state: rankState(incoming.state) >= rankState(x.state) ? (incoming.state as any) : x.state,
+                }
+              : x,
+          )
+        }
+        // Match optimistic local-* or near-duplicate body
         const near = prev.find((x) => {
           if ((x.mine ?? false) !== mine) return false
+          if (String(x.id).startsWith('local-') || String(x.clientKey || '').startsWith('local-')) {
+            if ((x.text || '') === (incoming.text || '') && !!x.image === !!incoming.image) return true
+          }
           if ((x.text || '') !== (incoming.text || '')) return false
           if (!!x.image !== !!incoming.image) return false
           const dt = Math.abs((Date.parse(x.time) || 0) - (Date.parse(incoming.time) || 0))
-          return dt < 15000
+          return dt < 30000
         })
         if (near) {
           return prev.map((x) =>
@@ -815,6 +845,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                   clientKey: x.clientKey || near.clientKey || incoming.id,
                   state: rankState(incoming.state) >= rankState(x.state) ? (incoming.state as any) : x.state,
                   time: incoming.time || x.time,
+                  replyToId: incoming.replyToId || x.replyToId,
+                  replyToText: incoming.replyToText || x.replyToText,
                 }
               : x,
           )
@@ -1261,7 +1293,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
 
 
-  // Presence for this peer
+  // Presence for this peer (includes busy message so Online is replaced)
   useEffect(() => {
     let alive = true
     const load = async () => {
@@ -1270,6 +1302,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         if (!alive) return
         setPeerOnline(!!p.online)
         setPeerLastSeen(p.lastSeen || null)
+        const busy = !!(p as any).busy
+        const msg = (p as any).busyMessage || (p as any).busy_message || ''
+        const until = (p as any).busyUntil || (p as any).busy_until || null
+        setPeerBusy(busy && msg ? { message: msg, until } : null)
       } catch {
         /* */
       }
@@ -1522,21 +1558,28 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                   : 'text-gray-400'
               }`}
             >
-              {peerRecording
-                ? 'recording…'
-                : (c as any).onCall
-                  ? 'on a call'
-                  : (c as any).busyMessage || ((c as any).busy ? 'busy' : null)
-                    ? (c as any).busyMessage || 'busy'
-                    : liveDraft || typing
-                      ? 'typing…'
-                      : peerOnline || c.online
-                        ? 'Online'
-                        : peerLastSeen || (c as any).lastSeen
-                          ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
-                          : c.username
-                            ? `@${c.username}`
-                            : ''}
+              {(() => {
+                if (peerRecording) return 'recording…'
+                if ((c as any).onCall) return 'on a call'
+                if (liveDraft || typing) return 'typing…'
+                const peer = peerId || contactId
+                const busyInfo =
+                  peerBusy ||
+                  busyMap?.[peer] ||
+                  ((c as any).busy ? { message: (c as any).busyMessage || 'busy', until: (c as any).busyUntil } : null)
+                const busyActive = !!(
+                  busyInfo &&
+                  busyInfo.message &&
+                  (!busyInfo.until || Date.parse(String(busyInfo.until)) > Date.now())
+                )
+                const online = !!(presenceMap?.[peer] || peerOnline || c.online)
+                const last = peerLastSeen || (c as any).lastSeen
+                // Typing remains normal (handled above). Busy replaces Online with custom message.
+                if (busyActive) return busyInfo!.message || 'busy'
+                if (online) return 'Online'
+                if (last) return formatLastSeen(last)
+                return c.username ? `@${c.username}` : ''
+              })()}
             </p>
           </div>
         </button>
@@ -1708,7 +1751,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               </div>
             </motion.div>
           )}
-          {/* Live character bubble - Premium viewers only */}
+          {/* Live character bubble - Premium viewers only; text uses theme accent (same as caret) */}
           {liveDraft != null && liveDraft !== '' && (
             <motion.div
               key="live-typing"
@@ -1719,7 +1762,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               className="flex"
             >
               <div className="max-w-[85%] rounded-3xl rounded-bl-md bg-white px-3.5 py-2.5 shadow-sm ring-1 ring-brand-purple/15">
-                <p className="whitespace-pre-wrap break-words font-mono text-[14px] font-medium leading-snug tracking-tight text-ink">
+                <p className="whitespace-pre-wrap break-words font-mono text-[14px] font-medium leading-snug tracking-tight text-brand-purple">
                   {liveDraft}
                   <span
                     className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[2px] bg-brand-purple align-middle"

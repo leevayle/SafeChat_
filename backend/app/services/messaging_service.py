@@ -605,6 +605,9 @@ class MessagingService:
             "delivery_status": status,
             "edited": msg.get("edited", False),
             "reactions": msg.get("_reactions") or [],
+            # client_key lets the UI match optimistic bubbles without double-render
+            "client_key": msg.get("idempotency_key") or msg.get("client_key"),
+            "idempotency_key": msg.get("idempotency_key") or msg.get("client_key"),
         }
 
     @staticmethod

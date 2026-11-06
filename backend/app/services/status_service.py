@@ -16,6 +16,49 @@ logger = logging.getLogger(__name__)
 
 
 class StatusService:
+
+    @staticmethod
+    async def _eligible_peer_ids(db, owner_id: str, status_doc: dict) -> List[str]:
+        """Contacts who should receive a live status_new / status_delete event."""
+        vis = (status_doc.get("visibility") or "contacts").lower()
+        selected = status_doc.get("selected_viewer_ids") or []
+        if vis in ("selected", "selected_contacts") and selected:
+            return [str(x) for x in selected if str(x) != str(owner_id)]
+        # Default: people who have the owner as an accepted contact (they can see the feed)
+        peers: List[str] = []
+        async for c in db.contacts.find(
+            {
+                "contact_user_id": owner_id,
+                "contact_status": ContactStatus.ACCEPTED.value,
+            },
+            {"owner_user_id": 1},
+        ):
+            oid = c.get("owner_user_id")
+            if oid and str(oid) != str(owner_id):
+                peers.append(str(oid))
+        # Also owner side contacts (symmetric apps often store one direction)
+        async for c in db.contacts.find(
+            {
+                "owner_user_id": owner_id,
+                "contact_status": ContactStatus.ACCEPTED.value,
+            },
+            {"contact_user_id": 1},
+        ):
+            cid = c.get("contact_user_id")
+            if cid and str(cid) != str(owner_id):
+                peers.append(str(cid))
+        # Unique
+        return list(dict.fromkeys(peers))
+
+    @staticmethod
+    async def _ws_send_users(user_ids: List[str], payload: dict) -> None:
+        try:
+            from app.websocket.manager import manager
+            for uid in user_ids:
+                await manager.send_user(str(uid), payload)
+        except Exception:
+            logger.debug("status ws fanout failed", exc_info=True)
+
     @staticmethod
     async def create_status(
         owner_id: str,
@@ -70,6 +113,31 @@ class StatusService:
         serialized = StatusService._serialize(doc)
         serialized["viewer_ids"] = []
         serialized["view_count"] = 0
+        # Attach owner profile for instant client render
+        try:
+            owner = await db.users.find_one(
+                {"_id": ObjectId(owner_id)},
+                {"username": 1, "display_name": 1, "profile_photo": 1},
+            )
+            if owner:
+                serialized["owner"] = {
+                    "id": owner_id,
+                    "username": owner.get("username"),
+                    "display_name": owner.get("display_name"),
+                    "profile_photo": owner.get("profile_photo"),
+                }
+                serialized["owner_user_id"] = owner_id
+        except Exception:
+            pass
+        # Live push to contacts — no refresh needed
+        try:
+            peers = await StatusService._eligible_peer_ids(db, owner_id, doc)
+            await StatusService._ws_send_users(
+                peers,
+                {"t": "status_new", "status": serialized},
+            )
+        except Exception:
+            logger.debug("status_new fanout failed", exc_info=True)
         return serialized
 
     @staticmethod
@@ -78,11 +146,18 @@ class StatusService:
         async for c in db.contacts.find(
             {
                 "owner_user_id": viewer_id,
-                "contact_status": ContactStatus.ACCEPTED.value,
+                "contact_status": {
+                    "$in": [
+                        ContactStatus.ACCEPTED.value,
+                        "ACCEPTED",
+                        "accepted",
+                    ]
+                },
             },
             {"contact_user_id": 1},
         ):
-            ids.append(c["contact_user_id"])
+            if c.get("contact_user_id"):
+                ids.append(c["contact_user_id"])
         return ids
 
     @staticmethod
@@ -205,6 +280,14 @@ class StatusService:
             raise ForbiddenError("Can only delete your own status")
         await db.statuses.delete_one({"_id": ObjectId(status_id)})
         await db.status_views.delete_many({"status_id": status_id})
+        try:
+            peers = await StatusService._eligible_peer_ids(db, user_id, s)
+            await StatusService._ws_send_users(
+                peers + [user_id],
+                {"t": "status_delete", "status_id": status_id, "owner_id": user_id},
+            )
+        except Exception:
+            logger.debug("status_delete fanout failed", exc_info=True)
 
     @staticmethod
     async def list_viewers(status_id: str, owner_id: str) -> List[dict]:
@@ -273,45 +356,70 @@ class StatusService:
         if not StatusService._can_view_sync(s, user_id, contact_ids):
             raise ForbiddenError("Not allowed")
         existing = await db.status_likes.find_one({"status_id": status_id, "user_id": user_id})
+        liker = await db.users.find_one(
+            {"_id": ObjectId(user_id)},
+            {"username": 1, "display_name": 1, "profile_photo": 1},
+        )
+        now = datetime.now(timezone.utc)
         if existing:
             await db.status_likes.delete_one({"_id": existing["_id"]})
-            return {"liked": False, "status_id": status_id}
-        now = datetime.now(timezone.utc)
-        await db.status_likes.insert_one(
-            {
-                "status_id": status_id,
-                "user_id": user_id,
-                "created_at": now,
-            }
-        )
-        # Notify status owner
-        try:
-            liker = await db.users.find_one(
-                {"_id": ObjectId(user_id)},
-                {"username": 1, "display_name": 1, "profile_photo": 1},
-            )
-            name = (
-                (liker or {}).get("display_name")
-                or (liker or {}).get("username")
-                or "Someone"
-            )
-            await db.notifications.insert_one(
+            liked = False
+        else:
+            await db.status_likes.insert_one(
                 {
-                    "user_id": s["owner_user_id"],
-                    "type": "status_like",
-                    "title": f"{name} liked your status",
-                    "body": "Tap to open",
                     "status_id": status_id,
-                    "actor_id": user_id,
-                    "actor_name": name,
-                    "actor_photo": (liker or {}).get("profile_photo"),
-                    "read": False,
+                    "user_id": user_id,
                     "created_at": now,
                 }
             )
+            liked = True
+            # Persist notification only on like
+            try:
+                name = (
+                    (liker or {}).get("display_name")
+                    or (liker or {}).get("username")
+                    or "Someone"
+                )
+                await db.notifications.insert_one(
+                    {
+                        "user_id": s["owner_user_id"],
+                        "type": "status_like",
+                        "title": f"{name} liked your status",
+                        "body": "Tap to open",
+                        "status_id": status_id,
+                        "actor_id": user_id,
+                        "actor_name": name,
+                        "actor_photo": (liker or {}).get("profile_photo"),
+                        "read": False,
+                        "created_at": now,
+                    }
+                )
+            except Exception:
+                pass
+        # Live push to owner: update viewers cache (liked flag)
+        try:
+            from app.websocket.manager import manager
+            view_count = await db.status_views.count_documents({"status_id": status_id})
+            await manager.send_user(
+                str(s["owner_user_id"]),
+                {
+                    "t": "status_view",
+                    "status_id": status_id,
+                    "view_count": view_count,
+                    "viewer": {
+                        "viewer_id": user_id,
+                        "username": (liker or {}).get("username"),
+                        "display_name": (liker or {}).get("display_name"),
+                        "profile_photo": (liker or {}).get("profile_photo"),
+                        "viewed_at": now.isoformat(),
+                        "liked": liked,
+                    },
+                    "like_only": True,
+                },
+            )
         except Exception:
             pass
-        return {"liked": True, "status_id": status_id}
+        return {"liked": liked, "status_id": status_id}
 
     @staticmethod
     async def _enrich_many(db, statuses: List[dict]) -> List[dict]:

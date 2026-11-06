@@ -13,21 +13,54 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 @router.get("/presence/{user_id}")
 async def user_presence(user_id: str, user: dict = Depends(get_current_user)):
-    """Online flag (live WS) + last_seen timestamp."""
+    """Online flag (live WS) + last_seen + busy status."""
     from app.websocket.manager import manager
     db = get_database()
     online = manager.is_online(user_id)
     last_seen = None
+    busy = False
+    busy_message = ""
+    busy_until = None
     if ObjectId.is_valid(user_id):
-        doc = await db.users.find_one({"_id": ObjectId(user_id)}, {"last_seen": 1})
+        doc = await db.users.find_one(
+            {"_id": ObjectId(user_id)},
+            {"last_seen": 1, "preferences": 1},
+        )
         if doc and doc.get("last_seen"):
             ls = doc["last_seen"]
             last_seen = ls.isoformat() if hasattr(ls, "isoformat") else str(ls)
-            if isinstance(last_seen, str) and "T" in last_seen and not last_seen.endswith("Z") and "+" not in last_seen[10:]:
+            if (
+                isinstance(last_seen, str)
+                and "T" in last_seen
+                and not last_seen.endswith("Z")
+                and "+" not in last_seen[10:]
+            ):
                 last_seen = last_seen + "Z"
+        prefs = (doc or {}).get("preferences") or {}
+        busy = bool(prefs.get("busy_enabled"))
+        busy_message = (prefs.get("busy_message") or "") if busy else ""
+        busy_until = prefs.get("busy_until") if busy else None
+        if busy and busy_until:
+            try:
+                exp = datetime.fromisoformat(str(busy_until).replace("Z", "+00:00"))
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if exp <= datetime.now(timezone.utc):
+                    busy = False
+                    busy_message = ""
+                    busy_until = None
+            except Exception:
+                pass
     return success_response(
         "Presence",
-        {"user_id": user_id, "online": online, "last_seen": last_seen},
+        {
+            "user_id": user_id,
+            "online": online,
+            "last_seen": last_seen,
+            "busy": busy,
+            "busy_message": busy_message,
+            "busy_until": busy_until,
+        },
     )
 
 
@@ -61,6 +94,10 @@ class PreferencesUpdate(BaseModel):
     typing_indicator: Optional[bool] = None
     auto_download: Optional[str] = None
     sound: Optional[str] = None
+    busy_enabled: Optional[bool] = None
+    busy_message: Optional[str] = None
+    busy_until: Optional[str] = None
+    busy_scope: Optional[str] = None
 
 
 class PrivacySettingsUpdate(BaseModel):
@@ -143,14 +180,47 @@ async def update_my_preferences(
     # Top-level appearance fields for fast login/me reads
     top_keys = {"theme", "chat_accent", "color_mode", "liquid_glass", "wallpaper"}
     set_ops: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
+    # busy_* may be explicitly cleared (null) when turning busy off
+    nullable_busy = {"busy_message", "busy_until", "busy_scope"}
     for k, v in raw.items():
-        if v is None:
+        if v is None and k not in nullable_busy and k != "busy_enabled":
             continue
-        if k in top_keys:
+        if k in top_keys and v is not None:
             set_ops[k] = v
         set_ops[f"preferences.{k}"] = v
     db = get_database()
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
+    # Fan-out busy / presence note to contacts when busy fields change
+    if any(k.startswith("busy") for k in raw.keys()):
+        try:
+            from app.websocket.manager import manager
+            from app.websocket.router import _peer_ids_for
+            prefs = (await db.users.find_one({"_id": ObjectId(user["id"])}, {"preferences": 1})) or {}
+            p = prefs.get("preferences") or {}
+            enabled = bool(p.get("busy_enabled"))
+            until = p.get("busy_until")
+            # Expired busy = off
+            if enabled and until:
+                try:
+                    exp = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
+                    if exp.tzinfo is None:
+                        exp = exp.replace(tzinfo=timezone.utc)
+                    if exp <= datetime.now(timezone.utc):
+                        enabled = False
+                except Exception:
+                    pass
+            payload = {
+                "t": "presence",
+                "userId": user["id"],
+                "online": True,
+                "busy": enabled,
+                "busyMessage": (p.get("busy_message") or "") if enabled else "",
+                "busyUntil": until if enabled else None,
+            }
+            for pid in await _peer_ids_for(user["id"]):
+                await manager.send_user(str(pid), payload)
+        except Exception:
+            pass
     return success_response("Preferences updated", raw)
 
 

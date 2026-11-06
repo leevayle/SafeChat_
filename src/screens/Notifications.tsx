@@ -27,7 +27,7 @@ type Filter = 'all' | 'requests' | 'calls' | 'system'
 
 type NotifItem = {
   id: string
-  kind: 'request' | 'missed_call' | 'message' | 'system'
+  kind: 'request' | 'missed_call' | 'message' | 'system' | 'premium'
   title: string
   body: string
   when: string
@@ -36,6 +36,7 @@ type NotifItem = {
   contactId?: string
   photo?: string | null
   hue?: [string, string]
+  action?: string
 }
 
 function timeLabel(iso?: string) {
@@ -219,6 +220,24 @@ export function Notifications({
         } as any)
       }
     }
+    // Premium lifecycle (local, once per event)
+    try {
+      const raw = localStorage.getItem('sc_local_notifs')
+      const local: any[] = raw ? JSON.parse(raw) : []
+      for (const n of local) {
+        if (!n?.id) continue
+        out.push({
+          id: n.id,
+          kind: 'premium',
+          title: n.title || 'Premium',
+          body: n.body || '',
+          when: timeLabel(n.iso) || 'Now',
+          iso: n.iso,
+          unread: n.unread !== false && !readIds.has(n.id),
+          action: n.action || 'recharge',
+        })
+      }
+    } catch { /* */ }
     // Lightweight system tips (always available)
     out.push(
       {
@@ -252,7 +271,7 @@ export function Notifications({
     if (filter === 'all') return true
     if (filter === 'requests') return i.kind === 'request'
     if (filter === 'calls') return i.kind === 'missed_call'
-    if (filter === 'system') return i.kind === 'system'
+    if (filter === 'system') return i.kind === 'system' || i.kind === 'premium'
     return true
   })
 
@@ -262,6 +281,7 @@ export function Notifications({
     if (kind === 'request') return UserPlus
     if (kind === 'missed_call') return PhoneMissed
     if (kind === 'message') return MessageCircle
+    if (kind === 'premium') return Sparkles
     return Info
   }
 
@@ -269,6 +289,7 @@ export function Notifications({
     if (kind === 'request') return 'bg-brand-purple/12 text-brand-purple'
     if (kind === 'missed_call') return 'bg-red-50 text-red-500'
     if (kind === 'message') return 'bg-sky-50 text-sky-600'
+    if (kind === 'premium') return 'bg-brand-purple/12 text-brand-purple'
     return 'bg-amber-50 text-amber-600'
   }
 
@@ -357,6 +378,11 @@ export function Notifications({
                         // status like → open my status at that item (then open viewers)
                         onOpenStatus(meIdPlaceholder || me?.id || '', (n as any).statusId)
                         try { sessionStorage.setItem('sc_open_viewers', (n as any).statusId) } catch { /* */ }
+                      } else if (n.kind === 'premium' || n.action === 'recharge') {
+                        try {
+                          window.dispatchEvent(new CustomEvent('sc:open-premium'))
+                        } catch { /* */ }
+                        showToast('Open Settings → Premium to recharge')
                       } else if (n.kind === 'request') onOpenSaveRequests?.()
                       else if (n.kind === 'missed_call') {
                         if (n.contactId && onOpenChat) onOpenChat(n.contactId)
@@ -403,6 +429,11 @@ export function Notifications({
                       <span className="mt-0.5 line-clamp-2 text-[13px] font-semibold text-gray-500">
                         {n.body}
                       </span>
+                      {(n.kind === 'premium' || n.action === 'recharge') && (
+                        <span className="mt-2 inline-flex rounded-full bg-gradient-to-r from-brand-purple to-brand-orange px-3 py-1 text-[11px] font-extrabold text-white">
+                          Recharge Premium
+                        </span>
+                      )}
                     </span>
                   </button>
                 </li>

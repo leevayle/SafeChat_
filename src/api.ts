@@ -19,7 +19,6 @@ export type ApiUser = {
   createdAt?: string
   email?: string | null
   account_role?: string
-  email?: string
   subscriptionPlan?: string
   accountStatus?: string
   verifiedBadge?: boolean
@@ -123,6 +122,47 @@ function accessToken() {
 
 function refreshToken() {
   return localStorage.getItem('sc_refresh') || ''
+}
+
+/** JWT exp (seconds) or 0 if unreadable — does not verify signature. */
+function tokenExpiresAt(token?: string): number {
+  const t = token || accessToken()
+  if (!t || t.split('.').length < 2) return 0
+  try {
+    const payload = JSON.parse(atob(t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
+    return typeof payload.exp === 'number' ? payload.exp : 0
+  } catch {
+    return 0
+  }
+}
+
+/** Refresh if access token missing or expiring within 90s. */
+async function ensureFreshAccess(): Promise<boolean> {
+  if (sessionDead) return false
+  const access = accessToken()
+  const refresh = refreshToken()
+  if (!access && !refresh) return false
+  if (!access && refresh) return tryRefresh()
+  const exp = tokenExpiresAt(access)
+  if (!exp) return true // opaque / non-JWT — let server decide
+  const now = Math.floor(Date.now() / 1000)
+  if (exp - now <= 90) return tryRefresh()
+  return true
+}
+
+/** Public: refresh access token if missing/expiring (used on boot). */
+export async function ensureSessionFresh(): Promise<boolean> {
+  return ensureFreshAccess()
+}
+
+/**
+ * Force a refresh-token rotate (used when WS/API got 401/403 despite a non-expired JWT).
+ * Returns true only when a new access token was stored.
+ */
+export async function forceRefreshSession(): Promise<boolean> {
+  if (sessionDead) return false
+  if (!refreshToken()) return false
+  return tryRefresh()
 }
 
 /** True when an access token is present (does not validate server-side). */
@@ -232,6 +272,7 @@ function mapUser(u: any): ApiUser {
 
 function mapContact(c: any): ApiContact {
   const peerId = String(c.contact_user_id || c.peerId || c.id || '')
+  const ps = c.premium_settings || c.premiumSettings || {}
   return {
     id: peerId,
     entryId: String(c.id || peerId),
@@ -249,11 +290,15 @@ function mapContact(c: any): ApiContact {
     hue: hueFor(peerId || c.username || 'x'),
     createdAt: c.created_at,
     subscriptionPlan: (c.subscription_plan || c.subscriptionPlan || 'pro').replace('free', 'pro'),
-    verifiedBadge: !!(c.verified_badge ?? c.verifiedBadge),
+    verifiedBadge: !!(c.verified_badge ?? c.verifiedBadge ?? ps.verified_badge),
     premium:
       (c.subscription_plan || c.subscriptionPlan) === 'premium' &&
-      (c.verified_badge ?? c.verifiedBadge) !== false,
-  }
+      (c.verified_badge ?? c.verifiedBadge ?? ps.verified_badge) !== false,
+    premiumSettings: ps,
+    busy: !!(c.busy ?? (c.preferences || {}).busy_enabled),
+    busyMessage: c.busy_message || c.busyMessage || (c.preferences || {}).busy_message || '',
+    busyUntil: c.busy_until || c.busyUntil || (c.preferences || {}).busy_until || null,
+  } as ApiContact
 }
 
 function mapMessage(m: any, meId?: string): ApiMsg {
@@ -285,8 +330,10 @@ function mapMessage(m: any, meId?: string): ApiMsg {
     statusReply = { preview: sr[1], time: sr[2] || undefined, statusId: sr[3] || undefined }
     text = sr[4]
   }
+  const clientKey = m.client_key || m.clientKey || m.idempotency_key || undefined
   return {
     id: String(m.id || m._id),
+    clientKey: clientKey ? String(clientKey) : undefined,
     from,
     to: String(m.to || ''),
     text,
@@ -366,6 +413,10 @@ function mapGroup(g: any): any {
   }
 }
 
+export function mapStatusFromWs(s: any): any {
+  return mapStatus(s)
+}
+
 function mapStatus(s: any): any {
   const userId = String(s.owner_user_id || s.userId || '')
   const owner = s.owner || s.user || {}
@@ -387,6 +438,7 @@ function mapStatus(s: any): any {
     expiresAt: s.expires_at || s.expiresAt,
     type: s.status_type || s.type || 'text',
     views: Array.isArray(s.viewer_ids) ? s.viewer_ids : Array.isArray(s.views) ? s.views : [],
+    viewCount: s.view_count ?? s.viewCount ?? (Array.isArray(s.viewer_ids) ? s.viewer_ids.length : Array.isArray(s.views) ? s.views.length : 0),
     isAd: !!(s.is_ad || s.isAd),
     adReach: s.ad_reach || s.adReach || null,
     user: {
@@ -488,7 +540,9 @@ function isSoftReadPath(path: string, method: string) {
     path.includes('/users/search') ||
     path.includes('/users/me') ||
     path.includes('/contact-requests') ||
-    path.includes('/notifications')
+    path.includes('/contacts/requests') ||
+    path.includes('/notifications') ||
+    path.includes('/auth/me')
   )
 }
 
@@ -508,6 +562,10 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
       ;(err as any).status = 401
       throw err
     }
+    // Refresh early so soft polls rarely hit a raw 401 in the network log
+    if (!retried) {
+      await ensureFreshAccess()
+    }
   }
 
   const headers: Record<string, string> = {
@@ -516,8 +574,8 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
   if (!(opts.body instanceof FormData)) {
     headers['Content-Type'] = headers['Content-Type'] || 'application/json'
   }
-  const t = accessToken()
-  if (t) headers.Authorization = `Bearer ${t}`
+  const tkn = accessToken()
+  if (tkn) headers.Authorization = `Bearer ${tkn}`
 
   const res = await fetch(`${BASE}${path}`, { ...opts, headers })
   const body: BackendEnvelope = await res.json().catch(() => ({} as BackendEnvelope))
@@ -713,13 +771,19 @@ export const api = {
             statusPrivacy: data.settings.status_privacy,
             verifiedBadge: data.settings.verified_badge !== false,
             forceReadReceipts: !!data.settings.force_read_receipts,
-            liveTyping: !!data.settings.live_typing,
-            statusAdsEnabled: !!data.settings.status_ads_enabled,
+            // Defaults: live typing ON, status ads ON unless user turned them off
+            liveTyping: data.settings.live_typing !== false,
+            statusAdsEnabled: data.settings.status_ads_enabled !== false,
           }
         : {}),
       accountStatus: data?.account_status || 'active',
       verifiedBadge: data?.subscription_plan === 'premium' && !!(data?.premium_settings?.verified_badge ?? true),
-      premiumSettings: data?.premium_settings || {},
+      premiumSettings: data?.premium_settings || {
+        verified_badge: true,
+        force_read_receipts: false,
+        live_typing: true,
+        status_ads_enabled: true,
+      },
       deactivatedAt: data?.deactivated_at || null,
       scheduledDeletionAt: data?.scheduled_deletion_at || null,
     }
@@ -1228,16 +1292,19 @@ export const api = {
     return {}
   },
   getTyping: async (_contactId: string) => ({ typing: false }),
-  /** Lightweight presence for a user id */
+  /** Lightweight presence for a user id (includes busy message) */
   presence: async (userId: string) => {
     try {
       const data = await req<any>(`/api/v1/users/presence/${encodeURIComponent(userId)}`)
       return {
         online: !!data?.online,
         lastSeen: data?.last_seen || data?.lastSeen || null,
+        busy: !!data?.busy,
+        busyMessage: data?.busy_message || data?.busyMessage || '',
+        busyUntil: data?.busy_until || data?.busyUntil || null,
       }
     } catch {
-      return { online: false, lastSeen: null }
+      return { online: false, lastSeen: null, busy: false, busyMessage: '', busyUntil: null }
     }
   },
   editMessage: async (messageId: string, content: string) => {

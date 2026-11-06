@@ -21,6 +21,7 @@ import {
   type ApiContact,
   type ChatPreview,
   saveStoredUser,
+  mapStatusFromWs,
 } from './api'
 import { playIncomingMessageChime } from './lib/sounds'
 import {
@@ -39,7 +40,6 @@ import {
 import { setCachedMessages, getCachedMessages, clearMessageCache } from './lib/messageCache'
 import { warmPhoto } from './lib/photoCache'
 
-export 
 const LS_OWNER_KEY = 'sc_user_id'
 
 function wipeForeignLocalState() {
@@ -62,6 +62,65 @@ function wipeForeignLocalState() {
     keys.forEach((k) => localStorage.removeItem(k))
   } catch {
     /* ignore */
+  }
+}
+
+/** Local notifications for premium expiring / expired — shown in Notifications tab once. */
+function pushLocalNotif(item: {
+  id: string
+  kind: string
+  title: string
+  body: string
+  action?: string
+}) {
+  try {
+    const raw = localStorage.getItem('sc_local_notifs')
+    const list: any[] = raw ? JSON.parse(raw) : []
+    if (list.some((n) => n.id === item.id)) return // once only
+    const row = {
+      ...item,
+      iso: new Date().toISOString(),
+      unread: true,
+    }
+    const next = [row, ...list].slice(0, 40)
+    localStorage.setItem('sc_local_notifs', JSON.stringify(next))
+    try {
+      window.dispatchEvent(new CustomEvent('sc:local-notif', { detail: row }))
+    } catch { /* */ }
+  } catch { /* */ }
+}
+
+function pushPremiumLifecycleNotifs(
+  prevPlan: string,
+  nextPlan: string,
+  expIso: string | null,
+) {
+  // Expired transition
+  if (prevPlan === 'premium' && nextPlan !== 'premium') {
+    pushLocalNotif({
+      id: `premium-expired-${expIso || 'now'}`,
+      kind: 'premium_expired',
+      title: 'Premium ended',
+      body: 'Your Premium membership has expired. Recharge to keep checkmark, live typing, and more.',
+      action: 'recharge',
+    })
+    return
+  }
+  if (nextPlan !== 'premium' || !expIso) return
+  const exp = Date.parse(expIso)
+  if (!Number.isFinite(exp)) return
+  const msLeft = exp - Date.now()
+  const day = 24 * 60 * 60 * 1000
+  if (msLeft > 0 && msLeft <= day) {
+    // One notification per expiry date
+    const dayKey = new Date(exp).toISOString().slice(0, 10)
+    pushLocalNotif({
+      id: `premium-expiring-${dayKey}`,
+      kind: 'premium_expiring',
+      title: 'Premium ends within 24 hours',
+      body: 'Your Premium membership is about to expire. Recharge to stay Premium.',
+      action: 'recharge',
+    })
   }
 }
 
@@ -373,7 +432,7 @@ const defaultSettings: Settings = {
   liveTyping: true,
   hideLiveTyping: false,
   verifiedBadge: true,
-  statusAdsEnabled: false,
+  statusAdsEnabled: true,
   statusLikeNotif: true,
   busyEnabled: false,
   busyScope: 'everyone',
@@ -420,6 +479,8 @@ type Store = {
   /** Pending incoming save/contact requests (home badge) */
   saveRequestPending: number
   refreshChats: () => Promise<void>
+  /** Pull latest plan/premium flags from server (other-device upgrades). */
+  syncSubscription: () => Promise<void>
   refreshContacts: () => Promise<void>
   toast: string | null
   showToast: (msg: string) => void
@@ -435,6 +496,7 @@ type Store = {
   upsertChatPreview: (preview: Partial<ChatPreview> & { contactId: string }) => void
   typingPeers: Record<string, boolean>
   presenceMap: Record<string, boolean>
+  busyMap: Record<string, { message?: string; until?: string | null }>
   activeConversationId: string | null
   setActiveConversationId: (id: string | null) => void
   login: (phone: string, password: string) => Promise<ApiUser>
@@ -513,6 +575,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [typingPeers, setTypingPeers] = useState<Record<string, boolean>>({})
   /** userId -> online — used by Online filter + avatars (not only contacts list) */
   const [presenceMap, setPresenceMap] = useState<Record<string, boolean>>({})
+  const [busyMap, setBusyMap] = useState<Record<string, { message?: string; until?: string | null }>>({})
   /** Conversation currently open in ChatWindow — inbound messages mark read, no unread bump */
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const activeConvRef = useRef<string | null>(null)
@@ -595,7 +658,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         verifiedBadge: isPremium && ((user as any).verifiedBadge !== false) && ps.verified_badge !== false,
         forceReadReceipts: isPremium && !!(ps.force_read_receipts ?? (s as any)?.forceReadReceipts),
         liveTyping: isPremium && (ps.live_typing !== false) && ((s as any)?.liveTyping !== false),
-        statusAdsEnabled: isPremium && !!(ps.status_ads_enabled ?? (s as any)?.statusAdsEnabled),
+        // Default ON unless the user explicitly turned ads off
+        statusAdsEnabled:
+          isPremium &&
+          (ps.status_ads_enabled !== false) &&
+          ((s as any)?.statusAdsEnabled !== false),
         // Appearance always wins from resolve (server > cache > defaults)
         theme: appearance.theme,
         chatAccent: appearance.chatAccent,
@@ -612,6 +679,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return next
     })
   }, [])
+
+  /** Server is source of truth for Premium — poll + foreground sync (no re-login). */
+  const syncSubscription = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
+    try {
+      const { user, settings: serverSettings } = await api.me()
+      if (isSessionDead()) return
+      const prevPlan = (settingsRef.current as any)?.subscriptionPlan || meRef.current?.subscriptionPlan || 'pro'
+      const nextPlan = ((user as any).subscriptionPlan || (serverSettings as any)?.subscriptionPlan || 'pro')
+        .toString()
+        .replace('free', 'pro')
+      applyUser(user, serverSettings as Record<string, unknown>)
+      // Premium lifecycle → Notifications tab only (no toast spam)
+      try {
+        const expIso =
+          (user as any).premiumExpiresAt ||
+          (serverSettings as any)?.premiumExpiresAt ||
+          null
+        pushPremiumLifecycleNotifs(prevPlan, nextPlan, expIso)
+      } catch { /* */ }
+    } catch {
+      /* soft — keep last known plan */
+    }
+  }, [applyUser])
 
   const wipeSession = useCallback(() => {
     try {
@@ -763,6 +854,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         return next
       })
+      // Seed busy map so Online is replaced by custom message without waiting for WS
+      setBusyMap((prev) => {
+        const next = { ...prev }
+        for (const ct of c) {
+          const id = String(ct.id || ct.peerId || '')
+          if (!id) continue
+          if ((ct as any).busy && (ct as any).busyMessage) {
+            next[id] = {
+              message: (ct as any).busyMessage || 'busy',
+              until: (ct as any).busyUntil || null,
+            }
+          }
+        }
+        return next
+      })
       setContacts((prev) => {
         if (prev.length === c.length) {
           let same = true
@@ -774,7 +880,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               a.name !== b.name ||
               a.photo !== b.photo ||
               a.phone_number !== b.phone_number ||
-              a.username !== b.username
+              a.username !== b.username ||
+              a.busy !== b.busy ||
+              a.busyMessage !== b.busyMessage
             ) {
               same = false
               break
@@ -1139,8 +1247,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       setReady(true)
 
-      // Prove the token with the first real data call (chats), not a separate /auth/me
-      // Soft /auth/me only once, in parallel with ordered hydrate, for profile freshness
+      // Ensure access token is valid/fresh before any protected hydrate calls
+      try {
+        const { ensureSessionFresh } = await import('./api') as any
+        if (typeof ensureSessionFresh === 'function') {
+          await ensureSessionFresh()
+        }
+      } catch { /* */ }
+
+      // /auth/me + ordered hydrate — boot is authoritative: hard 401 means re-login
       void (async () => {
         try {
           const { user, settings: s } = await api.me()
@@ -1151,8 +1266,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           applyUser(user, s as Record<string, unknown>)
           setSessionOk(true)
         } catch (e: any) {
-          // Soft /me failure must not kick the user out mid-session
-          if ((e as any)?.status === 401 && !(e as any)?.soft) {
+          // On cold boot a 401 (even "soft") means tokens are dead — send to login
+          if ((e as any)?.status === 401) {
             wipeSession()
           }
         }
@@ -1185,6 +1300,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       clearInterval(id)
     }
   }, [sessionOk, me, refreshChats, refreshStatus])
+
+  // Subscription sync — industry pattern: server truth on interval + app foreground
+  // Catches upgrades/expiry done on another device without logout
+  useEffect(() => {
+    if (!sessionOk || !me || !hasAccessToken() || isSessionDead()) return
+    let alive = true
+    const run = () => {
+      if (!alive || isSessionDead()) return
+      void syncSubscription()
+    }
+    // First check shortly after session is ready (other device may have upgraded)
+    const t0 = window.setTimeout(run, 4000)
+    const id = window.setInterval(run, 3 * 60 * 1000) // every 3 minutes
+    const onVis = () => {
+      if (document.visibilityState === 'visible') run()
+    }
+    const onFocus = () => run()
+    document.addEventListener('visibilitychange', onVis)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      alive = false
+      clearTimeout(t0)
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', onVis)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [sessionOk, me?.id, syncSubscription])
 
   // Lighter poll for save-request badge
   useEffect(() => {
@@ -1226,32 +1368,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         },
         onMessage: (cid, m) => {
           if (!m?.id) return
+          const mid = String(m.id)
+          const ck = String(m.client_key || m.clientKey || mid)
           const mine = String(m.from) === String(myId)
-          // Recipient: ack delivered BEFORE UI render — fire and forget
-          if (!mine) {
-            void api.markDelivered(m.id).catch(() => {})
-          }
-          // Keep thread cache in sync so opening inbox shows the message
-          try {
-            const prev = getCachedMessages(cid) || []
-            if (!prev.some((x) => x.id === m.id || (m.client_key && x.clientKey === m.client_key))) {
-              const mapped: any = {
-                id: String(m.id),
-                clientKey: m.client_key || m.clientKey || m.id,
-                from: String(m.from || ''),
-                text: m.text || '',
-                time: m.time || new Date().toISOString(),
-                timeLabel: '',
-                mine,
-                state: (m.state as any) || 'sent',
-                image: m.image || null,
-                replyToId: m.reply_to_message_id || m.replyToId || null,
-                replyToText: m.reply_to_text || m.replyToText || null,
-                reactions: m.reactions || [],
-              }
-              setCachedMessages(cid, [...prev, mapped])
-            }
-          } catch { /* */ }
+
+          // 1) Build the full message object once (time-ordered, complete fields)
           let previewText = m.text || (m.image ? '📷 Photo' : '')
           const sr = String(previewText).match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
           if (sr) {
@@ -1259,51 +1380,120 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             previewText = body ? `Status reply: ${body}` : 'Status reply'
           }
           const iso = m.time || new Date().toISOString()
-          const timeLabel = new Date(iso).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: false,
-          })
-          // Patch home preview by conversationId (stable contactId from existing row)
+          let timeLabel = ''
+          try {
+            timeLabel = new Date(iso).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            })
+          } catch {
+            timeLabel = ''
+          }
+          const mapped: any = {
+            id: mid,
+            clientKey: ck,
+            from: String(m.from || ''),
+            text: m.text || '',
+            time: iso,
+            timeLabel,
+            mine,
+            state: (m.state as any) || 'sent',
+            image: m.image || null,
+            replyToId: m.reply_to_message_id || m.replyToId || null,
+            replyToText: m.reply_to_text || m.replyToText || null,
+            reactions: m.reactions || [],
+          }
+
+          // 2) Cache first — UI only sees the message after cache is updated
+          try {
+            const prev = getCachedMessages(cid) || []
+            const exists = prev.some(
+              (x: any) => x.id === mid || x.clientKey === ck || (x.clientKey && x.clientKey === mid),
+            )
+            if (!exists) {
+              // Insert by timestamp so order is stable when opening the thread
+              const next = [...prev, mapped].sort(
+                (a: any, b: any) => (Date.parse(a.time) || 0) - (Date.parse(b.time) || 0),
+              )
+              setCachedMessages(cid, next)
+            } else {
+              // In-place upgrade only — never append a second copy
+              setCachedMessages(
+                cid,
+                prev.map((x: any) =>
+                  x.id === mid || x.clientKey === ck || x.clientKey === mid
+                    ? { ...x, ...mapped, clientKey: x.clientKey || ck }
+                    : x,
+                ),
+              )
+            }
+          } catch { /* */ }
+
+          // 3) Delivery / read side-effects (no UI)
+          if (!mine) {
+            void api.markDelivered(mid).catch(() => {})
+          }
+          const openNow = !!(activeConvRef.current && activeConvRef.current === cid)
+          if (openNow && !mine) {
+            void api.markRead(cid).catch(() => {})
+            void import('./realtime').then(({ wsReceipt }) => {
+              try { wsReceipt({ conversationId: cid, messageId: mid, state: 'read' }) } catch { /* */ }
+            }).catch(() => {})
+          }
+
+          // 4) Home feed — one atomic update with full row details
+          const already = seenInboundRef.current.has(mid)
+          if (!mine) seenInboundRef.current.add(mid)
           setChats((prev) => {
             const idx = prev.findIndex((c) => c.conversationId === cid)
-            let nextList
+            let nextList: typeof prev
             if (idx >= 0) {
               const cur = prev[idx]
-              const mid = String(m.id)
-              const already = seenInboundRef.current.has(mid)
-              if (!mine) seenInboundRef.current.add(mid)
-              const openNow = activeConvRef.current && activeConvRef.current === cid
-              if (openNow && !mine) {
-                // Already in this chat — read immediately, never bump home badge
-                void api.markRead(cid).catch(() => {})
-                void import('./realtime').then(({ wsReceipt }) => {
-                  try { wsReceipt({ conversationId: cid, messageId: mid, state: 'read' }) } catch { /* */ }
-                }).catch(() => {})
+              // Resolve display name from contacts if the row is sparse
+              let name = cur.name
+              let photo = cur.photo
+              let hue = cur.hue
+              if (!name && !mine) {
+                const ct = (contactsRef.current || []).find(
+                  (x: any) => x.id === cur.contactId || x.peerId === cur.contactId || x.id === m.from,
+                )
+                if (ct) {
+                  name = ct.savedName || ct.name || name
+                  photo = photo || ct.photo
+                  hue = hue || ct.hue
+                }
               }
               const updated = {
                 ...cur,
+                name,
+                photo,
+                hue,
                 last: previewText,
                 time: timeLabel,
                 iso,
                 mine,
                 state: mine ? ((m.state as any) || 'sent') : cur.state,
                 unread: mine || openNow ? 0 : already ? (cur.unread || 0) : (cur.unread || 0) + 1,
+                conversationId: cid,
               }
               nextList = [...prev]
               nextList.splice(idx, 1)
               nextList = [updated, ...nextList]
             } else if (mine) {
-              // Own send: home row should already exist via upsertChatPreview — never create with self as contactId
+              // Own send: home row should already exist via upsertChatPreview
               return prev
             } else {
-              const openNow = activeConvRef.current && activeConvRef.current === cid
-              if (openNow) void api.markRead(cid).catch(() => {})
+              const ct = (contactsRef.current || []).find(
+                (x: any) => x.id === m.from || x.peerId === m.from,
+              )
               nextList = [
                 {
                   contactId: String(m.from),
                   conversationId: cid,
-                  name: undefined,
+                  name: ct?.savedName || ct?.name,
+                  photo: ct?.photo ?? null,
+                  hue: ct?.hue,
                   last: previewText,
                   time: timeLabel,
                   iso,
@@ -1317,11 +1507,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             void saveCachedChats(nextList)
             return nextList
           })
+
+          // 5) Notify open ChatWindow once — it merges by id/clientKey (no double bubble)
           try {
-            window.dispatchEvent(new CustomEvent('sc:rt-msg', { detail: { cid, m, mine } }))
-          } catch {
-            /* */
-          }
+            window.dispatchEvent(
+              new CustomEvent('sc:rt-msg', {
+                detail: { cid, m: { ...m, id: mid, client_key: ck, clientKey: ck, time: iso }, mine },
+              }),
+            )
+          } catch { /* */ }
         },
         onReceipt: (cid, messageId, s) => {
           const state =
@@ -1350,6 +1544,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
         },
         onAck: (payload) => {
+          // Server logged the message — flip home-row ticks pending → sent immediately
+          const cid = (payload as any)?.c as string | undefined
+          const st = ((payload as any)?.s as string) || 'sent'
+          if (cid && (payload as any)?.ok !== false) {
+            setChats((prev) => {
+              const idx = prev.findIndex((c) => c.conversationId === cid)
+              if (idx < 0) return prev
+              const row = prev[idx]
+              if (!row.mine) return prev
+              const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 }
+              const nextRank = rank[st] ?? 1
+              const curRank = rank[row.state || 'pending'] ?? 0
+              if (nextRank <= curRank) return prev
+              const next = [...prev]
+              next[idx] = { ...row, state: st as any }
+              void saveCachedChats(next)
+              return next
+            })
+          }
           try {
             window.dispatchEvent(new CustomEvent('sc:rt-ack', { detail: payload }))
           } catch {
@@ -1403,15 +1616,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             /* */
           }
         },
-        onPresence: (peerId, online, lastSeen) => {
+        onPresence: (peerId, online, lastSeen, extra?: any) => {
           setPresenceMap((prev) => {
             if (prev[peerId] === !!online) return prev
             return { ...prev, [peerId]: !!online }
           })
+          if (extra && ('busy' in extra || extra.busyMessage)) {
+            setBusyMap((prev) => ({
+              ...prev,
+              [peerId]: extra.busy
+                ? { message: extra.busyMessage || 'busy', until: extra.busyUntil || null }
+                : { message: '', until: null },
+            }))
+          }
           setContacts((prev) =>
             prev.map((c) =>
               c.id === peerId || c.peerId === peerId
-                ? { ...c, online, lastSeen: lastSeen ?? c.lastSeen }
+                ? {
+                    ...c,
+                    online,
+                    lastSeen: lastSeen ?? c.lastSeen,
+                    busy: !!(extra && extra.busy),
+                    busyMessage: extra?.busy ? (extra.busyMessage || 'busy') : '',
+                  }
                 : c,
             ),
           )
@@ -1617,6 +1844,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   contactsRef.current = contacts
 
   // Device preferences are local-only. Never send them to the profile endpoint.
+  // Busy fields are draft-only until the user taps "Update busy status".
   const setSetting = useCallback(<K extends keyof Settings>(k: K, v: Settings[K]) => {
     const next = { ...settings, [k]: v }
     setSettings(next)
@@ -1641,6 +1869,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore storage quota / private browsing errors */
     }
+    // Busy draft keys: local only — no API call / toast (button handles save)
+    const busyDraftKeys = new Set([
+      'busyEnabled',
+      'busyMessage',
+      'busyUntil',
+      'busyScope',
+      'busyDurationMin',
+    ])
+    if (busyDraftKeys.has(k as string)) {
+      return
+    }
     const serverKey: Record<string, string> = {
       theme: 'theme',
       chatAccent: 'chat_accent',
@@ -1663,15 +1902,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       hideLiveTyping: 'hide_live_typing',
     }
     const sk = serverKey[k as string]
+    // Background preference sync — no toast (only button-driven actions toast)
     if (sk && hasAccessToken() && !isSessionDead()) {
-      void api.updatePreferences({ [sk]: v })
-        .then(() => showToast('Setting saved'))
-        .catch(() => showToast('Could not save setting'))
-    } else {
-      // Local-only (or offline) — still confirm UI applied
-      showToast('Setting updated')
+      void api.updatePreferences({ [sk]: v }).catch(() => { /* quiet */ })
     }
-  }, [settings, showToast])
+  }, [settings])
 
   // Persist profile fields with one PATCH and update the local session cache;
   // profile saves must not call /auth/me again.
@@ -1724,13 +1959,45 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
 
-  // Live status view counts for the owner
+  // Live status: new posts, deletes, views/likes — full WS maximization
   useEffect(() => {
+    const mapIncoming = (raw: any) => {
+      try {
+        return mapStatusFromWs(raw)
+      } catch {
+        const owner = raw.owner || {}
+        const uid = String(raw.owner_user_id || owner.id || raw.userId || '')
+        const media = raw.media_attachments || raw.media || []
+        const img = media.find((m: any) => (m.type || '').startsWith('image') || m.url)?.url || raw.image
+        const vid = media.find((m: any) => (m.type || '').startsWith('video'))?.url || raw.video
+        return {
+          id: String(raw.id || raw._id),
+          userId: uid,
+          text: raw.content || raw.text || '',
+          image: img || null,
+          video: vid || null,
+          type: raw.status_type || raw.type || (vid ? 'video' : img ? 'image' : 'text'),
+          background: raw.background || 'solid_1',
+          createdAt: raw.created_at || raw.createdAt || new Date().toISOString(),
+          expiresAt: raw.expires_at || raw.expiresAt || null,
+          views: raw.viewer_ids || raw.views || [],
+          viewCount: raw.view_count ?? (raw.viewer_ids || []).length ?? 0,
+          user: {
+            id: uid,
+            name: owner.display_name || owner.name || raw.owner_display_name || 'Contact',
+            username: owner.username || '',
+            photo: owner.profile_photo ?? owner.photo ?? null,
+          },
+        }
+      }
+    }
+
     const onView = (ev: Event) => {
       const d = (ev as CustomEvent).detail as {
         statusId?: string
         viewCount?: number
         viewer?: any
+        likeOnly?: boolean
       }
       if (!d?.statusId) return
       patchStatusList((list) =>
@@ -1751,15 +2018,77 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           try {
             const { loadCachedViewers, saveCachedViewers } = await import('./lib/appCache')
             const prev = (await loadCachedViewers<any>(d.statusId!)) || []
-            if (!prev.some((v: any) => v.viewer_id === d.viewer.viewer_id)) {
-              await saveCachedViewers(d.statusId!, [d.viewer, ...prev])
+            const idx = prev.findIndex((v: any) => v.viewer_id === d.viewer.viewer_id || v.id === d.viewer.viewer_id)
+            let next: any[]
+            if (idx >= 0) {
+              // Update liked flag / fields in place (do not drop cache)
+              next = prev.map((v, i) =>
+                i === idx
+                  ? {
+                      ...v,
+                      ...d.viewer,
+                      liked: d.viewer.liked ?? v.liked,
+                      name: d.viewer.display_name || d.viewer.name || v.name,
+                      photo: d.viewer.profile_photo ?? d.viewer.photo ?? v.photo,
+                    }
+                  : v,
+              )
+            } else {
+              next = [
+                {
+                  ...d.viewer,
+                  id: d.viewer.viewer_id,
+                  name: d.viewer.display_name || d.viewer.username || 'User',
+                  photo: d.viewer.profile_photo || null,
+                  liked: !!d.viewer.liked,
+                },
+                ...prev,
+              ]
             }
+            // Likers first
+            next.sort((a, b) => Number(!!b.liked) - Number(!!a.liked))
+            await saveCachedViewers(d.statusId!, next)
           } catch { /* */ }
         })()
       }
     }
+
+    const onNew = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as { status?: any }
+      if (!d?.status) return
+      const mapped = mapIncoming(d.status)
+      if (!mapped?.id) return
+      patchStatusList((list) => {
+        if (list.some((s: any) => s.id === mapped.id)) return list
+        // Drop matching optimistic local row
+        const withoutLocal = list.filter((s: any) => {
+          if (!String(s.id).startsWith('local-status-')) return true
+          return !(
+            s.userId === mapped.userId &&
+            (s.text || '') === (mapped.text || '') &&
+            !!s.image === !!mapped.image
+          )
+        })
+        return [...withoutLocal, mapped].sort(
+          (a: any, b: any) => (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0),
+        )
+      })
+    }
+
+    const onDel = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as { statusId?: string }
+      if (!d?.statusId) return
+      patchStatusList((list) => list.filter((s: any) => s.id !== d.statusId))
+    }
+
     window.addEventListener('sc:rt-status-view', onView)
-    return () => window.removeEventListener('sc:rt-status-view', onView)
+    window.addEventListener('sc:rt-status-new', onNew)
+    window.addEventListener('sc:rt-status-delete', onDel)
+    return () => {
+      window.removeEventListener('sc:rt-status-view', onView)
+      window.removeEventListener('sc:rt-status-new', onNew)
+      window.removeEventListener('sc:rt-status-delete', onDel)
+    }
   }, [patchStatusList])
 
   const value = useMemo(
@@ -1775,6 +2104,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       chats,
       typingPeers,
       presenceMap,
+      busyMap,
       activeConversationId,
       setActiveConversationId,
       groups,
@@ -1782,6 +2112,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       calls,
       saveRequestPending,
       refreshChats,
+      syncSubscription,
       refreshContacts,
       toast,
       showToast,
@@ -1812,6 +2143,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       chats,
       typingPeers,
       presenceMap,
+      busyMap,
       activeConversationId,
       setActiveConversationId,
       groups,
@@ -1821,6 +2153,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setSetting,
       saveProfile,
       refreshChats,
+      syncSubscription,
       refreshContacts,
       toast,
       showToast,

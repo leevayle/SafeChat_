@@ -145,7 +145,7 @@ export function ChatsHome({
       const contact = contactMap.get(s.userId)
       byUser.set(s.userId, {
         id: s.userId,
-        name: contact?.name || s.user?.name || 'Contact',
+        name: (contact as any)?.savedName || contact?.name || s.user?.name || 'Contact',
         username: contact?.username || s.user?.username || '',
         photo: contact?.photo ?? s.user?.photo ?? null,
         hue: contact?.hue || s.user?.hue || (['#7B2CBF', '#6389EB'] as [string, string]),
