@@ -14,11 +14,14 @@ import {
   Headphones,
   Clock,
   RefreshCw,
+  Lock,
 } from 'lucide-react'
 import { Wordmark } from '../components/Logo'
 import { Avatar } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
 import { ChatsHomeSkeleton } from '../components/ChatsHomeSkeleton'
+import { EmptyState } from '../components/EmptyState'
+import { PinPad } from '../components/PinPad'
 import { useStore } from '../store'
 import { api } from '../api'
 
@@ -55,6 +58,12 @@ export function ChatsHome({
   const [searching, setSearching] = useState(false)
   const [q, setQ] = useState('')
   const [menu, setMenu] = useState(false)
+  const [chatsLocked, setChatsLocked] = useState(() => {
+    try { return localStorage.getItem('sc_chats_locked') === '1' } catch { return false }
+  })
+  const [lockUi, setLockUi] = useState<'none' | 'set' | 'confirm' | 'unlock'>('none')
+  const [pendingPin, setPendingPin] = useState('')
+
   const pendingCount = saveRequestPending
   const showSkeleton = !listsReady
   /** Rows that already entered - receipt/state updates must not re-animate the whole row */
@@ -232,6 +241,27 @@ export function ChatsHome({
                   { label: 'Save requests', fn: onSaveRequests, Icon: UserRoundPlus, badge: pendingCount },
                   { label: 'Notifications', fn: onNotifications, Icon: BellRing, badge: systemNotifCount },
                   {
+                    label: chatsLocked ? 'Unlock chats' : 'Lock chats',
+                    fn: () => {
+                      setMenu(false)
+                      try {
+                        const has = !!localStorage.getItem('sc_chat_lock_pin')
+                        if (chatsLocked) {
+                          setLockUi('unlock')
+                        } else if (!has) {
+                          setLockUi('set')
+                        } else {
+                          try { localStorage.setItem('sc_chats_locked', '1') } catch { /* */ }
+                          setChatsLocked(true)
+                          showToast('Chats locked')
+                        }
+                      } catch {
+                        setLockUi('set')
+                      }
+                    },
+                    Icon: Lock,
+                  },
+                  {
                     label: 'Refresh',
                     fn: () => {
                       showToast('Refreshing…')
@@ -297,6 +327,85 @@ export function ChatsHome({
         )}
       </AnimatePresence>
 
+
+      {lockUi !== 'none' && (
+        <div className="absolute inset-0 z-[60] bg-white ">
+          <PinPad
+            title={
+              lockUi === 'set'
+                ? 'Create PIN'
+                : lockUi === 'confirm'
+                  ? 'Confirm PIN'
+                  : 'Chats locked'
+            }
+            subtitle={
+              lockUi === 'set'
+                ? 'Choose a 4-digit PIN to lock your chat list'
+                : lockUi === 'confirm'
+                  ? 'Enter the same PIN again'
+                  : 'Enter your PIN to unlock chats'
+            }
+            mode={lockUi === 'unlock' ? 'unlock' : 'set'}
+            onCancel={() => {
+              setLockUi('none')
+              setPendingPin('')
+            }}
+            onComplete={(pin) => {
+              if (lockUi === 'set') {
+                setPendingPin(pin)
+                setLockUi('confirm')
+                return true
+              }
+              if (lockUi === 'confirm') {
+                if (pin !== pendingPin) {
+                  setPendingPin('')
+                  setLockUi('set')
+                  showToast('PINs did not match')
+                  return false
+                }
+                try {
+                  localStorage.setItem('sc_chat_lock_pin', pin)
+                  localStorage.setItem('sc_chats_locked', '1')
+                } catch { /* */ }
+                setChatsLocked(true)
+                setLockUi('none')
+                setPendingPin('')
+                showToast('Chat lock enabled')
+                return true
+              }
+              // unlock
+              let stored = ''
+              try { stored = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+              if (pin !== stored) return false
+              try { localStorage.setItem('sc_chats_locked', '0') } catch { /* */ }
+              setChatsLocked(false)
+              setLockUi('none')
+              showToast('Chats unlocked')
+              return true
+            }}
+          />
+        </div>
+      )}
+
+      {chatsLocked && lockUi === 'none' ? (
+        <div className="absolute inset-0 z-[55] bg-white ">
+          <PinPad
+            title="Chats locked"
+            subtitle="Enter your PIN to open your inbox"
+            mode="unlock"
+            onComplete={(pin) => {
+              let stored = ''
+              try { stored = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+              if (pin !== stored) return false
+              try { localStorage.setItem('sc_chats_locked', '0') } catch { /* */ }
+              setChatsLocked(false)
+              showToast('Chats unlocked')
+              return true
+            }}
+          />
+        </div>
+      ) : null}
+
       <div className="min-h-0 flex-1 overflow-y-auto pb-24 ">
         {showSkeleton ? (
           <ChatsHomeSkeleton />
@@ -346,9 +455,28 @@ export function ChatsHome({
 
             <ul className="px-2">
               {list.length === 0 && (
-                <p className="px-4 py-12 text-center font-bold text-gray-400">
-                  No chats yet. Tap + to start one now!
-                </p>
+                <div className="flex min-h-[calc(100vh-16rem)] flex-col items-center justify-center">
+                  <EmptyState
+                    title={
+                      filter === 'Unread'
+                        ? 'No unread chats'
+                        : filter === 'Online'
+                          ? 'No one is online'
+                          : chats.length === 0
+                            ? 'No chats yet'
+                            : 'Nothing here'
+                    }
+                    subtitle={
+                      filter === 'Unread'
+                        ? 'You’re all caught up, new messages will show under Unread.'
+                        : filter === 'Online'
+                          ? 'None of your contacts are online right now. Check back later.'
+                          : chats.length === 0
+                            ? 'When you and a friend save each other, conversations show up here. Tap + to start.'
+                            : 'Try a different filter to see more chats.'
+                    }
+                  />
+                </div>
               )}
               {list.map((c, i) => {
                 const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })

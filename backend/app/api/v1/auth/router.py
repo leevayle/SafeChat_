@@ -29,6 +29,35 @@ async def check_username(username: str):
     return success_response("Username check", {"available": exists is None})
 
 
+@router.get("/phone/check")
+async def check_phone(phone: str):
+    """Public: whether a phone number is free to register."""
+    import re
+    from urllib.parse import unquote
+
+    db = get_database()
+    raw = unquote(phone or "").strip()
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) < 7:
+        return success_response("Phone check", {"available": False, "reason": "invalid"})
+    variants = list(
+        dict.fromkeys(
+            [
+                raw if raw.startswith("+") else f"+{digits}",
+                f"+{digits}",
+                digits,
+                f"+254{digits.lstrip('0')}" if not digits.startswith("254") else f"+{digits}",
+                f"254{digits.lstrip('0')}" if not digits.startswith("254") else digits,
+            ]
+        )
+    )
+    exists = await db.users.find_one(
+        {"$or": [{"phone_number": {"$in": variants}}, {"phone": {"$in": variants}}]},
+        {"_id": 1},
+    )
+    return success_response("Phone check", {"available": exists is None})
+
+
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest):
     # Let AppException bubble to global handler so status codes are correct

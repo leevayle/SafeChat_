@@ -25,6 +25,32 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def _print_ready_banner() -> None:
+    """Short colored ready banner (text + SafeChat. only)."""
+    P = "\033[38;2;123;44;191m"   # purple
+    B = "\033[38;2;99;137;235m"    # blue
+    O = "\033[38;2;245;158;11m"    # orange
+    R = "\033[0m"
+    api = getattr(settings, "API_V1_PREFIX", "/api/v1")
+    env = getattr(settings, "APP_ENV", "development")
+    lines = [
+        "",
+        f"{P}  ╔══════════════════════════════════════════╗{R}",
+        f"{P}  ║{R}  {B}SafeChat{O}.{R}  is ready                      {P}║{R}",
+        f"{P}  ║{R}  secure · realtime · yours                {P}║{R}",
+        f"{P}  ╠══════════════════════════════════════════╣{R}",
+        f"{P}  ║{R}  {B}::{R} Mongo connected                       {P}║{R}",
+        f"{P}  ║{R}  {B}::{R} WebSocket online                      {P}║{R}",
+        f"{P}  ║{R}  {B}::{R} API {api:<32}{P}║{R}",
+        f"{P}  ╚══════════════════════════════════════════╝{R}",
+        f"  {O}->{R}  listening · env={env}",
+        "",
+    ]
+    print("\n".join(lines), flush=True)
+
+
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Boot · starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
@@ -33,6 +59,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Boot · MongoDB failed: %s", e)
         raise
+    try:
+        _print_ready_banner()
+    except Exception:
+        pass
     logger.info("Boot · server ready")
     yield
     logger.info("Shutdown · closing MongoDB…")

@@ -22,7 +22,8 @@ PLANS = {
 
 class StkRequest(BaseModel):
     phone: str = Field(min_length=9, max_length=20)
-    plan: str = Field(default="monthly")
+    plan: str = Field(default="weekly")
+    gift_username: str | None = None
 
 
 def _normalize_phone(phone: str) -> str:
@@ -37,7 +38,7 @@ def _normalize_phone(phone: str) -> str:
 
 @router.post("/mpesa/stk")
 async def mpesa_stk(body: StkRequest, user: dict = Depends(get_current_user)):
-    plan = (body.plan or "monthly").lower()
+    plan = (body.plan or "weekly").lower()
     if plan not in PLANS:
         raise ValidationError("Invalid plan")
     phone = _normalize_phone(body.phone)
@@ -46,9 +47,18 @@ async def mpesa_stk(body: StkRequest, user: dict = Depends(get_current_user)):
     merchant_id = f"ws_MR_{uuid.uuid4().hex[:12]}"
     db = get_database()
     now = datetime.now(timezone.utc)
+    gift_user_id = None
+    gift_username = (body.gift_username or "").strip().lstrip("@").lower()
+    if gift_username:
+        gift = await db.users.find_one({"username": gift_username}, {"_id": 1, "username": 1})
+        if not gift:
+            raise ValidationError("Gift recipient not found")
+        gift_user_id = str(gift["_id"])
     await db.payments.insert_one(
         {
             "user_id": user["id"],
+            "beneficiary_user_id": gift_user_id or user["id"],
+            "gift_username": gift_username or None,
             "provider": "mpesa",
             "plan": plan,
             "amount": amount,
@@ -60,9 +70,15 @@ async def mpesa_stk(body: StkRequest, user: dict = Depends(get_current_user)):
             "updated_at": now,
         }
     )
-    # Production: call Safaricom Daraja STK push here with MPESA_* env credentials.
-    # Dev/demo: auto-complete after status poll (see status endpoint).
-    logger.info("STK push queued plan=%s amount=%s phone=%s checkout=%s", plan, amount, phone, checkout_id)
+    # Production: call Safaricom Daraja STK push here with amount + phone.
+    logger.info(
+        "STK push queued plan=%s amount=%s phone=%s checkout=%s gift=%s",
+        plan,
+        amount,
+        phone,
+        checkout_id,
+        gift_username or "-",
+    )
     return success_response(
         "STK push sent",
         {
@@ -82,7 +98,7 @@ async def mpesa_status(checkout_request_id: str, user: dict = Depends(get_curren
     )
     if not row:
         raise ValidationError("Payment not found")
-    # Demo behavior: mark paid after ~8s so the UI can complete without Daraja keys.
+    # Demo behavior: mark paid after ~3s without Daraja keys.
     # Replace with real Safaricom callback / query in production.
     now = datetime.now(timezone.utc)
     created = row.get("created_at") or now
@@ -90,21 +106,25 @@ async def mpesa_status(checkout_request_id: str, user: dict = Depends(get_curren
         created = created.replace(tzinfo=timezone.utc)
     age = (now - created).total_seconds()
     paid = row.get("status") == "paid"
-    if not paid and age >= 8:
-        plan = row.get("plan") or "monthly"
-        days = PLANS.get(plan, PLANS["monthly"])["days"]
+    if not paid and age >= 3:
+        plan = row.get("plan") or "weekly"
+        days = PLANS.get(plan, PLANS["weekly"])["days"]
         expires = now + timedelta(days=days)
         await db.payments.update_one(
             {"_id": row["_id"]},
             {"$set": {"status": "paid", "updated_at": now, "paid_at": now}},
         )
+        beneficiary = row.get("beneficiary_user_id") or user["id"]
         await db.users.update_one(
-            {"_id": ObjectId(user["id"])},
+            {"_id": ObjectId(str(beneficiary))},
             {
                 "$set": {
                     "subscription_plan": "premium",
                     "premium_expires_at": expires,
                     "updated_at": now,
+                    "premium_settings.verified_badge": True,
+                    "premium_settings.live_typing": True,
+                    "premium_settings.status_ads_enabled": True,
                 }
             },
         )

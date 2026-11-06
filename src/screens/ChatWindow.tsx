@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent } from
 import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
+import { NotesBoard } from '../components/NotesBoard'
+import { EmptyState } from '../components/EmptyState'
 import { api, hasAccessToken, type ApiMsg } from '../api'
 import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
 import { isRealtimeOpen, wsSendMessage, wsReceipt, wsLiveTyping, wsTyping } from '../realtime'
@@ -270,7 +272,7 @@ const MessageBubble = memo(function MessageBubble({
         {m.image && (
           <button
             type="button"
-            className="block w-full overflow-hidden rounded-2xl"
+            className={`block w-full overflow-hidden ${mine ? 'rounded-2xl rounded-br-sm' : 'rounded-2xl rounded-bl-sm'}`}
             onClick={(e) => {
               e.stopPropagation()
               onOpenImage?.(mediaUrl(m.image))
@@ -279,7 +281,7 @@ const MessageBubble = memo(function MessageBubble({
             <img
               src={mediaUrl(m.image)}
               alt=""
-              className="sc-msg-image max-h-60 w-full bg-transparent object-contain rounded-2xl"
+              className={`sc-msg-image max-h-60 w-full bg-transparent object-contain ${mine ? 'rounded-2xl rounded-br-sm' : 'rounded-2xl rounded-bl-sm'}`}
               loading="lazy"
             />
           </button>
@@ -368,6 +370,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         ch.conversationId === contactId,
     ) || null
   const peerId = chatPreview?.contactId || contactId
+  const isSelfChat = !!(me?.id && (peerId === me.id || contactId === me.id))
   const contactHit = contacts.find((x) => x.id === peerId || x.peerId === peerId)
   // Prefer contact book photo, fall back to chat-list photo (never force null)
   const c = contactHit
@@ -512,8 +515,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       return fromList
     }
 
-    const username = ((c as any).username || '').replace(/^@/, '').trim()
     const peer = peerId || contactId
+    const isSelf = !!me?.id && peer === me.id
+    let username = ((c as any).username || '').replace(/^@/, '').trim()
+    if (!username && isSelf) username = (me?.username || '').replace(/^@/, '').trim()
     if (!username && !peer) {
       showToast('Could not open chat - contact is missing')
       return null
@@ -804,7 +809,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       }
       // Delivered was already fired in the store handler before this event.
       setMsgs((prev) => {
-        // Already have this server id or clientKey — never append a second bubble
+        // Already have this server id or clientKey, never append a second bubble
         const exists = prev.some(
           (x) =>
             x.id === incoming.id ||
@@ -1532,7 +1537,18 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }, [contactId])
 
-  return (
+    if (isSelfChat) {
+    return (
+      <NotesBoard
+        userId={me?.id || 'me'}
+        displayName={me?.name || c.name || 'You'}
+        username={me?.username || c.username}
+        onBack={onBack}
+      />
+    )
+  }
+
+return (
     <div className="flex h-full flex-col" style={{ background: WALLPAPERS[settings.wallpaper] || '#F3F4F6' }}>
       <header className="z-10 flex shrink-0 items-center gap-1 border-b border-white/40 bg-white/80 backdrop-blur-md px-2 pb-3.5 pt-[max(1.5rem,calc(env(safe-area-inset-top)+0.75rem))] shadow-sm">
         <button
@@ -1550,15 +1566,23 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         >
           <Avatar contact={{ ...c, online: peerOnline || c.online, premium: !!(c as any).verifiedBadge }} size={44} />
           <div className="min-w-0 flex-1">
-            <p className="truncate font-extrabold leading-tight">{c.name}</p>
+            <p className="truncate font-extrabold leading-tight">
+              {isSelfChat ? (me?.name || c.name || 'You') : c.name}
+            </p>
             <p
               className={`truncate text-xs font-bold ${
-                peerRecording || liveDraft || typing || peerOnline || c.online
-                  ? 'text-brand-blue'
-                  : 'text-gray-400'
+                isSelfChat
+                  ? 'text-gray-400'
+                  : peerRecording || liveDraft || typing || peerOnline || c.online
+                    ? 'text-brand-blue'
+                    : 'text-gray-400'
               }`}
             >
               {(() => {
+                if (isSelfChat) {
+                  const u = (me?.username || c.username || '').replace(/^@/, '')
+                  return u ? `@${u}` : 'Notes'
+                }
                 if (peerRecording) return 'recording…'
                 if ((c as any).onCall) return 'on a call'
                 if (liveDraft || typing) return 'typing…'
@@ -1574,7 +1598,6 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                 )
                 const online = !!(presenceMap?.[peer] || peerOnline || c.online)
                 const last = peerLastSeen || (c as any).lastSeen
-                // Typing remains normal (handled above). Busy replaces Online with custom message.
                 if (busyActive) return busyInfo!.message || 'busy'
                 if (online) return 'Online'
                 if (last) return formatLastSeen(last)
@@ -1583,6 +1606,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             </p>
           </div>
         </button>
+        {!isSelfChat && (
+          <>
         <button
           type="button"
           aria-label="Voice call"
@@ -1616,7 +1641,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                 aria-label="Close menu"
                 onClick={() => setChatMenu(false)}
               />
-              <div className="absolute right-0 top-11 z-50 w-52 overflow-hidden rounded-2xl bg-white py-1.5 shadow-xl ring-1 ring-black/5">
+              <div className="absolute right-0 top-11 z-50 w-52 overflow-hidden rounded-2xl bg-white py-1.5 text-ink shadow-xl ring-1 ring-black/5">
                 <button
                   type="button"
                   className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold hover:bg-gray-50"
@@ -1663,6 +1688,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             </>
           )}
         </div>
+          </>
+        )}
       </header>
 
       <div
@@ -1675,9 +1702,11 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         </p>
         {loading && <p className="py-6 text-center text-sm font-bold text-gray-400">Loading…</p>}
         {!loading && msgs.length === 0 && (
-          <p className="py-10 text-center font-bold text-gray-400">
-            Say hi to {c.name.split(' ')[0]} and start your chat.
-          </p>
+          <EmptyState
+            title={`Say hi to ${c.name.split(' ')[0]}`}
+            subtitle="This inbox is empty. Send a message when you're ready, it stays between you two."
+            className="py-8"
+          />
         )}
         <AnimatePresence initial={false}>
           {msgs.map((m) => {

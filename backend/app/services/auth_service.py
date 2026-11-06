@@ -65,6 +65,8 @@ class AuthService:
             "bio": (bio.strip() if isinstance(bio, str) and bio.strip() else None),
             "account_role": AccountRole.USER.value,
             "account_status": AccountStatus.ACTIVE.value,
+            "subscription_plan": "pro",
+            "premium_expires_at": None,
             "verification_status": "unverified",
             "created_at": now,
             "updated_at": now,
@@ -116,14 +118,31 @@ class AuthService:
     ) -> Tuple[dict, str, str]:
         db = get_database()
         user = None
-        if getattr(data, "username", None):
-            user = await db.users.find_one({"username": data.username.lower().strip()})
-        if user is None and getattr(data, "phone_number", None):
-            phone = data.phone_number.strip()
-            user = await db.users.find_one({"phone_number": phone})
-            # also try without leading +
-            if user is None and phone.startswith("+"):
-                user = await db.users.find_one({"phone_number": phone[1:]})
+        uname = (getattr(data, "username", None) or "").strip().lstrip("@").lower()
+        phone_raw = (getattr(data, "phone_number", None) or "").strip()
+        # If client only sent username but it looks like a phone, treat as phone
+        if uname and not phone_raw and (uname.startswith("+") or uname.isdigit()):
+            phone_raw = uname
+            uname = ""
+        if uname:
+            user = await db.users.find_one({"username": uname})
+        if user is None and phone_raw:
+            digits = "".join(ch for ch in phone_raw if ch.isdigit())
+            candidates = []
+            for c in (
+                phone_raw,
+                phone_raw.lstrip("+"),
+                f"+{digits}" if digits else "",
+                digits,
+                f"+254{digits.lstrip('0')}" if digits.startswith("0") and len(digits) >= 9 else "",
+                f"+254{digits}" if digits and not phone_raw.startswith("+") and len(digits) == 9 else "",
+            ):
+                c = (c or "").strip()
+                if c and c not in candidates:
+                    candidates.append(c)
+            user = await db.users.find_one({"phone_number": {"$in": candidates}})
+            if user is None:
+                user = await db.users.find_one({"phone": {"$in": candidates}})
         if not user or not verify_password(data.password, user["password_hash"]):
             # Log failed attempt
             if user:

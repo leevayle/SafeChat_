@@ -1013,9 +1013,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshSaveRequests = useCallback(async () => {
     if (!hasAccessToken() || isSessionDead()) return
     try {
-      const { requests } = await api.incomingContactRequests()
-      const n = (requests || []).filter((r: any) => r.status === 'pending').length
+      const [inRes, outRes] = await Promise.all([
+        api.incomingContactRequests(),
+        api.outgoingContactRequests().catch(() => ({ requests: [] as any[] })),
+      ])
+      const n = (inRes.requests || []).filter((r: any) => r.status === 'pending').length
       setSaveRequestPending(n)
+      // When someone accepted our request, pull contacts so messaging works immediately
+      const newlyAccepted = (outRes.requests || []).some((r: any) => r.status === 'accepted')
+      if (newlyAccepted) {
+        try {
+          const { contacts: list } = await api.contacts()
+          setContacts(list || [])
+        } catch { /* */ }
+      }
     } catch (e: any) {
       if ((e as any)?.status === 401 && !(e as any)?.soft) wipeSession()
     }
@@ -1653,10 +1664,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const login = async (identity: string, password: string) => {
     const raw = identity.trim()
+    const cleanedPhone = raw.replace(/[^\d+]/g, '')
     const looksPhone = raw.startsWith('+') || /^\d{7,15}$/.test(raw.replace(/[\s-]/g, ''))
-    const session = looksPhone
-      ? await api.login({ phone_number: raw.replace(/[^\d+]/g, ''), password })
-      : await api.login({ username: raw.replace(/^@/, '').toLowerCase(), password })
+    let session
+    if (looksPhone) {
+      try {
+        session = await api.login({ phone_number: cleanedPhone, password })
+      } catch (e) {
+        // Fallback: some users type phone without + but username may match digits-only accounts
+        session = await api.login({
+          phone_number: cleanedPhone,
+          username: raw.replace(/^@/, '').toLowerCase(),
+          password,
+        }).catch(() => { throw e })
+      }
+    } else {
+      try {
+        session = await api.login({ username: raw.replace(/^@/, '').toLowerCase(), password })
+      } catch (e) {
+        // If username failed, retry as phone (user may omit +)
+        if (/^\+?\d{7,15}$/.test(cleanedPhone)) {
+          session = await api.login({ phone_number: cleanedPhone, password })
+        } else {
+          throw e
+        }
+      }
+    }
     const { access_token, refresh_token, user } = session
     if (!access_token || !user?.id) {
       throw new Error('Login succeeded but session was incomplete — try again')

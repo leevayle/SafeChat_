@@ -22,7 +22,7 @@ class GrantPremiumBody(BaseModel):
     username: str | None = None
     user_id: str | None = None
     phone: str | None = None
-    days: int = Field(default=30, ge=1, le=3650)
+    days: int = Field(default=30, ge=1, le=30)
     verified_badge: bool = True
 
 

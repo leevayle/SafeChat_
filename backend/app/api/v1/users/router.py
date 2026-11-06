@@ -190,35 +190,47 @@ async def update_my_preferences(
         set_ops[f"preferences.{k}"] = v
     db = get_database()
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
-    # Fan-out busy / presence note to contacts when busy fields change
+    # Fan-out busy in background so the PATCH returns immediately
     if any(k.startswith("busy") for k in raw.keys()):
+        import asyncio
+
+        async def _fanout_busy():
+            try:
+                from app.websocket.manager import manager
+                from app.websocket.router import _peer_ids_for
+
+                prefs = (
+                    await db.users.find_one(
+                        {"_id": ObjectId(user["id"])}, {"preferences": 1}
+                    )
+                ) or {}
+                p = prefs.get("preferences") or {}
+                enabled = bool(p.get("busy_enabled"))
+                until = p.get("busy_until")
+                if enabled and until:
+                    try:
+                        exp = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
+                        if exp.tzinfo is None:
+                            exp = exp.replace(tzinfo=timezone.utc)
+                        if exp <= datetime.now(timezone.utc):
+                            enabled = False
+                    except Exception:
+                        pass
+                payload = {
+                    "t": "presence",
+                    "userId": user["id"],
+                    "online": True,
+                    "busy": enabled,
+                    "busyMessage": (p.get("busy_message") or "") if enabled else "",
+                    "busyUntil": until if enabled else None,
+                }
+                for pid in await _peer_ids_for(user["id"]):
+                    await manager.send_user(str(pid), payload)
+            except Exception:
+                pass
+
         try:
-            from app.websocket.manager import manager
-            from app.websocket.router import _peer_ids_for
-            prefs = (await db.users.find_one({"_id": ObjectId(user["id"])}, {"preferences": 1})) or {}
-            p = prefs.get("preferences") or {}
-            enabled = bool(p.get("busy_enabled"))
-            until = p.get("busy_until")
-            # Expired busy = off
-            if enabled and until:
-                try:
-                    exp = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
-                    if exp.tzinfo is None:
-                        exp = exp.replace(tzinfo=timezone.utc)
-                    if exp <= datetime.now(timezone.utc):
-                        enabled = False
-                except Exception:
-                    pass
-            payload = {
-                "t": "presence",
-                "userId": user["id"],
-                "online": True,
-                "busy": enabled,
-                "busyMessage": (p.get("busy_message") or "") if enabled else "",
-                "busyUntil": until if enabled else None,
-            }
-            for pid in await _peer_ids_for(user["id"]):
-                await manager.send_user(str(pid), payload)
+            asyncio.create_task(_fanout_busy())
         except Exception:
             pass
     return success_response("Preferences updated", raw)
@@ -355,32 +367,76 @@ async def search_users(
     query: str,
     user: dict = Depends(get_current_user),
 ):
-    """Simple username / display_name search (min 2 chars)."""
-    if len(query.strip()) < 2:
+    """Username / display_name / phone search (min 2 chars)."""
+    import re
+    from urllib.parse import unquote
+
+    raw = unquote(query or "").strip()
+    if len(raw) < 2:
         raise ValidationError("Query must be at least 2 characters")
     db = get_database()
-    q = query.strip().lower()
-    cursor = (
-        db.users.find(
-            {
-                "$or": [
-                    {"username": {"$regex": f"^{q}", "$options": "i"}},
-                    {"display_name": {"$regex": q, "$options": "i"}},
-                ],
-                "account_status": "active",
-                "_id": {"$ne": ObjectId(user["id"])},
-            }
+    q = raw.lower()
+    digits = re.sub(r"\D", "", raw)
+    phone_variants: list[str] = []
+    if len(digits) >= 7:
+        phone_variants = list(
+            dict.fromkeys(
+                [
+                    raw if raw.startswith("+") else f"+{digits}",
+                    f"+{digits}",
+                    digits,
+                    digits.lstrip("0"),
+                    (
+                        f"+254{digits.lstrip('0')}"
+                        if not digits.startswith("254")
+                        else f"+{digits}"
+                    ),
+                    (
+                        f"254{digits.lstrip('0')}"
+                        if not digits.startswith("254")
+                        else digits
+                    ),
+                ]
+            )
         )
-        .limit(20)
-    )
+
+    clauses: list[dict] = []
+    if phone_variants:
+        clauses.append({"phone_number": {"$in": phone_variants}})
+        clauses.append({"phone": {"$in": phone_variants}})
+    safe = re.escape(q)
+    if not phone_variants:
+        clauses.append({"username": {"$regex": f"^{safe}", "$options": "i"}})
+        clauses.append({"display_name": {"$regex": safe, "$options": "i"}})
+
+    if not clauses:
+        raise ValidationError("Query must be at least 2 characters")
+
+    me_oid = ObjectId(user["id"]) if ObjectId.is_valid(user["id"]) else None
+    filt: dict = {"$or": clauses}
+    # Tolerate missing/legacy account_status values
+    filt["$and"] = [
+        {
+            "$or": [
+                {"account_status": "active"},
+                {"account_status": {"$exists": False}},
+                {"account_status": None},
+            ]
+        }
+    ]
+    if me_oid is not None:
+        filt["_id"] = {"$ne": me_oid}
+
+    cursor = db.users.find(filt).limit(20)
     results = []
     async for u in cursor:
         results.append(
             {
                 "id": str(u["_id"]),
-                "username": u["username"],
-                "display_name": u["display_name"],
+                "username": u.get("username"),
+                "display_name": u.get("display_name") or u.get("username"),
                 "profile_photo": u.get("profile_photo"),
+                "phone_number": u.get("phone_number") or u.get("phone"),
             }
         )
     return success_response("Search results", results)

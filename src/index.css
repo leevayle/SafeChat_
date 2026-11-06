@@ -238,8 +238,37 @@ html[data-mode="dark"] .border-gray-200 {
   border-color: rgba(148, 163, 184, 0.14) !important;
 }
 html.dark .ring-gray-100,
-html[data-mode="dark"] .ring-gray-100 {
-  --tw-ring-color: rgba(148, 163, 184, 0.16) !important;
+html[data-mode="dark"] .ring-gray-100,
+html.dark .ring-black\/5,
+html[data-mode="dark"] .ring-black\/5,
+html.dark .ring-black\/6,
+html[data-mode="dark"] .ring-black\/6,
+html.dark .ring-black\/8,
+html[data-mode="dark"] .ring-black\/8,
+html.dark .ring-1,
+html[data-mode="dark"] .ring-1 {
+  --tw-ring-color: rgba(148, 163, 184, 0.14) !important;
+}
+html.dark .border-black\/5,
+html[data-mode="dark"] .border-black\/5,
+html.dark .border-black\/\[0\.04\],
+html[data-mode="dark"] .border-black\/\[0\.04\],
+html.dark .border-t,
+html[data-mode="dark"] .border-t,
+html.dark .border-b,
+html[data-mode="dark"] .border-b {
+  border-color: rgba(148, 163, 184, 0.12) !important;
+}
+html.dark .shadow-sm,
+html[data-mode="dark"] .shadow-sm {
+  --tw-shadow-color: rgba(0, 0, 0, 0.35) !important;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.35) !important;
+}
+html.dark .bg-\[\#f7f8fa\],
+html[data-mode="dark"] .bg-\[\#f7f8fa\],
+html.dark .bg-gray-50,
+html[data-mode="dark"] .bg-gray-50 {
+  background-color: #0b0f14 !important;
 }
 html.dark header,
 html[data-mode="dark"] header,
@@ -247,6 +276,68 @@ html.dark .sticky,
 html[data-mode="dark"] .sticky {
   background-color: rgba(15, 20, 28, 0.94) !important;
   border-color: rgba(148, 163, 184, 0.12) !important;
+}
+/* Settings cards / rows — blend edges with dark surface */
+html.dark .rounded-3xl.bg-white,
+html[data-mode="dark"] .rounded-3xl.bg-white,
+html.dark .rounded-2xl.bg-white,
+html[data-mode="dark"] .rounded-2xl.bg-white {
+  background-color: #151a22 !important;
+  box-shadow: none !important;
+}
+
+
+/* Dark mode — soft dividers & nav surfaces */
+html.dark .divide-y > * + *,
+html[data-mode="dark"] .divide-y > * + *,
+html.dark .border-b,
+html[data-mode="dark"] .border-b,
+html.dark .border-t,
+html[data-mode="dark"] .border-t,
+html.dark .border-gray-100,
+html[data-mode="dark"] .border-gray-100,
+html.dark .border-gray-200,
+html[data-mode="dark"] .border-gray-200 {
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+html.dark nav,
+html[data-mode="dark"] nav,
+html.dark [data-bottom-nav],
+html[data-mode="dark"] [data-bottom-nav] {
+  background-color: rgba(15, 20, 28, 0.96) !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
+  color: #e5e7eb;
+}
+html.dark header,
+html[data-mode="dark"] header {
+  background-color: rgba(15, 20, 28, 0.96) !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+/* Settings rows — soft separators */
+html.dark .ring-gray-100,
+html[data-mode="dark"] .ring-gray-100 {
+  --tw-ring-color: rgba(148, 163, 184, 0.12) !important;
+}
+html.dark .bg-gray-100,
+html[data-mode="dark"] .bg-gray-100,
+html.dark .bg-gray-50,
+html[data-mode="dark"] .bg-gray-50 {
+  background-color: #121821 !important;
+}
+html.dark .hover\:bg-gray-50:hover,
+html[data-mode="dark"] .hover\:bg-gray-50:hover,
+html.dark .hover\:bg-gray-100:hover,
+html[data-mode="dark"] .hover\:bg-gray-100:hover {
+  background-color: rgba(148, 163, 184, 0.08) !important;
+}
+/* Show correct PixelDroid mark in dark */
+html.dark .dark\:hidden,
+html[data-mode="dark"] .dark\:hidden {
+  display: none !important;
+}
+html.dark .dark\:block,
+html[data-mode="dark"] .dark\:block {
+  display: block !important;
 }
 
 /* Live typing caret — hard blink */

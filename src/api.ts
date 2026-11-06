@@ -661,6 +661,12 @@ export const api = {
     return { available: !!available }
   },
 
+  checkPhone: async (phone: string) => {
+    const data = await req<any>(`/api/v1/auth/phone/check?phone=${encodeURIComponent(phone)}`)
+    const available = data?.available ?? data?.data?.available ?? false
+    return { available: !!available }
+  },
+
   sendPhoneCode: (phone_number: string) => req<any>('/api/v1/auth/phone/send-code', {
     method: 'POST', body: JSON.stringify({ phone_number }),
   }),
@@ -820,11 +826,14 @@ export const api = {
     })
   },
 
-  mpesaStkPush: async (body: { phone: string; plan: string }) => {
-    return req<{ checkoutRequestId: string; merchantRequestId?: string }>('/api/v1/payments/mpesa/stk', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    })
+  mpesaStkPush: async (body: { phone: string; plan: string; gift_username?: string }) => {
+    return req<{ checkoutRequestId: string; merchantRequestId?: string; amount?: number; plan?: string }>(
+      '/api/v1/payments/mpesa/stk',
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+    )
   },
   mpesaVerify: async (checkoutRequestId: string) => {
     return req<{ paid: boolean; plan?: string; subscription_plan?: string }>(
@@ -873,6 +882,7 @@ export const api = {
     savedName?: string
     message?: string
     sharePhone?: boolean
+    nickname?: string
   }) => {
     if (!body.username) throw new Error('Username required to add contact')
     const data = await req<any>('/api/v1/contacts/requests', {
@@ -884,13 +894,22 @@ export const api = {
         from_nickname: body.savedName || body.nickname || undefined,
       }),
     })
-    // Mutual auto-accept may already create the contact
-    const r = await api.contacts()
-    const uname = body.username.replace(/^@/, '').toLowerCase()
-    return {
-      request: data,
-      contact: r.contacts.find((c) => c.username === uname) || null,
-      pending: !r.contacts.find((c) => c.username === uname),
+    // Fast path: trust response — only fetch contacts if already mutual/accepted
+    const status = String(data?.status || data?.request_status || '').toLowerCase()
+    const accepted = status === 'accepted' || data?.contact_created === true
+    if (!accepted) {
+      return { request: data, contact: null, pending: true }
+    }
+    try {
+      const r = await api.contacts()
+      const uname = body.username.replace(/^@/, '').toLowerCase()
+      return {
+        request: data,
+        contact: r.contacts.find((c) => c.username === uname) || null,
+        pending: false,
+      }
+    } catch {
+      return { request: data, contact: null, pending: false }
     }
   },
 
@@ -999,7 +1018,24 @@ export const api = {
     return { chats: Array.from(byPeer.values()) }
   },
 
-  openPrivateChat: async (username: string) => {
+  openPrivateChat: async (
+    target: string | { username?: string; userId?: string },
+  ) => {
+    let username =
+      typeof target === 'string'
+        ? target
+        : (target.username || '').replace(/^@/, '').trim()
+    // Self-notes: resolve current user's username when targeting own id
+    if (!username && typeof target !== 'string' && target.userId) {
+      const me = meId()
+      if (target.userId === me) {
+        try {
+          const u = getStoredUser()
+          username = (u?.username || '').replace(/^@/, '')
+        } catch { /* */ }
+      }
+    }
+    if (!username) throw new Error('Username required to open chat')
     const conv = await req<any>('/api/v1/conversations/private', {
       method: 'POST',
       body: JSON.stringify({ participant_username: username }),

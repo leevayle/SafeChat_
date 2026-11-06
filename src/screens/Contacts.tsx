@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Search, Plus, Pencil, Phone, MessageCircle, X, UserPlus, Trash2, Star } from 'lucide-react'
+import { Search, Plus, Pencil, Phone, MessageCircle, X, UserPlus, Trash2, Star , Loader2, Check } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { ScreenHeader } from '../components/ui'
 import { useStore } from '../store'
@@ -24,6 +24,10 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const [addMode, setAddMode] = useState<'username' | 'phone'>('username')
   const [phoneCountry, setPhoneCountry] = useState('+254')
   const [searchHits, setSearchHits] = useState<any[]>([])
+  const [searching, setSearching] = useState(false)
+  /** idle | loading | sent | saved */
+  const [requestState, setRequestState] = useState<Record<string, 'loading' | 'sent' | 'saved'>>({})
+
   const [busy, setBusy] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [notFoundPhone, setNotFoundPhone] = useState<string | null>(null)
@@ -100,6 +104,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
     // Phone numbers (+...) - no live search; resolve only on Send
     if (value.trim().startsWith('+')) {
       setSearchHits([])
+      setSearching(false)
       setAddForm((f) => ({ ...f, username: '', phone: value.trim() }))
       setAddMode('phone')
       return
@@ -108,19 +113,25 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
     setAddForm((f) => ({ ...f, username: value.replace(/^@/, ''), phone: '' }))
     if (value.trim().length < 2) {
       setSearchHits([])
+      setSearching(false)
       return
     }
+    setSearching(true)
     try {
       const { users } = await api.searchUsers(value.trim().replace(/^@/, ''))
       setSearchHits(users)
     } catch {
       setSearchHits([])
+    } finally {
+      setSearching(false)
     }
   }
 
   const addContact = async (peer?: { id: string; username: string; phone: string; name: string }) => {
     setBusy(true)
     setNotFoundPhone(null)
+    const key = peer?.id || peer?.username || identity
+    if (key) setRequestState((m) => ({ ...m, [key]: 'loading' }))
     try {
       let username = (peer?.username || addForm.username || '').replace(/^@/, '').trim()
       let phoneFull = (peer?.phone || addForm.phone || identity || '').trim()
@@ -167,14 +178,20 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
         savedName: addForm.savedName || peer?.name || username || phoneFull,
         sharePhone: addForm.sharePhone,
       })
-      await refreshContacts()
       showToast(res.pending ? 'Save request sent' : 'Contact saved')
-      setAdding(false)
+      if (key) setRequestState((m) => ({ ...m, [key]: res.pending ? 'sent' : 'saved' }))
+      if (!res.pending) setAdding(false)
+      void refreshContacts()
       setIdentity('')
       setAddForm({ username: '', phone: '', savedName: '', sharePhone: true })
       setSearchHits([])
     } catch (e: any) {
       showToast(e?.message || 'Could not add contact')
+      if (key) setRequestState((m) => {
+        const n = { ...m }
+        delete n[key]
+        return n
+      })
     } finally {
       setBusy(false)
     }
@@ -292,24 +309,51 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
                 ? 'Phone numbers are checked only when you send the request.'
                 : 'Type a username to search, or start with + for a phone number.'}
             </p>
-            {searchHits.length > 0 && !identity.trim().startsWith('+') && (
-              <ul className="overflow-hidden rounded-2xl border border-gray-100">
-                {searchHits.map((u) => (
-                  <li key={u.id}>
-                    <button
-                      type="button"
-                      onClick={() => addContact(u)}
-                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50"
-                    >
-                      <Avatar contact={u} size={40} />
-                      <div>
-                        <p className="font-extrabold">{u.name}</p>
-                        <p className="text-xs font-semibold text-gray-500">@{u.username}</p>
+            {(searching || searchHits.length > 0) && !identity.trim().startsWith('+') && (
+              <ul className="rounded-2xl border border-gray-100">
+                {searching &&
+                  [0, 1, 2].map((i) => (
+                    <li key={`sk-${i}`} className="flex items-center gap-3 px-3 py-2.5">
+                      <div className="sk-shimmer h-10 w-10 shrink-0 rounded-full" />
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <div className="sk-shimmer h-3 w-2/5 rounded" />
+                        <div className="sk-shimmer h-2.5 w-1/3 rounded" />
                       </div>
-                      <Plus size={18} className="ml-auto text-brand-purple" />
-                    </button>
-                  </li>
-                ))}
+                    </li>
+                  ))}
+                {!searching &&
+                  searchHits.map((u) => {
+                    const st = requestState[u.id] || requestState[u.username]
+                    const inContacts = contacts.some(
+                      (c) => c.id === u.id || c.username === u.username,
+                    )
+                    return (
+                      <li key={u.id}>
+                        <button
+                          type="button"
+                          disabled={st === 'loading' || st === 'sent' || inContacts || st === 'saved'}
+                          onClick={() => addContact(u)}
+                          className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 disabled:opacity-80"
+                        >
+                          <Avatar contact={u} size={40} />
+                          <div className="min-w-0 flex-1">
+                            <p className="font-extrabold">{u.name}</p>
+                            <p className="text-xs font-semibold text-gray-500">@{u.username}</p>
+                          </div>
+                          {st === 'loading' ? (
+                            <Loader2 size={18} className="ml-auto animate-spin text-brand-purple" />
+                          ) : inContacts || st === 'saved' ? (
+                            <Check size={18} className="ml-auto text-emerald-500" />
+                          ) : st === 'sent' ? (
+                            <Check size={18} className="ml-auto text-brand-blue" />
+                          ) : (
+                            <Plus size={18} className="ml-auto text-brand-purple" />
+                          )}
+                        </button>
+                      </li>
+                    )
+                  })}
+
               </ul>
             )}
             <label className="block text-xs font-extrabold text-gray-500">Save as (only you see this)</label>
@@ -363,10 +407,10 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
                 <div className="mt-5 flex gap-2">
                   <button
                     type="button"
-                    className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold"
+                    className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-600"
                     onClick={() => setNotFoundPhone(null)}
                   >
-                    Okay
+                    Not now
                   </button>
                   <a
                     href={`sms:${notFoundPhone}?body=${encodeURIComponent(

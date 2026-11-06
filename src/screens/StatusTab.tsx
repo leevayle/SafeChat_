@@ -174,6 +174,7 @@ export function StatusTab({ onOpenStatus }: Props) {
     setVideo(null)
     setComposing(false)
     setBusy(true)
+    showToast('Posting status…')
 
     try {
       const { status } = await api.postStatus(body, img, bgCode, {
@@ -185,7 +186,7 @@ export function StatusTab({ onOpenStatus }: Props) {
             'My contacts',
         ),
       })
-      // Same list slot — swap id/metadata only so the card never disappears
+      // Same list slot, swap id/metadata only so the card never disappears
       patchStatusList((list) =>
         list.map((s) =>
           s.id === localId
@@ -350,7 +351,7 @@ export function StatusTab({ onOpenStatus }: Props) {
 
       {/* Composer - full-screen modern status editor */}
       {composing && (
-        <div className="absolute inset-0 z-[90] flex flex-col bg-black">
+        <div className="fixed inset-0 z-[90] flex flex-col bg-black" style={{ paddingBottom: 0 }}>
           <div
             className="relative flex min-h-0 flex-1 flex-col"
             style={{ background: statusBgCss(bgCode) }}

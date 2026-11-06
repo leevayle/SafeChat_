@@ -19,6 +19,7 @@ import {
 } from '../store'
 import { api } from '../api'
 import { ImageCropper } from '../components/ImageCropper'
+import { LogoIcon, Wordmark } from '../components/Logo'
 import { fileToDataUrl } from '../lib/imageProcess'
 
 const WHO = ['Everyone', 'My contacts', 'Nobody']
@@ -38,6 +39,7 @@ type Page =
   | 'blocked'
   | 'premium'
   | 'mpesa'
+  | 'sponsor'
   | 'account'
 
 function Row({
@@ -117,6 +119,15 @@ export function Settings({
   const [toast, setToast] = useState<string | null>(null)
   const [savingProfile, setSavingProfile] = useState(false)
   const [busyUpdating, setBusyUpdating] = useState(false)
+  const [mpesaPlan, setMpesaPlan] = useState<'daily' | 'weekly' | 'monthly'>('weekly')
+  const [mpesaPhone, setMpesaPhone] = useState(() => String(me?.phone || s.phone || ''))
+  const [mpesaConfirmOpen, setMpesaConfirmOpen] = useState(false)
+  const [mpesaPaying, setMpesaPaying] = useState(false)
+  const [mpesaPaid, setMpesaPaid] = useState(false)
+  const [sponsorQuery, setSponsorQuery] = useState('')
+  const [sponsorResults, setSponsorResults] = useState<any[]>([])
+  const [sponsorPick, setSponsorPick] = useState<any | null>(null)
+  const [sponsorSearching, setSponsorSearching] = useState(false)
   const [draft, setDraft] = useState({ name: s.name, username: s.username, bio: s.bio })
   const [usernameStatus, setUsernameStatus] = useState<
     'idle' | 'checking' | 'available' | 'taken' | 'invalid' | 'own'
@@ -184,7 +195,15 @@ export function Settings({
                     ? 'Language'
                     : page === 'blocked'
                       ? 'Blocked'
-                      : 'Help'
+                      : page === 'mpesa'
+                        ? 'Subscription'
+                        : page === 'sponsor'
+                          ? 'Sponsor a friend'
+                          : page === 'premium'
+                            ? 'Premium'
+                            : page === 'account'
+                              ? 'Account'
+                              : 'Help'
 
   const persistThemeToServer = async () => {
     try {
@@ -199,6 +218,8 @@ export function Settings({
       void persistThemeToServer()
     }
     if (page === 'home') onBack()
+    else if (page === 'sponsor') setPage('mpesa')
+    else if (page === 'mpesa') setPage('premium')
     else setPage('home')
   }
 
@@ -288,6 +309,58 @@ export function Settings({
                   <Row label="Log out" danger onClick={() => setConfirm('logout')} />
                   <Row label="Deactivate my account" danger onClick={() => setConfirm('delete')} />
                 </Card>
+              </div>
+
+              {/* Credits footer */}
+              <div className="px-2 pb-5 pt-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 max-w-[58%]">
+                    <p className="text-left text-[12px] font-semibold leading-relaxed text-gray-500">
+                      Safechat is made and maintained by{' '}
+                      <a
+                        href={
+                          (import.meta as any).env?.VITE_PIXELDROID_URL ||
+                          'https://pixeldroid.com'
+                        }
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-extrabold text-brand-purple"
+                      >
+                        pixeldroid
+                      </a>
+                    </p>
+                    <p className="mt-2 text-left text-[11px] font-extrabold text-brand-purple">
+                      Version 2.0.0
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <LogoIcon size={22} animate={false} />
+                      <Wordmark className="text-[15px] leading-none" />
+                    </div>
+                    <div className="h-px w-full bg-gray-200 dark:bg-white/10" />
+                    <a
+                      href={
+                        (import.meta as any).env?.VITE_PIXELDROID_URL ||
+                        'https://pixeldroid.com'
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block"
+                    >
+                      <img
+                        src="/pixeldroid-light.png"
+                        alt="PixelDroid"
+                        className="h-7 w-auto object-contain dark:hidden"
+                      />
+                      <img
+                        src="/pixeldroid-dark.png"
+                        alt="PixelDroid"
+                        className="hidden h-7 w-auto object-contain dark:block"
+                      />
+                    </a>
+                  </div>
+                </div>
               </div>
             </motion.div>
           )}
@@ -731,6 +804,14 @@ export function Settings({
                   setSetting('wallpaper', 'Cloud' as never)
                   setSetting('liquidGlass', false as never)
                   setSetting('colorMode', 'light' as never)
+                  try { setSetting('fontSize' as any, 'medium' as never) } catch { /* */ }
+                  try { setSetting('bubbleStyle' as any, 'default' as never) } catch { /* */ }
+                  // Re-apply document theme tokens so selectors + CSS snap back immediately
+                  try {
+                    document.documentElement.setAttribute('data-theme', 'purple')
+                    document.documentElement.setAttribute('data-mode', 'light')
+                    document.documentElement.classList.remove('dark')
+                  } catch { /* */ }
                   setToast('Defaults restored')
                   void api.updateMe({ theme: 'purple' })
                 }}
@@ -753,6 +834,24 @@ export function Settings({
           {page === 'security' && (
             <motion.div key="sec" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
               <Card>
+                <Row
+                  label="Lock chats"
+                  value={(() => { try { return localStorage.getItem('sc_chats_locked') === '1' ? 'On' : 'Off' } catch { return 'Off' } })()}
+                  onClick={() => {
+                    try {
+                      const has = !!localStorage.getItem('sc_chat_lock_pin')
+                      if (!has) {
+                        setToast('Set a PIN from the chats menu first')
+                        return
+                      }
+                      const on = localStorage.getItem('sc_chats_locked') === '1'
+                      localStorage.setItem('sc_chats_locked', on ? '0' : '1')
+                      setToast(on ? 'Chats unlocked' : 'Chats locked')
+                    } catch {
+                      setToast('Could not update lock')
+                    }
+                  }}
+                />
                 <Row
                   label="App lock"
                   hint="Require login when opening the app"
@@ -996,7 +1095,7 @@ export function Settings({
                             busy_until: until,
                             busy_scope: (s as any).busyScope || 'everyone',
                           })
-                          .then(() => setToast('Busy status updated — contacts see your message'))
+                          .then(() => setToast('Busy status updated, contacts see your message'))
                           .catch(() => setToast('Could not update busy status'))
                           .finally(() => setBusyUpdating(false))
                       }}
@@ -1025,93 +1124,302 @@ export function Settings({
           {page === 'mpesa' && (
             <motion.div key="mpesa" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
               <div className="overflow-hidden rounded-3xl bg-gradient-to-br from-brand-purple via-[#5b21b6] to-brand-orange p-5 text-white shadow-lg">
-                <p className="text-xs font-extrabold uppercase tracking-widest text-white/70">SafeChat Premium</p>
-                <h2 className="mt-1 text-2xl font-black">Unlock everything</h2>
-                <p className="mt-1 text-sm font-semibold text-white/85">Busy status, force receipts, badge, status ads, and more.</p>
+                <p className="text-xs font-extrabold uppercase tracking-widest text-white/70">Subscription</p>
+                <h2 className="mt-1 text-2xl font-black">SafeChat Premium</h2>
+                <p className="mt-1 text-sm font-semibold text-white/85">
+                  Busy status, force receipts, badge, status ads, and more.
+                </p>
               </div>
+
               <div className="grid gap-2">
-                {[
-                  { id: 'daily', label: 'Daily', price: 99, hint: '24 hours of Premium' },
-                  { id: 'weekly', label: 'Weekly', price: 499, hint: '7 days · best trial' },
-                  { id: 'monthly', label: 'Monthly', price: 2999, hint: '30 days · best value' },
-                ].map((plan) => (
-                  <button
-                    key={plan.id}
-                    type="button"
-                    onClick={() => (window as any).__sc_mpesa_plan = plan.id}
-                    className={`flex w-full items-center gap-3 rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm ring-1 transition ${(window as any).__sc_mpesa_plan === plan.id ? 'ring-brand-purple' : 'ring-gray-100'}`}
-                    onFocus={(e) => {
-                      (window as any).__sc_mpesa_plan = plan.id
-                      e.currentTarget.parentElement?.querySelectorAll('button').forEach((b) => b.classList.remove('ring-brand-purple'))
-                      e.currentTarget.classList.add('ring-brand-purple')
-                    }}
-                  >
-                    <span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-purple/10 text-sm font-black text-brand-purple">
-                      {plan.label[0]}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-sm font-extrabold text-ink">{plan.label}</span>
-                      <span className="block text-[11px] font-semibold text-gray-400">{plan.hint}</span>
-                    </span>
-                    <span className="text-base font-black text-brand-purple">KES {plan.price}</span>
-                  </button>
-                ))}
+                {(
+                  [
+                    { id: 'daily' as const, label: 'Daily', price: 99, hint: '24 hours of Premium' },
+                    { id: 'weekly' as const, label: 'Weekly', price: 499, hint: '7 days · best trial' },
+                    { id: 'monthly' as const, label: 'Monthly', price: 2999, hint: '30 days · best value' },
+                  ] as const
+                ).map((plan) => {
+                  const active = mpesaPlan === plan.id
+                  return (
+                    <button
+                      key={plan.id}
+                      type="button"
+                      onClick={() => setMpesaPlan(plan.id)}
+                      className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3.5 text-left shadow-sm ring-2 transition ${
+                        active
+                          ? 'bg-brand-purple/10 ring-brand-purple'
+                          : 'bg-white ring-gray-100'
+                      }`}
+                    >
+                      <span
+                        className={`flex h-11 w-11 items-center justify-center rounded-full text-sm font-black ${
+                          active ? 'bg-brand-purple text-white' : 'bg-brand-purple/10 text-brand-purple'
+                        }`}
+                      >
+                        {plan.label[0]}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-extrabold text-ink">{plan.label}</span>
+                        <span className="block text-[11px] font-semibold text-gray-400">{plan.hint}</span>
+                      </span>
+                      <span className="text-sm font-black text-ink">KES {plan.price}</span>
+                    </button>
+                  )
+                })}
               </div>
+
               <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
-                <label className="text-xs font-extrabold text-gray-400">M-Pesa number</label>
-                <input
-                  id="sc-mpesa-phone"
-                  defaultValue={(s.phone || me?.phone || '').replace(/\s/g, '')}
-                  placeholder="2547XXXXXXXX"
-                  className="mt-1.5 w-full rounded-2xl bg-gray-50 px-4 py-3 text-sm font-bold outline-none ring-1 ring-transparent focus:ring-brand-purple/30"
-                />
-                <p className="mt-2 text-[11px] font-semibold text-gray-400">You will get an STK push on this phone. Enter your M-Pesa PIN to pay.</p>
                 <button
                   type="button"
-                  className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white shadow-md active:scale-[0.99]"
-                  onClick={async () => {
-                    const plan = (window as any).__sc_mpesa_plan || 'monthly'
-                    const phone = (document.getElementById('sc-mpesa-phone') as HTMLInputElement)?.value?.trim()
-                    if (!phone) {
-                      setToast('Enter your M-Pesa number')
-                      return
+                  disabled={mpesaPaying || mpesaPaid}
+                  className="w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white shadow-md active:scale-[0.99] disabled:opacity-70"
+                  onClick={() => {
+                    if (!mpesaPhone.trim()) {
+                      setMpesaPhone(String(me?.phone || s.phone || ''))
                     }
+                    setMpesaConfirmOpen(true)
+                  }}
+                >
+                  {mpesaPaid
+                    ? "You're a Premium user"
+                    : mpesaPaying
+                      ? 'Initiating payment…'
+                      : 'Pay with M-Pesa'}
+                </button>
+                <p className="mt-2 text-center text-[11px] font-semibold text-gray-400">
+                  Selected: <span className="font-extrabold text-ink capitalize">{mpesaPlan}</span>
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setPage('sponsor')}
+                className="flex w-full items-center gap-3 rounded-3xl bg-white px-4 py-4 text-left shadow-sm ring-1 ring-gray-100 active:scale-[0.99]"
+              >
+                <span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-orange/15 text-brand-orange">
+                  <User size={20} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-extrabold text-ink">Sponsor a friend</span>
+                  <span className="block text-[11px] font-semibold text-gray-400">
+                    Pay Premium for someone by username
+                  </span>
+                </span>
+                <ChevronRight size={18} className="text-gray-300" />
+              </button>
+
+              {mpesaConfirmOpen && (
+                <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40 p-4 sm:items-center">
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl">
+                    <p className="text-lg font-black text-ink">Confirm M-Pesa number</p>
+                    <p className="mt-1 text-sm font-semibold text-gray-500">
+                      Is this the number that should receive the STK push for{' '}
+                      <span className="font-extrabold capitalize text-ink">{mpesaPlan}</span>?
+                    </p>
+                    <label className="mt-4 block text-[11px] font-extrabold text-gray-400">M-Pesa number</label>
+                    <input
+                      value={mpesaPhone}
+                      onChange={(e) => setMpesaPhone(e.target.value.replace(/[^\d+]/g, ''))}
+                      inputMode="tel"
+                      className="mt-1 w-full rounded-2xl bg-gray-50 px-3 py-3 text-sm font-bold outline-none ring-1 ring-black/5 focus:ring-brand-purple/30"
+                      placeholder="07xxxxxxxx"
+                    />
+                    <button
+                      type="button"
+                      disabled={mpesaPaying || !mpesaPhone.trim()}
+                      className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white disabled:opacity-60"
+                      onClick={async () => {
+                        const phone = mpesaPhone.trim()
+                        if (!phone) {
+                          setToast('Enter your M-Pesa number')
+                          return
+                        }
+                        setMpesaPaying(true)
+                        setMpesaConfirmOpen(false)
+                        try {
+                          const res = await api.mpesaStkPush({ phone, plan: mpesaPlan })
+                          const checkoutId = (res as any)?.checkoutRequestId || (res as any)?.checkout_request_id
+                          if (!checkoutId) {
+                            setToast('Could not start payment')
+                            setMpesaPaying(false)
+                            return
+                          }
+                          setToast('Check your phone and enter M-Pesa PIN')
+                          let tries = 0
+                          const poll = async () => {
+                            tries += 1
+                            try {
+                              let st: any = null
+                              try {
+                                st = await api.mpesaStatus(checkoutId)
+                              } catch {
+                                st = await api.mpesaVerify(checkoutId)
+                              }
+                              if (st?.paid) {
+                                setSetting('subscriptionPlan' as any, 'premium' as never)
+                                setMpesaPaid(true)
+                                setMpesaPaying(false)
+                                setToast("You're a Premium user")
+                                void syncSubscription?.()
+                                return
+                              }
+                            } catch { /* */ }
+                            if (tries < 24) setTimeout(poll, 2500)
+                            else {
+                              setMpesaPaying(false)
+                              setToast('Still waiting for payment. You can retry.')
+                            }
+                          }
+                          setTimeout(poll, 2500)
+                        } catch (e: any) {
+                          setMpesaPaying(false)
+                          setToast(e?.message || 'Payment failed')
+                        }
+                      }}
+                    >
+                      Send STK push
+                    </button>
+                    <button
+                      type="button"
+                      className="mt-2 w-full rounded-full py-3 text-sm font-extrabold text-gray-500"
+                      onClick={() => setMpesaConfirmOpen(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {page === 'sponsor' && (
+            <motion.div key="sponsor" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
+              <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
+                <p className="text-sm font-extrabold text-ink">Find a friend</p>
+                <p className="mt-0.5 text-[11px] font-semibold text-gray-400">
+                  Search by username, then pay their Premium with M-Pesa.
+                </p>
+                <input
+                  value={sponsorQuery}
+                  onChange={(e) => {
+                    const q = e.target.value
+                    setSponsorQuery(q)
+                    setSponsorPick(null)
+                  }}
+                  placeholder="@username"
+                  className="mt-3 w-full rounded-2xl bg-gray-50 px-3 py-3 text-sm font-bold outline-none ring-1 ring-black/5 focus:ring-brand-purple/30"
+                />
+                <button
+                  type="button"
+                  disabled={sponsorSearching || sponsorQuery.trim().length < 2}
+                  className="mt-3 w-full rounded-full bg-brand-purple/10 py-2.5 text-sm font-extrabold text-brand-purple disabled:opacity-50"
+                  onClick={async () => {
+                    setSponsorSearching(true)
                     try {
-                      setToast('Sending STK push…')
-                      const res = await api.mpesaStkPush({ phone, plan })
-                      if (res?.checkoutRequestId) {
-                        setToast('Check your phone and enter M-Pesa PIN')
-                        // poll status
+                      const { users } = await api.searchUsers(sponsorQuery.trim().replace(/^@/, ''))
+                      setSponsorResults(users || [])
+                    } catch {
+                      setSponsorResults([])
+                      setToast('Could not search users')
+                    } finally {
+                      setSponsorSearching(false)
+                    }
+                  }}
+                >
+                  {sponsorSearching ? 'Searching…' : 'Search'}
+                </button>
+              </div>
+              <div className="space-y-2">
+                {sponsorResults.map((u: any) => {
+                  const active = sponsorPick?.id === u.id
+                  return (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => setSponsorPick(u)}
+                      className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left ring-2 transition ${
+                        active ? 'bg-brand-purple/10 ring-brand-purple' : 'bg-white ring-gray-100'
+                      }`}
+                    >
+                      <Avatar
+                        contact={{
+                          id: u.id,
+                          name: u.name || u.username,
+                          photo: u.photo,
+                          hue: u.hue || ['#7B2CBF', '#6389EB'],
+                        }}
+                        size={44}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-extrabold text-ink">
+                          {u.name || u.username}
+                        </span>
+                        <span className="block text-[11px] font-semibold text-gray-400">@{u.username}</span>
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+              {sponsorPick && (
+                <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
+                  <p className="text-sm font-extrabold text-ink">
+                    Sponsoring @{sponsorPick.username} · <span className="capitalize">{mpesaPlan}</span>
+                  </p>
+                  <label className="mt-3 block text-[11px] font-extrabold text-gray-400">Your M-Pesa number</label>
+                  <input
+                    value={mpesaPhone}
+                    onChange={(e) => setMpesaPhone(e.target.value.replace(/[^\d+]/g, ''))}
+                    className="mt-1 w-full rounded-2xl bg-gray-50 px-3 py-3 text-sm font-bold outline-none ring-1 ring-black/5 focus:ring-brand-purple/30"
+                    placeholder="07xxxxxxxx"
+                  />
+                  <button
+                    type="button"
+                    disabled={mpesaPaying || !mpesaPhone.trim()}
+                    className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white disabled:opacity-60"
+                    onClick={async () => {
+                      setMpesaPaying(true)
+                      try {
+                        const res = await api.mpesaStkPush({
+                          phone: mpesaPhone.trim(),
+                          plan: mpesaPlan,
+                          gift_username: sponsorPick.username,
+                        } as any)
+                        const checkoutId = (res as any)?.checkoutRequestId
+                        if (!checkoutId) {
+                          setToast('Could not start payment')
+                          setMpesaPaying(false)
+                          return
+                        }
+                        setToast('STK sent, enter PIN on your phone')
                         let tries = 0
                         const poll = async () => {
                           tries += 1
                           try {
-                            const st = await api.mpesaVerify(res.checkoutRequestId)
+                            const st = await api.mpesaStatus(checkoutId).catch(() => api.mpesaVerify(checkoutId))
                             if (st?.paid) {
-                              setSetting('subscriptionPlan' as any, 'premium' as never)
-                              if (me) {
-                                /* keep local me in sync */
-                              }
-                              setToast('Payment successful. Premium unlocked!')
-                              setPage('premium')
+                              setMpesaPaying(false)
+                              setToast(`Premium gifted to @${sponsorPick.username}`)
+                              setPage('mpesa')
                               return
                             }
                           } catch { /* */ }
-                          if (tries < 20) setTimeout(poll, 3000)
-                          else setToast('Still waiting for payment. You can retry.')
+                          if (tries < 24) setTimeout(poll, 2500)
+                          else {
+                            setMpesaPaying(false)
+                            setToast('Still waiting for payment')
+                          }
                         }
-                        setTimeout(poll, 4000)
-                      } else {
-                        setToast('Could not start payment')
+                        setTimeout(poll, 2500)
+                      } catch (e: any) {
+                        setMpesaPaying(false)
+                        setToast(e?.message || 'Payment failed')
                       }
-                    } catch (e: any) {
-                      setToast(e?.message || 'Payment failed')
-                    }
-                  }}
-                >
-                  Pay with M-Pesa
-                </button>
-              </div>
+                    }}
+                  >
+                    {mpesaPaying ? 'Initiating payment…' : `Pay ${mpesaPlan} for @${sponsorPick.username}`}
+                  </button>
+                </div>
+              )}
             </motion.div>
           )}
 

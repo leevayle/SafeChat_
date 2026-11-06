@@ -23,7 +23,7 @@ type Props = {
   onOpenStatus?: (userId: string, statusId?: string) => void
 }
 
-type Filter = 'all' | 'requests' | 'calls' | 'system'
+type Filter = 'all' | 'calls' | 'system'
 
 type NotifItem = {
   id: string
@@ -62,7 +62,7 @@ export function Notifications({
   onOpenCalls,
   onOpenStatus,
 }: Props) {
-  const { saveRequestPending, calls, chats, contacts, showToast, me } = useStore()
+  const { saveRequestPending, calls, chats, contacts, showToast, me, refreshContacts } = useStore()
   const meIdPlaceholder = me?.id || ''
   const [filter, setFilter] = useState<Filter>('all')
   const [incoming, setIncoming] = useState<any[]>([])
@@ -94,19 +94,14 @@ export function Notifications({
         return
       }
       try {
-        const { requests } = await api.incomingContactRequests()
-        const list = (requests || []).filter((r: any) => r.status === 'pending')
-        if (!alive) return
-        setIncoming(list)
-      } catch {
-        /* */
-      }
-      try {
         const { notifications } = await api.listNotifications()
         if (!alive) return
         ;(window as any).__sc_server_notifs = notifications || []
         void saveCachedNotifications(notifications || [])
         setServerNotifs(notifications || [])
+        if ((notifications || []).some((n: any) => n.type === 'contact_accepted')) {
+          void refreshContacts()
+        }
       } catch {
         /* */
       } finally {
@@ -149,21 +144,7 @@ export function Notifications({
   const items: NotifItem[] = useMemo(() => {
     const out: NotifItem[] = []
 
-    for (const r of incoming) {
-      const id = `req-${r.id || r.from_user_id}`
-      const name = r.from_display_name || r.from_name || r.from_username || 'Someone'
-      out.push({
-        id,
-        kind: 'request',
-        title: 'Save request',
-        body: `${name} wants to save you as a contact`,
-        when: timeLabel(r.created_at || r.createdAt) || 'Now',
-        iso: r.created_at || r.createdAt,
-        unread: !readIds.has(id),
-        contactId: r.from_user_id,
-        photo: r.from_profile_photo || r.photo || null,
-      })
-    }
+    // Save requests live in the Save requests screen, not listed here
 
     for (const c of calls || []) {
       const missed = c.status === 'missed' || c.direction === 'missed'
@@ -204,7 +185,23 @@ export function Notifications({
     }
 
     for (const n of serverNotifs) {
+            if (n.type === 'contact_accepted') {
+        const id = `cacc-${n.id}`
+        out.push({
+          id,
+          kind: 'system',
+          title: n.title || 'Save request accepted',
+          body: n.body || 'You can now stay in touch.',
+          when: timeLabel(n.created_at),
+          iso: n.created_at,
+          unread: !n.read && !readIds.has(id),
+          contactId: n.actor_id || n.metadata?.peer_user_id,
+          photo: n.actor_photo ?? null,
+        })
+        continue
+      }
       if (n.type === 'status_like') {
+
         const id = `slike-${n.id}`
         out.push({
           id,
@@ -269,7 +266,6 @@ export function Notifications({
 
   const filtered = items.filter((i) => {
     if (filter === 'all') return true
-    if (filter === 'requests') return i.kind === 'request'
     if (filter === 'calls') return i.kind === 'missed_call'
     if (filter === 'system') return i.kind === 'system' || i.kind === 'premium'
     return true
@@ -326,7 +322,6 @@ export function Notifications({
           {(
             [
               ['all', 'All'],
-              ['requests', 'Requests'],
               ['calls', 'Calls'],
               ['system', 'System'],
             ] as const
