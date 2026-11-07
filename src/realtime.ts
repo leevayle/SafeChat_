@@ -15,7 +15,7 @@
  *   { t: "call", a, to, callId, sdp?, candidate?, kind? }
  *   { t: "ping" }
  */
-import { hasAccessToken, isSessionDead, markSessionDead } from './api'
+import { hasAccessToken } from './api'
 
 export type RtMsg = {
   id: string
@@ -71,9 +71,6 @@ type SocketState = {
   retries: number
   lastPongAt: number
   listenersBound: boolean
-  /** Prevent infinite reconnect with a dead token */
-  authFailInflight: boolean
-  authFailCount: number
 }
 
 const state: SocketState = {
@@ -86,8 +83,6 @@ const state: SocketState = {
   retries: 0,
   lastPongAt: 0,
   listenersBound: false,
-  authFailInflight: false,
-  authFailCount: 0,
 }
 
 function wsUrl(token: string): string {
@@ -125,7 +120,7 @@ function clearTimers() {
 
 function scheduleReconnect() {
   if (state.intentionalClose) return
-  if (!hasAccessToken() || isSessionDead()) return
+  if (!hasAccessToken()) return
   if (state.reconnectTimer) return // already scheduled
   // Fast first retries, then cap — proxies often drop idle sockets ~30–60s
   const delay = Math.min(8000, 500 * Math.pow(1.5, state.retries))
@@ -139,53 +134,6 @@ function scheduleReconnect() {
     state.ws = null
     connectRealtime(state.handlers)
   }, delay)
-}
-
-/**
- * Handshake 403 / close 4401 usually means the access JWT was rejected.
- * Try one token refresh; if that fails, mark the session dead so we stop spamming.
- */
-async function handlePossibleAuthFailure() {
-  if (state.intentionalClose || state.authFailInflight) return
-  if (!hasAccessToken() || isSessionDead()) {
-    state.intentionalClose = true
-    return
-  }
-  state.authFailInflight = true
-  try {
-    // Force rotate — access JWT may still look valid client-side but be rejected by server
-    const { forceRefreshSession, isSessionDead: dead } = await import('./api')
-    const ok = await forceRefreshSession()
-    if (ok && !dead()) {
-      state.authFailCount = 0
-      state.retries = 0
-      // New access token — open a fresh socket
-      forceReconnectRealtime()
-      return
-    }
-    state.authFailCount += 1
-    if (state.authFailCount >= 2) {
-      try {
-        markSessionDead()
-      } catch { /* */ }
-      state.intentionalClose = true
-      clearTimers()
-      try {
-        if (state.ws && state.ws.readyState !== WebSocket.CLOSED) state.ws.close()
-      } catch { /* */ }
-      state.ws = null
-    }
-  } catch {
-    state.authFailCount += 1
-    if (state.authFailCount >= 2) {
-      try {
-        markSessionDead()
-      } catch { /* */ }
-      state.intentionalClose = true
-    }
-  } finally {
-    state.authFailInflight = false
-  }
 }
 
 function bindLifecycleListeners() {
@@ -228,7 +176,7 @@ export function setRealtimeHandlers(handlers: RtHandlers) {
 export function connectRealtime(handlers?: RtHandlers) {
   if (handlers) state.handlers = { ...state.handlers, ...handlers }
   bindLifecycleListeners()
-  if (!hasAccessToken() || isSessionDead()) return
+  if (!hasAccessToken()) return
   if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
     return
   }
@@ -247,19 +195,9 @@ export function connectRealtime(handlers?: RtHandlers) {
   state.ws = ws
 
   ws.onopen = () => {
-    const wasReconnect = state.retries > 0
     state.retries = 0
-    state.authFailCount = 0
     state.lastPongAt = Date.now()
     state.handlers.onStatus?.('open')
-    if (wasReconnect && hasAccessToken() && !isSessionDead()) {
-      try {
-        console.log(
-          '%c[SafeChat] WebSocket back online — session active',
-          'color:#16a34a;font-weight:bold',
-        )
-      } catch { /* */ }
-    }
     // Ping every 15s — stays under common proxy idle timeouts (30–60s)
     state.pingTimer = setInterval(() => {
       if (!rawSend({ t: 'ping' })) {
@@ -414,22 +352,12 @@ export function connectRealtime(handlers?: RtHandlers) {
 
   ws.onerror = () => {
     state.handlers.onStatus?.('error')
-    // Handshake failures (e.g. 403 from rejected JWT) surface here before onclose
-    void handlePossibleAuthFailure()
   }
 
-  ws.onclose = (ev) => {
+  ws.onclose = () => {
     clearTimers()
     state.ws = null
     state.handlers.onStatus?.('closed')
-    // 4401 = our backend auth reject; 1006/1008 often accompany proxy 403
-    const code = ev?.code ?? 0
-    if (code === 4401 || code === 1008 || code === 1006 || code === 1002) {
-      void handlePossibleAuthFailure().then(() => {
-        if (!state.intentionalClose && !isSessionDead()) scheduleReconnect()
-      })
-      return
-    }
     scheduleReconnect()
   }
 }

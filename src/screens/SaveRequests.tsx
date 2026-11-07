@@ -79,31 +79,16 @@ export function SaveRequests({ onClose, onChat }: Props) {
   }, [load])
 
   const accept = async (id: string) => {
+    // Optimistic remove — request runs in background
     const snapshot = incoming
-    const row = incoming.find((r) => r.id === id)
     setIncoming((list) => list.filter((r) => r.id !== id))
-    setBusyId(id)
+    showToast('Contact saved')
     try {
       await api.acceptContactRequest(id)
-      showToast(
-        row?.username || row?.name
-          ? `Saved @${row.username || row.name}, you can stay in touch`
-          : 'Contact saved on both sides',
-      )
-      // Background refresh, do not block the accept UI
       void refreshContacts()
-      void load()
     } catch (e: any) {
-      try {
-        void refreshContacts()
-        await load()
-        showToast('Contact saved')
-      } catch {
-        setIncoming(snapshot)
-        showToast(e?.message || 'Could not accept')
-      }
-    } finally {
-      setBusyId(null)
+      setIncoming(snapshot)
+      showToast(e?.message || 'Could not accept')
     }
   }
 

@@ -37,12 +37,9 @@ async def websocket_endpoint(
         payload = decode_token(token)
         user_id = str(payload.get("sub") or payload.get("user_id") or "")
         if not user_id:
-            # Accept first so the client receives a proper close code (not proxy 403)
-            await websocket.accept()
             await websocket.close(code=4401)
             return
     except Exception:
-        await websocket.accept()
         await websocket.close(code=4401)
         return
 
@@ -227,51 +224,15 @@ async def _peer_ids_for(user_id: str) -> list[str]:
     return list(peers)
 
 
-async def _busy_fields_for(user_id: str) -> dict:
-    """Read current busy preferences for presence payloads."""
-    try:
-        from app.core.database import get_database
-        from bson import ObjectId
-
-        db = get_database()
-        if not ObjectId.is_valid(user_id):
-            return {"busy": False, "busyMessage": "", "busyUntil": None}
-        doc = await db.users.find_one({"_id": ObjectId(user_id)}, {"preferences": 1})
-        prefs = (doc or {}).get("preferences") or {}
-        enabled = bool(prefs.get("busy_enabled"))
-        until = prefs.get("busy_until") if enabled else None
-        message = (prefs.get("busy_message") or "") if enabled else ""
-        if enabled and until:
-            try:
-                exp = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
-                if exp.tzinfo is None:
-                    exp = exp.replace(tzinfo=timezone.utc)
-                if exp <= datetime.now(timezone.utc):
-                    enabled = False
-                    message = ""
-                    until = None
-            except Exception:
-                pass
-        return {
-            "busy": enabled,
-            "busyMessage": message,
-            "busyUntil": until if enabled else None,
-        }
-    except Exception:
-        return {"busy": False, "busyMessage": "", "busyUntil": None}
-
-
 async def _broadcast_presence(user_id: str, online: bool) -> None:
     try:
         peer_ids = await _peer_ids_for(user_id)
         last_seen = None if online else _utc_iso()
-        busy = await _busy_fields_for(user_id)
         payload = {
             "t": "presence",
             "userId": user_id,
             "online": online,
             "lastSeen": last_seen,
-            **busy,
         }
         for pid in peer_ids:
             await manager.send_user(str(pid), payload)
@@ -284,7 +245,6 @@ async def _send_presence_snapshot(user_id: str) -> None:
         peer_ids = await _peer_ids_for(user_id)
         for pid in peer_ids:
             if manager.is_online(pid):
-                busy = await _busy_fields_for(pid)
                 await manager.send_user(
                     user_id,
                     {
@@ -292,7 +252,6 @@ async def _send_presence_snapshot(user_id: str) -> None:
                         "userId": pid,
                         "online": True,
                         "lastSeen": None,
-                        **busy,
                     },
                 )
     except Exception:

@@ -19,7 +19,7 @@ export function BottomNav({
   badges?: Partial<Record<Tab, number>>
 }) {
   return (
-    <nav data-bottom-nav="1" className="pointer-events-auto absolute inset-x-0 bottom-0 z-30 flex min-h-20 items-center justify-around border-t border-gray-200 bg-white/95 px-2 pt-[5px] pb-[max(5px,env(safe-area-inset-bottom))] backdrop-blur">
+    <nav className="pointer-events-auto absolute inset-x-0 bottom-0 z-30 flex min-h-20 items-center justify-around border-t border-gray-200 bg-white/95 px-2 pt-[5px] pb-[max(5px,env(safe-area-inset-bottom))] backdrop-blur">
       {items.map(({ id, label, icon: Icon }) => {
         const active = tab === id
         const count = badges?.[id] || 0

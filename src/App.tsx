@@ -226,18 +226,6 @@ function Shell() {
     return () => window.removeEventListener('sc:rt-call', onCall)
   }, [stage, me])
 
-  // Premium recharge deep-link from Notifications
-  useEffect(() => {
-    const openPremium = () => {
-      setOverlay('settings')
-      try {
-        sessionStorage.setItem('sc_settings_page', 'premium')
-      } catch { /* */ }
-    }
-    window.addEventListener('sc:open-premium', openPremium)
-    return () => window.removeEventListener('sc:open-premium', openPremium)
-  }, [])
-
   /** Device session helpers — localStorage is the source of truth for "has logged in on this device" */
   const readDeviceSession = () => {
     const hasTokens =
@@ -550,14 +538,14 @@ function Shell() {
               onBack={() => setOverlay(null)}
               onSupport={() => setOverlay('support')}
               onLogout={async () => {
-                setOverlay(null)
                 setChat(null)
                 setGroup(null)
                 setCall(null)
                 setTab('chats')
                 restored.current = false
                 await logout()
-                setStage('splash')
+                setOverlay(null)
+                setStage('login')
               }}
             />
           </div>

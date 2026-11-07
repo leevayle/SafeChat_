@@ -167,26 +167,28 @@ export function StatusTab({ onOpenStatus }: Props) {
       pending: true,
     }
 
-    // UI first - append at end (oldest → newest), never flash-remove while server responds
+    // UI first - append at end (oldest → newest)
     patchStatusList((list) => [...list, optimistic])
     setText('')
     setImage(null)
     setVideo(null)
     setComposing(false)
-    setBusy(true)
     showToast('Posting status…')
+    setBusy(true)
 
     try {
       const { status } = await api.postStatus(body, img, bgCode, {
         video: vid || undefined,
         expiresInHours: hours,
+        is_ad: !!adMode,
+        ad_reach: adMode ? 'international' : undefined,
         visibility: visibilityFromPrivacy(
           (typeof localStorage !== 'undefined' &&
             (JSON.parse(localStorage.getItem('sc_settings') || '{}').statusPrivacy as string)) ||
             'My contacts',
         ),
       })
-      // Same list slot, swap id/metadata only so the card never disappears
+      // Keep the same list slot - swap id/metadata only so the bubble never disappears
       patchStatusList((list) =>
         list.map((s) =>
           s.id === localId
@@ -202,7 +204,6 @@ export function StatusTab({ onOpenStatus }: Props) {
                 createdAt: status?.createdAt || s.createdAt,
                 expiresAt: status?.expiresAt || s.expiresAt,
                 user: s.user,
-                views: status?.views || [],
               }
             : s,
         ),
@@ -351,7 +352,7 @@ export function StatusTab({ onOpenStatus }: Props) {
 
       {/* Composer - full-screen modern status editor */}
       {composing && (
-        <div className="fixed inset-0 z-[90] flex flex-col bg-black" style={{ paddingBottom: 0 }}>
+        <div className="absolute inset-0 z-[90] flex flex-col bg-black">
           <div
             className="relative flex min-h-0 flex-1 flex-col"
             style={{ background: statusBgCss(bgCode) }}

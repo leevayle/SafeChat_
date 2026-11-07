@@ -32,7 +32,6 @@ async def _users_by_ids(db, ids: List[str]) -> Dict[str, dict]:
             "bio": 1,
             "subscription_plan": 1,
             "premium_settings": 1,
-            "preferences": 1,
         },
     ):
         out[str(u["_id"])] = u
@@ -86,29 +85,6 @@ class ContactService:
         if existing_req:
             raise ConflictError("Request already pending")
 
-        # Decline cooldown: after 3 declines, block for 24 hours then reset
-        limit = await db.contact_decline_limits.find_one(
-            {"from_user_id": from_user_id, "to_user_id": to_user_id}
-        )
-        if limit:
-            count = int(limit.get("decline_count") or 0)
-            last = limit.get("last_declined_at")
-            if last is not None and getattr(last, "tzinfo", None) is None:
-                last = last.replace(tzinfo=timezone.utc)
-            if last is not None:
-                age_sec = (datetime.now(timezone.utc) - last).total_seconds()
-                if age_sec >= 24 * 3600:
-                    await db.contact_decline_limits.update_one(
-                        {"_id": limit["_id"]},
-                        {"$set": {"decline_count": 0, "updated_at": datetime.now(timezone.utc)}},
-                    )
-                    count = 0
-                elif count >= 3:
-                    hours_left = max(1, int((24 * 3600 - age_sec) / 3600))
-                    raise ForbiddenError(
-                        f"Save request limit reached. Try again in about {hours_left}h."
-                    )
-
         reverse = await db.contact_requests.find_one(
             {
                 "from_user_id": to_user_id,
@@ -154,11 +130,6 @@ class ContactService:
 
     @staticmethod
     async def accept_request(request_id: str, user_id: str) -> dict:
-        """Accept a save request and create mutual contact edges atomically.
-
-        Both contact edges must succeed; if either fails the request stays pending
-        (or is left unchanged) so we never end up one-sided.
-        """
         db = get_database()
         if not ObjectId.is_valid(request_id):
             raise ValidationError("Invalid request id")
@@ -167,34 +138,36 @@ class ContactService:
             raise NotFoundError("Request not found")
         if req["to_user_id"] != user_id:
             raise ForbiddenError("Not your request to accept")
-        status = (req.get("status") or "").lower()
-        if status not in (
-            ContactRequestStatus.PENDING.value,
-            ContactRequestStatus.ACCEPTED.value,
-            "pending",
-            "accepted",
-        ):
+        if req["status"] != ContactRequestStatus.PENDING.value:
             raise ConflictError("Request is not pending")
 
         now = datetime.now(timezone.utc)
         share_phone = bool(req.get("share_phone"))
         sender_nick = (req.get("from_nickname") or "").strip() or None
-        from_id = str(req["from_user_id"])
-        to_id = str(req["to_user_id"])
 
-        from_phone = ""
-        if share_phone:
-            try:
-                oid = ObjectId(from_id) if ObjectId.is_valid(from_id) else None
-                from_user = await db.users.find_one(
-                    {"_id": oid} if oid else {"_id": from_id},
-                    {"phone_number": 1, "phone": 1},
-                )
-                if from_user:
-                    from_phone = from_user.get("phone_number") or from_user.get("phone") or ""
-            except Exception:
-                from_phone = ""
+        # Parallel: mark request accepted + optional phone lookup
+        import asyncio
 
+        async def _mark_accepted():
+            await db.contact_requests.update_one(
+                {"_id": ObjectId(request_id)},
+                {"$set": {"status": ContactRequestStatus.ACCEPTED.value, "updated_at": now}},
+            )
+
+        async def _phone():
+            if not share_phone:
+                return ""
+            from_user = await db.users.find_one(
+                {"_id": ObjectId(req["from_user_id"])},
+                {"phone_number": 1, "phone": 1},
+            )
+            if not from_user:
+                return ""
+            return from_user.get("phone_number") or from_user.get("phone") or ""
+
+        _, from_phone = await asyncio.gather(_mark_accepted(), _phone())
+
+        # Upsert both contact edges in parallel
         async def _upsert_edge(owner: str, contact: str, peer_phone: str, nick: Optional[str]):
             set_fields: Dict[str, Any] = {
                 "contact_status": ContactStatus.ACCEPTED.value,
@@ -204,76 +177,24 @@ class ContactService:
                 set_fields["shared_phone"] = peer_phone
             if nick:
                 set_fields["nickname"] = nick
-            # Never put the same path in both $set and $setOnInsert (Mongo conflict → 500)
-            insert_doc: Dict[str, Any] = {
-                "owner_user_id": owner,
-                "contact_user_id": contact,
-                "created_at": now,
-            }
             await db.contacts.update_one(
                 {"owner_user_id": owner, "contact_user_id": contact},
-                {"$set": set_fields, "$setOnInsert": insert_doc},
+                {
+                    "$set": set_fields,
+                    "$setOnInsert": {
+                        "owner_user_id": owner,
+                        "contact_user_id": contact,
+                        "nickname": nick,
+                        "created_at": now,
+                    },
+                },
                 upsert=True,
             )
 
-        # 1) Write both edges first. If either fails, abort without accepting.
-        try:
-            await _upsert_edge(from_id, to_id, "", sender_nick)
-            await _upsert_edge(to_id, from_id, from_phone or "", None)
-        except Exception as e:
-            # Best-effort cleanup of a partial edge
-            try:
-                await db.contacts.delete_many(
-                    {
-                        "$or": [
-                            {"owner_user_id": from_id, "contact_user_id": to_id},
-                            {"owner_user_id": to_id, "contact_user_id": from_id},
-                        ],
-                        "contact_status": ContactStatus.ACCEPTED.value,
-                        "created_at": now,
-                    }
-                )
-            except Exception:
-                pass
-            raise ValidationError(f"Could not save contact on both sides: {e}")
-
-        # 2) Mark request accepted only after both edges exist
-        await db.contact_requests.update_one(
-            {"_id": ObjectId(request_id)},
-            {
-                "$set": {
-                    "status": ContactRequestStatus.ACCEPTED.value,
-                    "updated_at": now,
-                }
-            },
-        )
-
-        # 3) Side effects (non-fatal)
-        try:
-            accepter = await db.users.find_one(
-                {"_id": ObjectId(user_id) if ObjectId.is_valid(user_id) else user_id},
-                {"username": 1, "display_name": 1, "profile_photo": 1},
-            )
-            uname = (accepter or {}).get("username") or "someone"
-            dname = (accepter or {}).get("display_name") or uname
-            await db.notifications.insert_one(
-                {
-                    "user_id": from_id,
-                    "type": "contact_accepted",
-                    "title": f"{dname} accepted your save request",
-                    "body": f"@{uname} accepted your save request, you can now stay in touch.",
-                    "actor_id": user_id,
-                    "actor_name": dname,
-                    "actor_photo": (accepter or {}).get("profile_photo"),
-                    "read": False,
-                    "created_at": now,
-                    "metadata": {"request_id": request_id, "peer_user_id": user_id},
-                }
-            )
-        except Exception:
-            pass
-        try:
-            await db.user_activity_logs.insert_one(
+        await asyncio.gather(
+            _upsert_edge(req["from_user_id"], req["to_user_id"], "", sender_nick),
+            _upsert_edge(req["to_user_id"], req["from_user_id"], from_phone or "", None),
+            db.user_activity_logs.insert_one(
                 {
                     "user_id": user_id,
                     "event_type": "contact",
@@ -281,14 +202,13 @@ class ContactService:
                     "resource_type": "contact_request",
                     "resource_id": request_id,
                     "timestamp": now,
-                    "metadata": {"from_user_id": from_id},
+                    "metadata": {"from_user_id": req["from_user_id"]},
                 }
-            )
-        except Exception:
-            pass
-
+            ),
+        )
         return {"id": request_id, "status": ContactRequestStatus.ACCEPTED.value}
 
+    @staticmethod
     async def reject_request(request_id: str, user_id: str) -> dict:
         db = get_database()
         if not ObjectId.is_valid(request_id):
@@ -298,8 +218,7 @@ class ContactService:
             raise NotFoundError("Request not found")
         if req["to_user_id"] != user_id:
             raise ForbiddenError("Not your request to reject")
-        status = (req.get("status") or "").lower()
-        if status not in (ContactRequestStatus.PENDING.value, "pending"):
+        if req["status"] != ContactRequestStatus.PENDING.value:
             raise ConflictError("Request is not pending")
 
         now = datetime.now(timezone.utc)
@@ -307,25 +226,6 @@ class ContactService:
             {"_id": ObjectId(request_id)},
             {"$set": {"status": ContactRequestStatus.REJECTED.value, "updated_at": now}},
         )
-        # Track decline count for 3-attempt / 24h cooldown rule
-        from_id = str(req["from_user_id"])
-        to_id = str(req["to_user_id"])
-        try:
-            await db.contact_decline_limits.update_one(
-                {"from_user_id": from_id, "to_user_id": to_id},
-                {
-                    "$inc": {"decline_count": 1},
-                    "$set": {"last_declined_at": now, "updated_at": now},
-                    "$setOnInsert": {
-                        "from_user_id": from_id,
-                        "to_user_id": to_id,
-                        "created_at": now,
-                    },
-                },
-                upsert=True,
-            )
-        except Exception:
-            pass
         return {"id": request_id, "status": ContactRequestStatus.REJECTED.value}
 
     @staticmethod
@@ -335,13 +235,7 @@ class ContactService:
             await db.contacts.find(
                 {
                     "owner_user_id": user_id,
-                    "contact_status": {
-                        "$in": [
-                            ContactStatus.ACCEPTED.value,
-                            "accepted",
-                            "ACCEPTED",
-                        ]
-                    },
+                    "contact_status": ContactStatus.ACCEPTED.value,
                 }
             )
             .sort("created_at", -1)
@@ -377,17 +271,6 @@ class ContactService:
                         (contact_user.get("premium_settings") or {}).get("verified_badge", True)
                     )
                     and (contact_user.get("subscription_plan") or "pro") == "premium",
-                    "premium_settings": contact_user.get("premium_settings")
-                    or {
-                        "verified_badge": True,
-                        "force_read_receipts": False,
-                        "live_typing": True,
-                        "status_ads_enabled": True,
-                    },
-                    "busy": bool((contact_user.get("preferences") or {}).get("busy_enabled")),
-                    "busy_message": (contact_user.get("preferences") or {}).get("busy_message")
-                    or "",
-                    "busy_until": (contact_user.get("preferences") or {}).get("busy_until"),
                 }
             )
         return results

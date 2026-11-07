@@ -36,43 +36,22 @@ class MessagingService:
         if not other:
             raise NotFoundError("User not found")
         other_id = str(other["_id"])
-        is_self = other_id == user_id
+        if other_id == user_id:
+            raise ValidationError("Cannot create conversation with yourself")
 
-        if not is_self:
-            # Check block either direction
-            blocked = await db.blocked_users.find_one(
-                {
-                    "$or": [
-                        {"blocker_id": user_id, "blocked_id": other_id},
-                        {"blocker_id": other_id, "blocked_id": user_id},
-                    ]
-                }
-            )
-            if blocked:
-                raise ForbiddenError("Cannot message this user")
+        # Check block either direction
+        blocked = await db.blocked_users.find_one(
+            {
+                "$or": [
+                    {"blocker_id": user_id, "blocked_id": other_id},
+                    {"blocker_id": other_id, "blocked_id": user_id},
+                ]
+            }
+        )
+        if blocked:
+            raise ForbiddenError("Cannot message this user")
 
-            # Mutual accepted contact required (not for notes-to-self)
-            edge_a = await db.contacts.find_one(
-                {
-                    "owner_user_id": user_id,
-                    "contact_user_id": other_id,
-                    "contact_status": {"$in": ["accepted", "ACCEPTED"]},
-                }
-            )
-            edge_b = await db.contacts.find_one(
-                {
-                    "owner_user_id": other_id,
-                    "contact_user_id": user_id,
-                    "contact_status": {"$in": ["accepted", "ACCEPTED"]},
-                }
-            )
-            if not edge_a or not edge_b:
-                raise ForbiddenError(
-                    "Save this contact first. Send a save request — they can accept or decline."
-                )
-
-        # Self-notes use a single participant; peer chats use the sorted pair
-        participants = [user_id] if is_self else sorted([user_id, other_id])
+        participants = sorted([user_id, other_id])
         existing = await db.conversations.find_one(
             {
                 "conversation_type": ConversationType.PRIVATE.value,
@@ -626,9 +605,6 @@ class MessagingService:
             "delivery_status": status,
             "edited": msg.get("edited", False),
             "reactions": msg.get("_reactions") or [],
-            # client_key lets the UI match optimistic bubbles without double-render
-            "client_key": msg.get("idempotency_key") or msg.get("client_key"),
-            "idempotency_key": msg.get("idempotency_key") or msg.get("client_key"),
         }
 
     @staticmethod

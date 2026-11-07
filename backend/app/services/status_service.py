@@ -1,5 +1,6 @@
 """Status (stories) service — batched lookups for feed and viewers."""
 from datetime import datetime, timezone, timedelta
+from pymongo.errors import DuplicateKeyError
 from typing import List, Optional, Dict, Any
 from bson import ObjectId
 from app.core.database import get_database
@@ -146,18 +147,11 @@ class StatusService:
         async for c in db.contacts.find(
             {
                 "owner_user_id": viewer_id,
-                "contact_status": {
-                    "$in": [
-                        ContactStatus.ACCEPTED.value,
-                        "ACCEPTED",
-                        "accepted",
-                    ]
-                },
+                "contact_status": ContactStatus.ACCEPTED.value,
             },
             {"contact_user_id": 1},
         ):
-            if c.get("contact_user_id"):
-                ids.append(c["contact_user_id"])
+            ids.append(c["contact_user_id"])
         return ids
 
     @staticmethod
@@ -225,17 +219,23 @@ class StatusService:
             raise ForbiddenError("Not allowed to view this status")
 
         if s["owner_user_id"] != viewer_id:
-            result = await db.status_views.update_one(
-                {"status_id": status_id, "viewer_id": viewer_id},
-                {
-                    "$setOnInsert": {
-                        "status_id": status_id,
-                        "viewer_id": viewer_id,
-                        "viewed_at": now,
-                    }
-                },
-                upsert=True,
-            )
+            try:
+                result = await db.status_views.update_one(
+                    {"status_id": status_id, "viewer_id": viewer_id},
+                    {
+                        "$setOnInsert": {
+                            "status_id": status_id,
+                            "viewer_id": viewer_id,
+                            "viewed_at": now,
+                        }
+                    },
+                    upsert=True,
+                )
+            except DuplicateKeyError:
+                # Parallel first-view race under unique index — treat as existing view
+                class _R:
+                    upserted_id = None
+                result = _R()
             # Notify owner of a new unique view so their count updates live
             if result.upserted_id is not None:
                 try:
@@ -365,14 +365,18 @@ class StatusService:
             await db.status_likes.delete_one({"_id": existing["_id"]})
             liked = False
         else:
-            await db.status_likes.insert_one(
-                {
-                    "status_id": status_id,
-                    "user_id": user_id,
-                    "created_at": now,
-                }
-            )
-            liked = True
+            try:
+                await db.status_likes.insert_one(
+                    {
+                        "status_id": status_id,
+                        "user_id": user_id,
+                        "created_at": now,
+                    }
+                )
+                liked = True
+            except DuplicateKeyError:
+                # Concurrent like from another request — treat as already liked
+                liked = True
             # Persist notification only on like
             try:
                 name = (

@@ -13,54 +13,21 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 @router.get("/presence/{user_id}")
 async def user_presence(user_id: str, user: dict = Depends(get_current_user)):
-    """Online flag (live WS) + last_seen + busy status."""
+    """Online flag (live WS) + last_seen timestamp."""
     from app.websocket.manager import manager
     db = get_database()
     online = manager.is_online(user_id)
     last_seen = None
-    busy = False
-    busy_message = ""
-    busy_until = None
     if ObjectId.is_valid(user_id):
-        doc = await db.users.find_one(
-            {"_id": ObjectId(user_id)},
-            {"last_seen": 1, "preferences": 1},
-        )
+        doc = await db.users.find_one({"_id": ObjectId(user_id)}, {"last_seen": 1})
         if doc and doc.get("last_seen"):
             ls = doc["last_seen"]
             last_seen = ls.isoformat() if hasattr(ls, "isoformat") else str(ls)
-            if (
-                isinstance(last_seen, str)
-                and "T" in last_seen
-                and not last_seen.endswith("Z")
-                and "+" not in last_seen[10:]
-            ):
+            if isinstance(last_seen, str) and "T" in last_seen and not last_seen.endswith("Z") and "+" not in last_seen[10:]:
                 last_seen = last_seen + "Z"
-        prefs = (doc or {}).get("preferences") or {}
-        busy = bool(prefs.get("busy_enabled"))
-        busy_message = (prefs.get("busy_message") or "") if busy else ""
-        busy_until = prefs.get("busy_until") if busy else None
-        if busy and busy_until:
-            try:
-                exp = datetime.fromisoformat(str(busy_until).replace("Z", "+00:00"))
-                if exp.tzinfo is None:
-                    exp = exp.replace(tzinfo=timezone.utc)
-                if exp <= datetime.now(timezone.utc):
-                    busy = False
-                    busy_message = ""
-                    busy_until = None
-            except Exception:
-                pass
     return success_response(
         "Presence",
-        {
-            "user_id": user_id,
-            "online": online,
-            "last_seen": last_seen,
-            "busy": busy,
-            "busy_message": busy_message,
-            "busy_until": busy_until,
-        },
+        {"user_id": user_id, "online": online, "last_seen": last_seen},
     )
 
 
@@ -180,57 +147,43 @@ async def update_my_preferences(
     # Top-level appearance fields for fast login/me reads
     top_keys = {"theme", "chat_accent", "color_mode", "liquid_glass", "wallpaper"}
     set_ops: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
-    # busy_* may be explicitly cleared (null) when turning busy off
-    nullable_busy = {"busy_message", "busy_until", "busy_scope"}
     for k, v in raw.items():
-        if v is None and k not in nullable_busy and k != "busy_enabled":
+        if v is None:
             continue
-        if k in top_keys and v is not None:
+        if k in top_keys:
             set_ops[k] = v
         set_ops[f"preferences.{k}"] = v
     db = get_database()
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
-    # Fan-out busy in background so the PATCH returns immediately
+    # Fan-out busy / presence note to contacts when busy fields change
     if any(k.startswith("busy") for k in raw.keys()):
-        import asyncio
-
-        async def _fanout_busy():
-            try:
-                from app.websocket.manager import manager
-                from app.websocket.router import _peer_ids_for
-
-                prefs = (
-                    await db.users.find_one(
-                        {"_id": ObjectId(user["id"])}, {"preferences": 1}
-                    )
-                ) or {}
-                p = prefs.get("preferences") or {}
-                enabled = bool(p.get("busy_enabled"))
-                until = p.get("busy_until")
-                if enabled and until:
-                    try:
-                        exp = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
-                        if exp.tzinfo is None:
-                            exp = exp.replace(tzinfo=timezone.utc)
-                        if exp <= datetime.now(timezone.utc):
-                            enabled = False
-                    except Exception:
-                        pass
-                payload = {
-                    "t": "presence",
-                    "userId": user["id"],
-                    "online": True,
-                    "busy": enabled,
-                    "busyMessage": (p.get("busy_message") or "") if enabled else "",
-                    "busyUntil": until if enabled else None,
-                }
-                for pid in await _peer_ids_for(user["id"]):
-                    await manager.send_user(str(pid), payload)
-            except Exception:
-                pass
-
         try:
-            asyncio.create_task(_fanout_busy())
+            from app.websocket.manager import manager
+            from app.websocket.router import _peer_ids_for
+            prefs = (await db.users.find_one({"_id": ObjectId(user["id"])}, {"preferences": 1})) or {}
+            p = prefs.get("preferences") or {}
+            enabled = bool(p.get("busy_enabled"))
+            until = p.get("busy_until")
+            # Expired busy = off
+            if enabled and until:
+                try:
+                    exp = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
+                    if exp.tzinfo is None:
+                        exp = exp.replace(tzinfo=timezone.utc)
+                    if exp <= datetime.now(timezone.utc):
+                        enabled = False
+                except Exception:
+                    pass
+            payload = {
+                "t": "presence",
+                "userId": user["id"],
+                "online": True,
+                "busy": enabled,
+                "busyMessage": (p.get("busy_message") or "") if enabled else "",
+                "busyUntil": until if enabled else None,
+            }
+            for pid in await _peer_ids_for(user["id"]):
+                await manager.send_user(str(pid), payload)
         except Exception:
             pass
     return success_response("Preferences updated", raw)
@@ -367,76 +320,32 @@ async def search_users(
     query: str,
     user: dict = Depends(get_current_user),
 ):
-    """Username / display_name / phone search (min 2 chars)."""
-    import re
-    from urllib.parse import unquote
-
-    raw = unquote(query or "").strip()
-    if len(raw) < 2:
+    """Simple username / display_name search (min 2 chars)."""
+    if len(query.strip()) < 2:
         raise ValidationError("Query must be at least 2 characters")
     db = get_database()
-    q = raw.lower()
-    digits = re.sub(r"\D", "", raw)
-    phone_variants: list[str] = []
-    if len(digits) >= 7:
-        phone_variants = list(
-            dict.fromkeys(
-                [
-                    raw if raw.startswith("+") else f"+{digits}",
-                    f"+{digits}",
-                    digits,
-                    digits.lstrip("0"),
-                    (
-                        f"+254{digits.lstrip('0')}"
-                        if not digits.startswith("254")
-                        else f"+{digits}"
-                    ),
-                    (
-                        f"254{digits.lstrip('0')}"
-                        if not digits.startswith("254")
-                        else digits
-                    ),
-                ]
-            )
+    q = query.strip().lower()
+    cursor = (
+        db.users.find(
+            {
+                "$or": [
+                    {"username": {"$regex": f"^{q}", "$options": "i"}},
+                    {"display_name": {"$regex": q, "$options": "i"}},
+                ],
+                "account_status": "active",
+                "_id": {"$ne": ObjectId(user["id"])},
+            }
         )
-
-    clauses: list[dict] = []
-    if phone_variants:
-        clauses.append({"phone_number": {"$in": phone_variants}})
-        clauses.append({"phone": {"$in": phone_variants}})
-    safe = re.escape(q)
-    if not phone_variants:
-        clauses.append({"username": {"$regex": f"^{safe}", "$options": "i"}})
-        clauses.append({"display_name": {"$regex": safe, "$options": "i"}})
-
-    if not clauses:
-        raise ValidationError("Query must be at least 2 characters")
-
-    me_oid = ObjectId(user["id"]) if ObjectId.is_valid(user["id"]) else None
-    filt: dict = {"$or": clauses}
-    # Tolerate missing/legacy account_status values
-    filt["$and"] = [
-        {
-            "$or": [
-                {"account_status": "active"},
-                {"account_status": {"$exists": False}},
-                {"account_status": None},
-            ]
-        }
-    ]
-    if me_oid is not None:
-        filt["_id"] = {"$ne": me_oid}
-
-    cursor = db.users.find(filt).limit(20)
+        .limit(20)
+    )
     results = []
     async for u in cursor:
         results.append(
             {
                 "id": str(u["_id"]),
-                "username": u.get("username"),
-                "display_name": u.get("display_name") or u.get("username"),
+                "username": u["username"],
+                "display_name": u["display_name"],
                 "profile_photo": u.get("profile_photo"),
-                "phone_number": u.get("phone_number") or u.get("phone"),
             }
         )
     return success_response("Search results", results)
