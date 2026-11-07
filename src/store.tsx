@@ -924,6 +924,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (same) return prev
         }
         void saveCachedStatuses(merged.filter((s: any) => !s.pending))
+        // Owner online again: pull viewers from DB into cache so open is instant
+        const myId = getStoredUser()?.id
+        if (myId) {
+          void (async () => {
+            try {
+              const { saveCachedViewers } = await import('./lib/appCache')
+              const mine = merged.filter(
+                (s: any) => s.userId === myId && s.id && !String(s.id).startsWith('local-'),
+              )
+              for (const s of mine.slice(0, 12)) {
+                try {
+                  const { viewers: list } = await api.statusViewers(s.id)
+                  if (list) await saveCachedViewers(s.id, list)
+                } catch { /* */ }
+              }
+            } catch { /* */ }
+          })()
+        }
         return merged
       })
     } catch (e: any) {
@@ -1337,11 +1355,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               const already = seenInboundRef.current.has(mid)
               if (!mine) seenInboundRef.current.add(mid)
               const openNow = activeConvRef.current && activeConvRef.current === cid
-              if (openNow && !mine) {
-                // Already in this chat — read immediately, never bump home badge
-                void api.markRead(cid).catch(() => {})
+              if (!mine) {
                 void import('./realtime').then(({ wsReceipt }) => {
-                  try { wsReceipt({ conversationId: cid, messageId: mid, state: 'read' }) } catch { /* */ }
+                  try {
+                    if (openNow) {
+                      // Peer is inside this chat → read (blue ticks for sender)
+                      void api.markRead(cid).catch(() => {})
+                      wsReceipt({ conversationId: cid, messageId: mid, state: 'read' })
+                    } else {
+                      // Online but not in this chat → delivered only (grey double)
+                      wsReceipt({ conversationId: cid, messageId: mid, state: 'delivered' })
+                    }
+                  } catch { /* */ }
                 }).catch(() => {})
               }
               const updated = {
@@ -1350,7 +1375,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 time: timeLabel,
                 iso,
                 mine,
-                state: mine ? ((m.state as any) || 'sent') : cur.state,
+                state: mine ? ((m.state as any) || 'sent') : undefined,
                 unread: mine || openNow ? 0 : already ? (cur.unread || 0) : (cur.unread || 0) + 1,
               }
               nextList = [...prev]
@@ -1361,12 +1386,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               return prev
             } else {
               const openNow = activeConvRef.current && activeConvRef.current === cid
-              if (openNow) void api.markRead(cid).catch(() => {})
+              if (openNow) {
+                void api.markRead(cid).catch(() => {})
+                void import('./realtime').then(({ wsReceipt }) => {
+                  try { wsReceipt({ conversationId: cid, messageId: mid, state: 'read' }) } catch { /* */ }
+                }).catch(() => {})
+              } else {
+                void import('./realtime').then(({ wsReceipt }) => {
+                  try { wsReceipt({ conversationId: cid, messageId: mid, state: 'delivered' }) } catch { /* */ }
+                }).catch(() => {})
+              }
+              const fromId = String(m.from)
+              const ct = (contactsRef.current || []).find(
+                (x: any) => x.id === fromId || x.peerId === fromId,
+              )
               nextList = [
                 {
-                  contactId: String(m.from),
+                  contactId: fromId,
                   conversationId: cid,
-                  name: undefined,
+                  name: (ct?.savedName || ct?.name || m.from_name || m.sender_display_name || '').trim() || undefined,
+                  photo: ct?.photo ?? m.from_photo ?? null,
+                  hue: ct?.hue,
                   last: previewText,
                   time: timeLabel,
                   iso,
@@ -1694,7 +1734,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   contactsRef.current = contacts
 
   // Device preferences are local-only. Never send them to the profile endpoint.
-  const setSetting = useCallback(<K extends keyof Settings>(k: K, v: Settings[K]) => {
+  const setSetting = useCallback(<K extends keyof Settings>(k: K, v: Settings[K], opts?: { silent?: boolean; skipServer?: boolean }) => {
     const next = { ...settings, [k]: v }
     setSettings(next)
     // Appearance keys: CSS variables only — no component remount
@@ -1743,14 +1783,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       busyUntil: 'busy_until',
       busyScope: 'busy_scope',
     }
+    if (opts?.skipServer) {
+      if (!opts?.silent) showToast('Setting updated')
+      return
+    }
     const sk = serverKey[k as string]
     if (sk && hasAccessToken() && !isSessionDead()) {
       void api.updatePreferences({ [sk]: v })
-        .then(() => showToast('Setting saved'))
-        .catch(() => showToast('Could not save setting'))
+        .then(() => { if (!opts?.silent) showToast('Setting saved') })
+        .catch(() => { if (!opts?.silent) showToast('Could not save setting') })
     } else {
-      // Local-only (or offline) — still confirm UI applied
-      showToast('Setting updated')
+      if (!opts?.silent) showToast('Setting updated')
     }
   }, [settings, showToast])
 

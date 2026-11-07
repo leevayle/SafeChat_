@@ -363,22 +363,27 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
     if (!current || !isOwner) return
     setPaused(true)
     setViewersOpen(true)
-    setViewersLoading(true)
-    // Instant from cache, then refresh
+    // Prefer cache — if present, show immediately with no loading flash
+    let hadCache = false
     try {
       const cached = await loadCachedViewers<ViewerRow>(current.id)
       if (cached?.length) {
         setViewers(cached)
         setViewersLoading(false)
+        hadCache = true
+      } else {
+        setViewersLoading(true)
       }
-    } catch { /* */ }
+    } catch {
+      setViewersLoading(true)
+    }
+    // Soft refresh in background; keep cached list visible
     try {
       const { viewers: list } = await api.statusViewers(current.id)
       setViewers(list)
       void saveCachedViewers(current.id, list)
     } catch {
-      showToast('Could not load viewers')
-      setViewers((v) => v)
+      if (!hadCache) showToast('Could not load viewers')
     } finally {
       setViewersLoading(false)
     }
@@ -501,7 +506,7 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
 
   return (
     <div
-      className="relative flex h-full flex-col select-none text-white"
+      className="relative flex h-full w-full flex-col select-none text-white"
       style={{ background: bgCss }}
       onContextMenu={(e) => e.preventDefault()}
       onPointerUp={onPressEnd}
@@ -570,7 +575,7 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="flex w-full max-w-sm flex-col items-center gap-4"
+            className="flex w-full flex-col items-center gap-4 px-0"
           >
             {(current.type === 'video' || (current as any).video) ? (
               <video

@@ -24,6 +24,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const [addMode, setAddMode] = useState<'username' | 'phone'>('username')
   const [phoneCountry, setPhoneCountry] = useState('+254')
   const [searchHits, setSearchHits] = useState<any[]>([])
+  const [searching, setSearching] = useState(false)
   const [busy, setBusy] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [notFoundPhone, setNotFoundPhone] = useState<string | null>(null)
@@ -124,11 +125,14 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
       setSearchHits([])
       return
     }
+    setSearching(true)
     try {
       const { users } = await api.searchUsers(value.trim().replace(/^@/, ''))
       setSearchHits(users)
     } catch {
       setSearchHits([])
+    } finally {
+      setSearching(false)
     }
   }
 
@@ -306,7 +310,21 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
                 ? 'Phone numbers are checked only when you send the request.'
                 : 'Type a username to search, or start with + for a phone number.'}
             </p>
-            {searchHits.length > 0 && !identity.trim().startsWith('+') && (
+            {searching && !identity.trim().startsWith('+') && (
+              <div className="space-y-2 rounded-2xl bg-gray-50 p-3 ring-1 ring-black/5">
+                {[0,1,2].map((i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <div className="h-10 w-10 animate-pulse rounded-full bg-gray-200" />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="h-3 w-2/5 animate-pulse rounded bg-gray-200" />
+                      <div className="h-2.5 w-1/3 animate-pulse rounded bg-gray-100" />
+                    </div>
+                  </div>
+                ))}
+                <p className="text-center text-[11px] font-bold text-gray-400">Searching…</p>
+              </div>
+            )}
+            {searchHits.length > 0 && !searching && !identity.trim().startsWith('+') && (
               <ul className="overflow-hidden rounded-2xl border border-gray-100">
                 {searchHits.map((u) => (
                   <li key={u.id}>

@@ -310,7 +310,7 @@ function Shell() {
   if (stage !== 'app') {
     return (
       <div className="flex min-h-dvh justify-center bg-[#f0f2f5]">
-        <main className="relative h-dvh w-full min-h-[568px] max-w-[430px] overflow-hidden bg-white">
+        <main className="relative h-dvh max-h-[932px] w-full max-w-[430px] overflow-hidden bg-white">
           {stage === 'splash' && (
             <Splash
               onDone={() => {
@@ -404,7 +404,7 @@ function Shell() {
   if (planStatus === 'deactivated' && stage === 'app') {
     return (
       <div className="flex min-h-dvh justify-center bg-[#f0f2f5]">
-        <main className="relative h-dvh w-full max-w-[430px] overflow-hidden bg-white">
+        <main className="relative h-dvh max-h-[932px] w-full max-w-[430px] overflow-hidden bg-white">
           <DeactivatedGate
             onActivated={() => {
               /* session refreshed via reload */
@@ -423,7 +423,7 @@ function Shell() {
   // ── Main app — no stage AnimatePresence (no hop) ───────
   return (
     <div className="flex min-h-dvh justify-center bg-[#f0f2f5]">
-      <main className="relative h-dvh w-full min-h-[568px] max-w-[430px] overflow-hidden bg-white">
+      <main className="relative h-dvh max-h-[932px] w-full max-w-[430px] overflow-hidden bg-white">
         {/* Tab pages */}
         <div
           className="relative h-full"

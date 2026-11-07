@@ -102,6 +102,17 @@ export function Settings({
   const [picker, setPicker] = useState<{ title: string; options: string[]; key: keyof S } | null>(null)
   const [confirm, setConfirm] = useState<'logout' | 'delete' | null>(null)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [chatPinDraft, setChatPinDraft] = useState('')
+  const [chatPinConfirm, setChatPinConfirm] = useState('')
+  const [chatPinError, setChatPinError] = useState('')
+  const [chatPinStep, setChatPinStep] = useState<'idle' | 'set' | 'confirm' | 'change' | 'clear'>('idle')
+  const [pinPassword, setPinPassword] = useState('')
+  const [busySaving, setBusySaving] = useState(false)
+  const [busyDraft, setBusyDraft] = useState({
+    message: String((s as any).busyMessage || ''),
+    scope: String((s as any).busyScope || 'everyone'),
+    durationMin: Number((s as any).busyDurationMin || 30),
+  })
   const [deleteStep, setDeleteStep] = useState<'password' | 'phrase'>('password')
   const [deletePassword, setDeletePassword] = useState('')
   const [deletePhrase, setDeletePhrase] = useState('')
@@ -742,7 +753,7 @@ export function Settings({
           )}
 
           {page === 'security' && (
-            <motion.div key="sec" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
+            <motion.div key="sec" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
               <Card>
                 <Row
                   label="App lock"
@@ -755,7 +766,226 @@ export function Settings({
                     />
                   }
                 />
+                <Row
+                  label="Chat lock PIN"
+                  hint={
+                    (() => {
+                      try {
+                        return localStorage.getItem('sc_chat_lock_pin') ? 'PIN is set · used to lock chats' : 'Set a PIN to lock individual chats'
+                      } catch {
+                        return 'Set a PIN to lock individual chats'
+                      }
+                    })()
+                  }
+                  onClick={() => {
+                    setChatPinDraft('')
+                    setChatPinConfirm('')
+                    setChatPinError('')
+                    try {
+                      if (localStorage.getItem('sc_chat_lock_pin')) setChatPinStep('clear')
+                      else setChatPinStep('set')
+                    } catch {
+                      setChatPinStep('set')
+                    }
+                  }}
+                />
               </Card>
+              {chatPinStep !== 'idle' && (
+                <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/5">
+                  {chatPinStep === 'set' && (
+                    <>
+                      <p className="text-sm font-extrabold text-ink">Create chat lock PIN</p>
+                      <p className="mt-1 text-xs font-semibold text-gray-400">4–8 digits. Used for every locked chat.</p>
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        maxLength={8}
+                        value={chatPinDraft}
+                        onChange={(e) => setChatPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))}
+                        className="mt-3 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+                        placeholder="••••"
+                        autoFocus
+                      />
+                      <button
+                        type="button"
+                        disabled={chatPinDraft.length < 4}
+                        className="mt-3 w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white disabled:opacity-40"
+                        onClick={() => { setChatPinConfirm(''); setChatPinError(''); setChatPinStep('confirm') }}
+                      >
+                        Continue
+                      </button>
+                    </>
+                  )}
+                  {chatPinStep === 'confirm' && (
+                    <>
+                      <p className="text-sm font-extrabold text-ink">Confirm PIN</p>
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        maxLength={8}
+                        value={chatPinConfirm}
+                        onChange={(e) => { setChatPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 8)); setChatPinError('') }}
+                        className="mt-3 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+                        placeholder="••••"
+                        autoFocus
+                      />
+                      {chatPinError ? <p className="mt-2 text-xs font-bold text-brand-red">{chatPinError}</p> : null}
+                      <button
+                        type="button"
+                        disabled={chatPinConfirm.length < 4}
+                        className="mt-3 w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white disabled:opacity-40"
+                        onClick={() => {
+                          if (chatPinConfirm !== chatPinDraft) {
+                            setChatPinError('PINs do not match')
+                            return
+                          }
+                          try { localStorage.setItem('sc_chat_lock_pin', chatPinDraft) } catch { /* */ }
+                          setChatPinStep('idle')
+                          setChatPinDraft('')
+                          setChatPinConfirm('')
+                          setToast('Chat lock PIN saved')
+                        }}
+                      >
+                        Save PIN
+                      </button>
+                    </>
+                  )}
+                  {chatPinStep === 'clear' && chatPinDraft !== '__pwd__' && (
+                    <>
+                      <p className="text-sm font-extrabold text-ink">Chat lock PIN</p>
+                      <p className="mt-1 text-xs font-semibold text-gray-400">Change requires current PIN. Remove requires your login password.</p>
+                      <button
+                        type="button"
+                        className="mt-3 w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
+                        onClick={() => {
+                          setChatPinDraft('')
+                          setChatPinConfirm('')
+                          setChatPinError('')
+                          setChatPinStep('change')
+                        }}
+                      >
+                        Change PIN
+                      </button>
+                      <button
+                        type="button"
+                        className="mt-2 w-full rounded-full bg-brand-red py-3 text-sm font-extrabold text-white"
+                        onClick={() => {
+                          setPinPassword('')
+                          setChatPinError('')
+                          setChatPinDraft('__pwd__')
+                        }}
+                      >
+                        Remove PIN
+                      </button>
+                    </>
+                  )}
+                  {chatPinStep === 'change' && (
+                    <>
+                      <p className="text-sm font-extrabold text-ink">Change chat lock PIN</p>
+                      <p className="mt-1 text-xs font-semibold text-gray-400">Enter current PIN, then the new one</p>
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        maxLength={8}
+                        value={chatPinDraft === '__pwd__' ? '' : chatPinDraft}
+                        onChange={(e) => { setChatPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8)); setChatPinError('') }}
+                        className="mt-3 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+                        placeholder="Current PIN"
+                        autoFocus
+                      />
+                      <input
+                        type="password"
+                        inputMode="numeric"
+                        maxLength={8}
+                        value={chatPinConfirm}
+                        onChange={(e) => { setChatPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 8)); setChatPinError('') }}
+                        className="mt-2 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+                        placeholder="New PIN"
+                      />
+                      {chatPinError ? <p className="mt-2 text-xs font-bold text-brand-red">{chatPinError}</p> : null}
+                      <button
+                        type="button"
+                        className="mt-3 w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
+                        onClick={() => {
+                          try {
+                            const cur = localStorage.getItem('sc_chat_lock_pin') || ''
+                            if (!cur || chatPinDraft !== cur) {
+                              setChatPinError('Current PIN is wrong')
+                              return
+                            }
+                            if (chatPinConfirm.length < 4) {
+                              setChatPinError('New PIN must be at least 4 digits')
+                              return
+                            }
+                            localStorage.setItem('sc_chat_lock_pin', chatPinConfirm)
+                            setChatPinStep('idle')
+                            setChatPinDraft('')
+                            setChatPinConfirm('')
+                            setToast('Chat lock PIN updated')
+                          } catch {
+                            setChatPinError('Could not update PIN')
+                          }
+                        }}
+                      >
+                        Save new PIN
+                      </button>
+                    </>
+                  )}
+                  {chatPinStep === 'clear' && chatPinDraft === '__pwd__' && (
+                    <>
+                      <p className="mt-3 text-sm font-extrabold text-ink">Remove chat lock PIN</p>
+                      <p className="mt-1 text-xs font-semibold text-gray-400">Enter your account password</p>
+                      <input
+                        type="password"
+                        value={pinPassword}
+                        onChange={(e) => { setPinPassword(e.target.value); setChatPinError('') }}
+                        className="mt-3 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-semibold outline-none focus:border-brand-purple"
+                        placeholder="Account password"
+                        autoFocus
+                      />
+                      {chatPinError ? <p className="mt-2 text-xs font-bold text-brand-red">{chatPinError}</p> : null}
+                      <button
+                        type="button"
+                        className="mt-3 w-full rounded-full bg-brand-red py-3 text-sm font-extrabold text-white"
+                        onClick={async () => {
+                          const phone = (me as any)?.phone || (s as any).phone || ''
+                          if (!phone || !pinPassword) {
+                            setChatPinError('Enter your password')
+                            return
+                          }
+                          try {
+                            const session = await api.login({
+                              phone_number: String(phone).replace(/[^\d+]/g, ''),
+                              password: pinPassword,
+                            })
+                            if (session?.access_token && session?.refresh_token && session?.user) {
+                              const { setSession } = await import('../api')
+                              setSession(session.access_token, session.refresh_token, session.user)
+                            }
+                            localStorage.removeItem('sc_chat_lock_pin')
+                            localStorage.removeItem('sc_chat_locks')
+                            setChatPinStep('idle')
+                            setPinPassword('')
+                            setChatPinDraft('')
+                            setToast('Chat lock PIN removed')
+                          } catch {
+                            setChatPinError('Wrong password')
+                          }
+                        }}
+                      >
+                        Remove PIN
+                      </button>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="mt-2 w-full rounded-full bg-gray-100 py-2.5 text-sm font-bold text-gray-500"
+                    onClick={() => setChatPinStep('idle')}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
             </motion.div>
           )}
 
@@ -772,7 +1002,9 @@ export function Settings({
             <motion.div key="premium" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
               <div className="rounded-3xl bg-gradient-to-br from-brand-purple/15 to-brand-orange/10 p-4">
                 <p className="text-sm font-extrabold text-ink">
-                  {((s as any).subscriptionPlan || me?.subscriptionPlan) === 'premium' ? 'Premium member' : 'Pro · Free plan'}
+                  {((s as any).subscriptionPlan || me?.subscriptionPlan) === 'premium'
+                    ? 'You have unlocked Premium'
+                    : 'Pro · Free plan'}
                 </p>
                 {((s as any).subscriptionPlan) === 'premium' && (s as any).premiumExpiresAt ? (
                   <p className="mt-1 text-xs font-bold text-brand-purple/80">
@@ -916,23 +1148,29 @@ export function Settings({
                   }
                 />
                 {!!(s as any).busyEnabled && (
-                  <div className="space-y-3 px-1 pb-3">
+                  <div className="mx-3 mb-3 space-y-3 rounded-2xl bg-gray-50/80 p-3 ring-1 ring-black/4">
                     <label className="block text-[11px] font-extrabold text-gray-400">Who sees busy</label>
                     <Select
-                      value={(s as any).busyScope || 'everyone'}
-                      onChange={(v) => setSetting('busyScope' as any, v as never)}
+                      value={busyDraft.scope || 'everyone'}
+                      onChange={(v) => setBusyDraft((d) => ({ ...d, scope: v }))}
                       options={[
                         { value: 'everyone', label: 'Everyone' },
                         { value: 'contacts', label: 'My contacts' },
                       ]}
                     />
-                    <label className="block text-[11px] font-extrabold text-gray-400">Custom message</label>
+                    <label className="block text-[11px] font-extrabold text-gray-400">Custom message (text only)</label>
                     <input
-                      value={(s as any).busyMessage || ''}
+                      value={busyDraft.message}
                       maxLength={28}
-                      onChange={(e) => setSetting('busyMessage' as any, e.target.value.slice(0, 28) as never)}
+                      onChange={(e) => {
+                        // Strip emoji / symbols outside basic latin + common punctuation
+                        const cleaned = e.target.value
+                          .replace(/[^\w\s.,!?@#&'\-:+]/g, '')
+                          .slice(0, 28)
+                        setBusyDraft((d) => ({ ...d, message: cleaned }))
+                      }}
                       placeholder="e.g. in a meeting"
-                      className="w-full rounded-2xl bg-gray-50 px-3 py-2.5 text-sm font-bold outline-none ring-1 ring-black/5 focus:ring-brand-purple/30"
+                      className="w-full rounded-2xl bg-white px-3 py-2.5 text-sm font-bold outline-none ring-1 ring-black/5 focus:ring-brand-purple/30"
                     />
                     <label className="block text-[11px] font-extrabold text-gray-400">Duration (max 1 hour)</label>
                     <div className="flex gap-2">
@@ -941,16 +1179,16 @@ export function Settings({
                         { m: 30, label: '30 min' },
                         { m: 60, label: '1 hour' },
                       ].map((d) => {
-                        const active = Number((s as any).busyDurationMin || 30) === d.m
+                        const active = Number(busyDraft.durationMin || 30) === d.m
                         return (
                           <button
                             key={d.m}
                             type="button"
-                            onClick={() => setSetting('busyDurationMin' as any, d.m as never)}
+                            onClick={() => setBusyDraft((x) => ({ ...x, durationMin: d.m }))}
                             className={`flex-1 rounded-2xl py-2.5 text-xs font-extrabold transition ${
                               active
                                 ? 'bg-brand-purple text-white shadow-md'
-                                : 'bg-gray-50 text-ink ring-1 ring-black/5'
+                                : 'bg-white text-ink ring-1 ring-black/5'
                             }`}
                           >
                             {d.label}
@@ -960,21 +1198,36 @@ export function Settings({
                     </div>
                     <button
                       type="button"
-                      className="w-full rounded-full bg-gradient-to-r from-brand-purple to-brand-orange py-3 text-sm font-extrabold text-white shadow-md active:scale-[0.98]"
-                      onClick={() => {
-                        const mins = Number((s as any).busyDurationMin || 30)
+                      disabled={busySaving}
+                      className="w-full rounded-full bg-gradient-to-r from-brand-purple to-brand-orange py-3 text-sm font-extrabold text-white shadow-md active:scale-[0.98] disabled:opacity-60"
+                      onClick={async () => {
+                        if (busySaving) return
+                        setBusySaving(true)
+                        const mins = Number(busyDraft.durationMin || 30)
                         const until = new Date(Date.now() + mins * 60 * 1000).toISOString()
-                        setSetting('busyUntil' as any, until as never)
-                        setSetting('busyEnabled' as any, true as never)
-                        void api.updatePreferences({
-                          busy_enabled: true,
-                          busy_message: (s as any).busyMessage || '',
-                          busy_until: until,
-                          busy_scope: (s as any).busyScope || 'everyone',
-                        }).then(() => setToast('Busy status updated')).catch(() => setToast('Could not update busy status'))
+                        const msg = busyDraft.message || ''
+                        const scope = busyDraft.scope || 'everyone'
+                        try {
+                          await api.updatePreferences({
+                            busy_enabled: true,
+                            busy_message: msg,
+                            busy_until: until,
+                            busy_scope: scope,
+                          })
+                          setSetting('busyEnabled' as any, true as never, { silent: true, skipServer: true } as any)
+                          setSetting('busyMessage' as any, msg as never, { silent: true, skipServer: true } as any)
+                          setSetting('busyUntil' as any, until as never, { silent: true, skipServer: true } as any)
+                          setSetting('busyScope' as any, scope as never, { silent: true, skipServer: true } as any)
+                          setSetting('busyDurationMin' as any, mins as never, { silent: true, skipServer: true } as any)
+                          setToast('Busy status updated')
+                        } catch {
+                          setToast('Could not update busy status')
+                        } finally {
+                          setBusySaving(false)
+                        }
                       }}
                     >
-                      Update busy status
+                      {busySaving ? 'Updating…' : 'Update busy status'}
                     </button>
                     <p className="text-[11px] font-semibold text-gray-400">
                       Overrides Online for contacts. Typing still shows. Expires after the duration.
@@ -1304,12 +1557,12 @@ export function Settings({
       </Sheet>
 
       {loggingOut && (
-        <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-white/90 backdrop-blur-md">
-          <div className="flex flex-col items-center gap-4 rounded-3xl bg-white px-10 py-8 shadow-xl ring-1 ring-black/5">
+        <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-gradient-to-b from-[#F8F1FF] via-white to-[#EEF2FF]">
+          <div className="flex flex-col items-center gap-4 rounded-3xl bg-transparent px-10 py-8">
             <div className="flex h-12 items-end gap-1.5" aria-hidden>
               <span className="h-3 w-3 animate-bounce rounded-full bg-brand-purple [animation-delay:-0.3s]" />
-              <span className="h-3 w-3 animate-bounce rounded-full bg-brand-purple [animation-delay:-0.15s]" />
-              <span className="h-3 w-3 animate-bounce rounded-full bg-brand-purple" />
+              <span className="h-3 w-3 animate-bounce rounded-full bg-brand-orange [animation-delay:-0.15s]" />
+              <span className="h-3 w-3 animate-bounce rounded-full bg-brand-blue" />
             </div>
             <p className="text-base font-extrabold text-ink">Logging you out…</p>
             <p className="text-xs font-semibold text-gray-400">Please wait</p>

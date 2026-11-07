@@ -177,6 +177,7 @@ class ContactService:
                 set_fields["shared_phone"] = peer_phone
             if nick:
                 set_fields["nickname"] = nick
+            # Never put the same path in both $set and $setOnInsert (Mongo conflict → 500)
             await db.contacts.update_one(
                 {"owner_user_id": owner, "contact_user_id": contact},
                 {
@@ -184,7 +185,6 @@ class ContactService:
                     "$setOnInsert": {
                         "owner_user_id": owner,
                         "contact_user_id": contact,
-                        "nickname": nick,
                         "created_at": now,
                     },
                 },
@@ -194,7 +194,9 @@ class ContactService:
         await asyncio.gather(
             _upsert_edge(req["from_user_id"], req["to_user_id"], "", sender_nick),
             _upsert_edge(req["to_user_id"], req["from_user_id"], from_phone or "", None),
-            db.user_activity_logs.insert_one(
+        )
+        try:
+            await db.user_activity_logs.insert_one(
                 {
                     "user_id": user_id,
                     "event_type": "contact",
@@ -204,8 +206,53 @@ class ContactService:
                     "timestamp": now,
                     "metadata": {"from_user_id": req["from_user_id"]},
                 }
-            ),
-        )
+            )
+        except Exception:
+            pass
+
+        # Notify the sender: "<acceptor> accepted your save request"
+        # Works when online (WS) and when they come back (notifications collection)
+        try:
+            acceptor = await db.users.find_one(
+                {"_id": ObjectId(user_id)},
+                {"username": 1, "display_name": 1, "profile_photo": 1},
+            )
+            name = (
+                (acceptor or {}).get("display_name")
+                or (acceptor or {}).get("username")
+                or "Someone"
+            )
+            notif = {
+                "user_id": req["from_user_id"],
+                "type": "save_request_accepted",
+                "title": "Save request accepted",
+                "body": f"{name} accepted your save request",
+                "actor_id": user_id,
+                "actor_name": name,
+                "actor_photo": (acceptor or {}).get("profile_photo"),
+                "read": False,
+                "created_at": now,
+            }
+            await db.notifications.insert_one(notif)
+            try:
+                from app.websocket.manager import manager
+                await manager.send_user(
+                    str(req["from_user_id"]),
+                    {
+                        "t": "notif",
+                        "type": "save_request_accepted",
+                        "title": notif["title"],
+                        "body": notif["body"],
+                        "actor_id": user_id,
+                        "actor_name": name,
+                        "actor_photo": notif["actor_photo"],
+                    },
+                )
+            except Exception:
+                pass
+        except Exception:
+            pass
+
         return {"id": request_id, "status": ContactRequestStatus.ACCEPTED.value}
 
     @staticmethod

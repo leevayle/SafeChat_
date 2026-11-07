@@ -977,10 +977,18 @@ export const api = {
     return { chats: Array.from(byPeer.values()) }
   },
 
-  openPrivateChat: async (username: string) => {
+  openPrivateChat: async (opts: string | { username?: string; userId?: string }) => {
+    const username = typeof opts === 'string' ? opts : (opts.username || '')
+    const userId = typeof opts === 'string' ? '' : (opts.userId || '')
+    const body: Record<string, string> = {}
+    if (username) body.participant_username = username.replace(/^@/, '').trim()
+    if (userId) body.peer_user_id = userId
+    if (!body.participant_username && !body.peer_user_id) {
+      throw Object.assign(new Error('Missing contact username'), { status: 422 })
+    }
     const conv = await req<any>('/api/v1/conversations/private', {
       method: 'POST',
-      body: JSON.stringify({ participant_username: username }),
+      body: JSON.stringify(body),
     })
     return mapConversation(conv, meId())
   },

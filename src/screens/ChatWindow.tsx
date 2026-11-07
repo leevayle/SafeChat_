@@ -7,8 +7,9 @@ import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
 import { isRealtimeOpen, wsSendMessage, wsReceipt, wsLiveTyping, wsTyping } from '../realtime'
 import { FONT_SIZES, WALLPAPERS, useStore } from '../store'
 import { playInboxLandingChime } from '../lib/sounds'
-import { compressForWeb } from '../lib/imageProcess'
+import { compressForWeb, fileToDataUrl } from '../lib/imageProcess'
 import { getCachedMessages, setCachedMessages, hydrateThreadFromDisk } from '../lib/messageCache'
+import { ChatImageCropper } from '../components/ChatImageCropper'
 import { warmPhoto } from '../lib/photoCache'
 import { putOutbox, removeOutbox } from '../lib/appCache'
 
@@ -34,15 +35,6 @@ function mediaUrl(path?: string | null) {
   if (!path) return ''
   if (path.startsWith('http') || path.startsWith('data:')) return path
   return `${API_ORIGIN}${path}`
-}
-
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader()
-    r.onload = () => resolve(String(r.result))
-    r.onerror = reject
-    r.readAsDataURL(file)
-  })
 }
 
 const STATE_RANK: Record<string, number> = {
@@ -322,13 +314,15 @@ const MessageBubble = memo(function MessageBubble({
         )}
 
         <p
-          className={`flex items-center justify-end gap-1 px-3.5 pb-1.5 pt-0.5 text-[10px] font-bold tracking-wide ${
+          className={`flex items-center justify-end gap-1 px-3.5 pb-1 pt-0.5 text-[10px] font-bold tracking-wide leading-none ${
             mine ? 'text-white/70' : 'text-gray-400'
           }`}
         >
           {(m as any).editing ? <span className="mr-0.5 opacity-80">editing…</span> : (m as any).edited ? <span className="mr-0.5 opacity-80">edited</span> : null}
           {m.timeLabel || formatLocalTime(m.time)}
-          <ReceiptTicks state={m.state} readReceipts={readReceipts} mine={mine} />
+          <span className="inline-flex translate-y-[1px] items-center">
+            <ReceiptTicks state={m.state} readReceipts={readReceipts} mine={mine} />
+          </span>
         </p>
       </div>
         {/* Reactions hang on the bubble border — no extra bubble height */}
@@ -448,6 +442,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [emoji, setEmoji] = useState(false)
   const [loading, setLoading] = useState(true)
   const [pendingImage, setPendingImage] = useState<string | null>(null)
+  const [cropSrc, setCropSrc] = useState<string | null>(null)
   const [replyTo, setReplyTo] = useState<ApiMsg | null>(null)
   const [profileOpen, setProfileOpen] = useState(false)
   // ESC → back to chats home
@@ -638,9 +633,11 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               state: pickState(sm.state, match.state),
               text: sm.text || match.text,
               image: sm.image ?? match.image,
-              timeLabel: sm.timeLabel || match.timeLabel,
+              time: match.time || sm.time,
+              timeLabel: match.timeLabel || sm.timeLabel,
               replyToId: sm.replyToId || match.replyToId,
               replyToText: sm.replyToText || match.replyToText,
+              reactions: (sm as any).reactions?.length ? (sm as any).reactions : (match as any).reactions,
             }
           }
           claimedIds.add(sm.id)
@@ -1286,9 +1283,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       return
     }
     try {
-      // Compress + optimize for web; do not crop
-      const data = await compressForWeb(f)
-      setPendingImage(data)
+      const src = await fileToDataUrl(f)
+      setCropSrc(src)
     } catch {
       showToast('Could not process image')
     }
@@ -1551,7 +1547,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           <div className="min-w-0 flex-1">
             <p className="truncate font-extrabold leading-tight">{c.name}</p>
             <p
-              className={`truncate text-xs font-bold ${
+              className={`text-xs font-bold ${
                 peerRecording || liveDraft || typing || peerOnline || c.online
                   ? 'text-brand-blue'
                   : 'text-gray-400'
@@ -1567,11 +1563,22 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                 const online = !!(presenceMap?.[peer] || peerOnline || c.online)
                 const last = peerLastSeen || (c as any).lastSeen
                 if (busyActive) {
-                  // Alternate busy message with last seen (or Online)
-                  if (subtitleTick % 2 === 0) return busyInfo!.message || 'busy'
-                  if (online) return 'Online'
-                  if (last) return formatLastSeen(last)
-                  return busyInfo!.message || 'busy'
+                  const msg = busyInfo!.message || 'busy'
+                  // Phase: even ticks show busy (marquee if long), odd show Online/last seen
+                  if (subtitleTick % 2 === 1) {
+                    if (online) return 'Online'
+                    if (last) return formatLastSeen(last)
+                  }
+                  if (msg.length > 18) {
+                    return (
+                      <span className="block max-w-[11rem] overflow-hidden">
+                        <span className="inline-block whitespace-nowrap animate-[sc-marquee_6s_linear_infinite]">
+                          {msg}
+                        </span>
+                      </span>
+                    )
+                  }
+                  return msg
                 }
                 if (online) return 'Online'
                 if (last) return formatLastSeen(last)
@@ -1640,16 +1647,20 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                   onClick={() => {
                     setChatMenu(false)
                     setPinDraft('')
-                    setPinConfirm('')
                     setPinError('')
+                    let pin = ''
+                    try { pin = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+                    if (!pin) {
+                      showToast?.('Set a chat lock PIN in Settings → Privacy')
+                      return
+                    }
                     if (chatLocked) {
-                      // Unlock / remove lock — require current PIN
-                      setLockSheet('unlock')
-                      // mark intent to remove after successful unlock via pin then clear
                       ;(window as any).__sc_lock_remove = true
+                      setLockSheet('unlock')
                     } else {
                       ;(window as any).__sc_lock_remove = false
-                      setLockSheet('setup')
+                      setLockSheet('unlock') // enter PIN to confirm lock
+                      ;(window as any).__sc_lock_apply = true
                     }
                   }}
                 >
@@ -1797,6 +1808,17 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         <div ref={end} className="h-2 shrink-0 pb-1" />
       </div>
 
+      {cropSrc && (
+        <ChatImageCropper
+          src={cropSrc}
+          title="Crop photo"
+          onCancel={() => setCropSrc(null)}
+          onDone={(dataUrl) => {
+            setCropSrc(null)
+            setPendingImage(dataUrl)
+          }}
+        />
+      )}
       {pendingImage && (
         <div className="relative border-t border-gray-100 bg-white px-4 py-2">
           <img src={pendingImage} alt="" className="h-24 rounded-2xl object-cover" />
@@ -2285,9 +2307,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 try {
-                  const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
-                  const stored = map[contactId] || map[peerId]
-                  if (stored && pinDraft === stored) {
+                  const pin = localStorage.getItem('sc_chat_lock_pin') || ''
+                  if (pin && pinDraft === pin) {
                     setUnlocked(true)
                     setPinDraft('')
                     setPinError('')
@@ -2308,9 +2329,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             className="mt-4 w-full max-w-xs rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
             onClick={() => {
               try {
-                const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
-                const stored = map[contactId] || map[peerId]
-                if (stored && pinDraft === stored) {
+                const pin = localStorage.getItem('sc_chat_lock_pin') || ''
+                if (pin && pinDraft === pin) {
                   setUnlocked(true)
                   setPinDraft('')
                   setPinError('')
@@ -2334,150 +2354,91 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         </div>
       )}
 
-      {/* Setup / confirm / remove lock sheet */}
+      {/* Chat lock — uses global PIN from Settings → Privacy */}
       {lockSheet && (
         <div className="absolute inset-0 z-[65] flex flex-col justify-end bg-black/40" onClick={() => setLockSheet(null)}>
           <div className="rounded-t-3xl bg-white px-5 pb-8 pt-4" onClick={(e) => e.stopPropagation()}>
             <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-gray-200" />
-            {lockSheet === 'setup' && (
-              <>
-                <p className="text-lg font-black">Lock this chat</p>
-                <p className="mt-1 text-sm font-semibold text-gray-500">
-                  Choose a PIN. You&apos;ll enter it every time you open this chat.
-                </p>
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={8}
-                  autoFocus
-                  value={pinDraft}
-                  onChange={(e) => setPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))}
-                  className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
-                  placeholder="Enter PIN"
-                />
-                <button
-                  type="button"
-                  disabled={pinDraft.length < 4}
-                  className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white disabled:opacity-40"
-                  onClick={() => {
-                    setPinConfirm('')
-                    setPinError('')
-                    setLockSheet('confirm')
-                  }}
-                >
-                  Continue
-                </button>
-              </>
-            )}
-            {lockSheet === 'confirm' && (
-              <>
-                <p className="text-lg font-black">Confirm PIN</p>
-                <p className="mt-1 text-sm font-semibold text-gray-500">Enter the same PIN again</p>
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={8}
-                  autoFocus
-                  value={pinConfirm}
-                  onChange={(e) => {
-                    setPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 8))
-                    setPinError('')
-                  }}
-                  className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
-                  placeholder="Repeat PIN"
-                />
-                {pinError ? <p className="mt-2 text-sm font-bold text-brand-red">{pinError}</p> : null}
-                <button
-                  type="button"
-                  disabled={pinConfirm.length < 4}
-                  className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white disabled:opacity-40"
-                  onClick={() => {
-                    if (pinConfirm !== pinDraft) {
-                      setPinError('PINs do not match')
-                      return
-                    }
-                    try {
-                      const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
-                      map[contactId] = pinDraft
-                      if (peerId && peerId !== contactId) map[peerId] = pinDraft
-                      localStorage.setItem('sc_chat_locks', JSON.stringify(map))
-                    } catch { /* */ }
+            <p className="text-lg font-black">
+              {(window as any).__sc_lock_remove
+                ? 'Remove chat lock'
+                : (window as any).__sc_lock_apply
+                  ? 'Lock this chat'
+                  : 'Unlock chat'}
+            </p>
+            <p className="mt-1 text-sm font-semibold text-gray-500">
+              {(window as any).__sc_lock_apply
+                ? 'Enter your chat lock PIN to confirm'
+                : 'Enter your chat lock PIN'}
+            </p>
+            <input
+              type="password"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={8}
+              autoFocus
+              value={pinDraft}
+              onChange={(e) => {
+                setPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))
+                setPinError('')
+              }}
+              className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+              placeholder="••••"
+            />
+            {pinError ? <p className="mt-2 text-sm font-bold text-brand-red">{pinError}</p> : null}
+            <button
+              type="button"
+              className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
+              onClick={() => {
+                try {
+                  const pin = localStorage.getItem('sc_chat_lock_pin') || ''
+                  if (!pin || pinDraft !== pin) {
+                    setPinError('Wrong PIN')
+                    return
+                  }
+                  const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+                  if ((window as any).__sc_lock_remove) {
+                    delete map[contactId]
+                    if (peerId) delete map[peerId]
+                    localStorage.setItem('sc_chat_locks', JSON.stringify(map))
+                    setChatLocked(false)
+                    setUnlocked(true)
+                    showToast?.('Chat unlocked')
+                  } else if ((window as any).__sc_lock_apply) {
+                    map[contactId] = true
+                    if (peerId && peerId !== contactId) map[peerId] = true
+                    localStorage.setItem('sc_chat_locks', JSON.stringify(map))
                     setChatLocked(true)
                     setUnlocked(true)
-                    setLockSheet(null)
-                    setPinDraft('')
-                    setPinConfirm('')
                     showToast?.('Chat locked')
-                  }}
-                >
-                  Lock chat
-                </button>
-              </>
-            )}
-            {lockSheet === 'unlock' && (
-              <>
-                <p className="text-lg font-black">
-                  {(window as any).__sc_lock_remove ? 'Remove chat lock' : 'Unlock chat'}
-                </p>
-                <p className="mt-1 text-sm font-semibold text-gray-500">Enter your PIN</p>
-                <input
-                  type="password"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={8}
-                  autoFocus
-                  value={pinDraft}
-                  onChange={(e) => {
-                    setPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))
-                    setPinError('')
-                  }}
-                  className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
-                  placeholder="••••"
-                />
-                {pinError ? <p className="mt-2 text-sm font-bold text-brand-red">{pinError}</p> : null}
-                <button
-                  type="button"
-                  className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
-                  onClick={() => {
-                    try {
-                      const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
-                      const stored = map[contactId] || map[peerId]
-                      if (stored && pinDraft === stored) {
-                        if ((window as any).__sc_lock_remove) {
-                          delete map[contactId]
-                          if (peerId) delete map[peerId]
-                          localStorage.setItem('sc_chat_locks', JSON.stringify(map))
-                          setChatLocked(false)
-                          setUnlocked(true)
-                          showToast?.('Chat unlocked')
-                        } else {
-                          setUnlocked(true)
-                        }
-                        setLockSheet(null)
-                        setPinDraft('')
-                        setPinError('')
-                      } else {
-                        setPinError('Wrong PIN')
-                      }
-                    } catch {
-                      setPinError('Wrong PIN')
-                    }
-                  }}
-                >
-                  {(window as any).__sc_lock_remove ? 'Remove lock' : 'Unlock'}
-                </button>
-              </>
-            )}
+                  } else {
+                    setUnlocked(true)
+                  }
+                  ;(window as any).__sc_lock_remove = false
+                  ;(window as any).__sc_lock_apply = false
+                  setLockSheet(null)
+                  setPinDraft('')
+                  setPinError('')
+                } catch {
+                  setPinError('Wrong PIN')
+                }
+              }}
+            >
+              {(window as any).__sc_lock_remove
+                ? 'Remove lock'
+                : (window as any).__sc_lock_apply
+                  ? 'Lock chat'
+                  : 'Unlock'}
+            </button>
             <button
               type="button"
               className="mt-2 w-full rounded-full bg-gray-100 py-3.5 text-sm font-extrabold text-gray-600"
               onClick={() => {
                 setLockSheet(null)
                 setPinDraft('')
-                setPinConfirm('')
                 setPinError('')
+                ;(window as any).__sc_lock_remove = false
+                ;(window as any).__sc_lock_apply = false
               }}
             >
               Cancel
