@@ -1967,9 +1967,13 @@ export function Settings({
               onClick={() => {
                 setConfirm(null)
                 setLoggingOut(true)
-                window.setTimeout(() => {
-                  try { onLogout() } catch { /* */ }
-                }, 700)
+                void (async () => {
+                  try {
+                    await Promise.resolve(onLogout())
+                  } catch {
+                    /* stay on overlay until parent routes away */
+                  }
+                })()
               }}
             >
               Log out

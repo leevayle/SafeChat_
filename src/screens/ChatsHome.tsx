@@ -55,7 +55,7 @@ export function ChatsHome({
   onNotifications,
   onSupport,
 }: Props) {
-  const { chats, contacts, statusList, me, listsReady, saveRequestPending, typingPeers, presenceMap, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, refreshSubscription, showToast } = useStore()
+  const { chats, contacts, statusList, me, listsReady, saveRequestPending, notifUnreadCount, typingPeers, presenceMap, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, refreshNotifCount, refreshSubscription, showToast } = useStore()
   /** System-only: save requests etc. Chat unreads live on the bottom nav. */
   const systemNotifCount = saveRequestPending
   const [filter, setFilter] = useState<Filter>('All chats')
@@ -191,9 +191,28 @@ export function ChatsHome({
     try { localStorage.setItem('sc_pinned_chats', JSON.stringify(ids)) } catch { /* */ }
   }
   const pinSelected = () => {
-    const next = Array.from(new Set([...pinnedIds, ...selectedIds]))
-    persistPinned(next)
-    showToast(selectedIds.length > 1 ? 'Chats pinned' : 'Chat pinned')
+    const allPinned = selectedIds.length > 0 && selectedIds.every((id) => pinnedIds.includes(id))
+    if (allPinned) {
+      persistPinned(pinnedIds.filter((id) => !selectedIds.includes(id)))
+      showToast(selectedIds.length > 1 ? 'Chats unpinned' : 'Chat unpinned')
+      clearSelection()
+      return
+    }
+    const room = Math.max(0, 3 - pinnedIds.length)
+    if (room <= 0) {
+      showToast('You can pin up to 3 chats')
+      return
+    }
+    const toAdd = selectedIds.filter((id) => !pinnedIds.includes(id)).slice(0, room)
+    if (!toAdd.length) {
+      clearSelection()
+      return
+    }
+    if (selectedIds.filter((id) => !pinnedIds.includes(id)).length > room) {
+      showToast('Only 3 chats can be pinned')
+    }
+    persistPinned([...pinnedIds, ...toAdd])
+    showToast(toAdd.length > 1 ? 'Chats pinned' : 'Chat pinned')
     clearSelection()
   }
   const deleteSelected = () => {
@@ -297,7 +316,10 @@ export function ChatsHome({
           </span>
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto no-scrollbar">
             <button type="button" onClick={pinSelected} className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3 py-2 text-xs font-extrabold text-brand-purple">
-              <Pin size={15} /> Pin
+              <Pin size={15} className="rotate-45 text-gray-600" />{' '}
+              {selectedIds.length > 0 && selectedIds.every((id) => pinnedIds.includes(id))
+                ? 'Unpin'
+                : 'Pin'}
             </button>
             <button type="button" onClick={deleteSelected} className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-red/10 px-3 py-2 text-xs font-extrabold text-brand-red">
               <Trash2 size={15} /> Delete
@@ -341,7 +363,7 @@ export function ChatsHome({
                   { label: 'New group', fn: onNewGroup, Icon: Users },
                   { label: 'Contacts', fn: onContacts, Icon: ContactRound },
                   { label: 'Save requests', fn: onSaveRequests, Icon: UserRoundPlus, badge: pendingCount },
-                  { label: 'Notifications', fn: onNotifications, Icon: BellRing },
+                  { label: 'Notifications', fn: onNotifications, Icon: BellRing, badge: notifUnreadCount },
                   {
                     label: 'Refresh',
                     fn: () => {
@@ -365,6 +387,7 @@ export function ChatsHome({
                           refreshStatus(),
                           refreshContacts(),
                           refreshSaveRequests(),
+                          refreshNotifCount?.() ?? Promise.resolve(),
                           refreshSubscription(),
                         ])
                         showToast('Up to date')
@@ -638,7 +661,11 @@ export function ChatsHome({
                         <div className="flex items-center justify-between gap-2">
                           <p className="truncate font-extrabold">
                             {pinnedIds.includes(c.contactId) ? (
-                              <span className="mr-1 text-brand-purple" aria-hidden>📌</span>
+                              <Pin
+                                size={12}
+                                className="mr-1 inline -translate-y-px rotate-45 text-gray-400"
+                                aria-hidden
+                              />
                             ) : null}
                             {(ct as any).savedName || ct.name}
                           </p>

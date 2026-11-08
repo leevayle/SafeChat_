@@ -62,7 +62,7 @@ export function Notifications({
   onOpenCalls,
   onOpenStatus,
 }: Props) {
-  const { saveRequestPending, calls, chats, contacts, showToast, me, refreshContacts } = useStore()
+  const { saveRequestPending, calls, chats, contacts, showToast, me, refreshContacts, refreshNotifCount } = useStore()
   const meIdPlaceholder = me?.id || ''
   const [filter, setFilter] = useState<Filter>('all')
   const [incoming, setIncoming] = useState<any[]>([])
@@ -99,6 +99,7 @@ export function Notifications({
         ;(window as any).__sc_server_notifs = notifications || []
         void saveCachedNotifications(notifications || [])
         setServerNotifs(notifications || [])
+        void refreshNotifCount?.()
         if ((notifications || []).some((n: any) => n.type === 'contact_accepted')) {
           void refreshContacts()
         }
@@ -139,6 +140,8 @@ export function Notifications({
       return next
     })
     showToast('All caught up')
+    try { void api.markAllNotificationsRead() } catch { /* */ }
+    void refreshNotifCount?.()
   }
 
   const items: NotifItem[] = useMemo(() => {
@@ -307,7 +310,7 @@ export function Notifications({
   }
 
   return (
-    <div className="flex h-full flex-col bg-[#f7f8fa]">
+    <div className="flex h-full flex-col bg-gradient-to-b from-[#f3eeff]/80 via-white to-[#eef4ff]/50">
       <header className="z-10 shrink-0 border-b border-black/5 bg-white/90 px-3 pb-3 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur-md">
         <div className="flex items-center gap-1">
           <button
@@ -349,8 +352,8 @@ export function Notifications({
               onClick={() => setFilter(id)}
               className={`shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-extrabold transition ${
                 filter === id
-                  ? 'bg-ink text-white'
-                  : 'bg-white text-gray-500 ring-1 ring-black/6'
+                  ? 'bg-brand-purple text-white'
+                  : 'bg-white text-gray-500 ring-1 ring-brand-purple/15'
               }`}
             >
               {label}
@@ -459,6 +462,8 @@ export function Notifications({
                               markRead(n.id)
                               try {
                                 await api.tictactoeAccept(String((n as any).gameId))
+                                try { await api.markNotificationRead(n.id.replace(/^ginv-/, '')) } catch { /* */ }
+                                void refreshNotifCount?.()
                                 showToast('Game on')
                                 try {
                                   sessionStorage.setItem('sc_open_self_chat', '1')

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Users, Bot, Sparkles } from 'lucide-react'
 import { api } from '../api'
 import { useStore } from '../store'
+import { Avatar } from './Avatar'
 
 type Mode = 'menu' | 'solo-diff' | 'solo' | 'pick-friend' | 'waiting' | 'live'
 
@@ -343,15 +344,15 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
                       : 'bg-white/90 ring-1 ring-black/5'
                   }`}
                 >
-                  <span
-                    className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-black ${
-                      selected
-                        ? 'bg-brand-purple text-white'
-                        : 'bg-gradient-to-br from-brand-purple/20 to-[#5984F2]/20 text-brand-purple'
-                    }`}
-                  >
-                    {name.slice(0, 1)}
-                  </span>
+                  <Avatar
+                    contact={{
+                      id,
+                      name,
+                      photo: c.photo || null,
+                      hue: c.hue || ['#7B2CBF', '#6389EB'],
+                    }}
+                    size={40}
+                  />
                   <span className="min-w-0 flex-1 font-extrabold text-ink">{name}</span>
                   {selected ? (
                     <span className="text-[11px] font-black text-brand-purple">Selected</span>

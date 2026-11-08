@@ -478,6 +478,7 @@ type Store = {
   calls: any[]
   /** Pending incoming save/contact requests (home badge) */
   saveRequestPending: number
+  notifUnreadCount: number
   refreshChats: () => Promise<void>
   /** Pull latest plan/premium flags from server (other-device upgrades). */
   syncSubscription: () => Promise<void>
@@ -489,6 +490,7 @@ type Store = {
   refreshStatus: () => Promise<void>
   refreshSubscription: () => Promise<void>
   refreshCalls: () => Promise<void>
+  refreshNotifCount: () => Promise<void>
   refreshSaveRequests: () => Promise<void>
   /** Optimistic local updates to status feed (UI-first) */
   patchStatusList: (fn: (list: any[]) => any[]) => void
@@ -586,6 +588,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [statusList, setStatusList] = useState<any[]>([])
   const [calls, setCalls] = useState<any[]>([])
   const [saveRequestPending, setSaveRequestPending] = useState(0)
+  const [notifUnreadCount, setNotifUnreadCount] = useState(0)
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const clearToast = useCallback(() => {
@@ -1010,6 +1013,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [wipeSession])
 
+  const refreshNotifCount = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
+    try {
+      const r = await api.notifUnreadCount()
+      setNotifUnreadCount(Number(r?.count || 0))
+    } catch {
+      /* */
+    }
+  }, [])
+
   const refreshSaveRequests = useCallback(async () => {
     if (!hasAccessToken() || isSessionDead()) return
     try {
@@ -1193,6 +1206,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshGroups(),
       refreshSaveRequests(),
       refreshContacts(),
+      refreshNotifCount(),
     ])
 
     // Phase 4 — warm photos (does not block UI)
@@ -1213,7 +1227,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       /* */
     }
-  }, [refreshChats, refreshCalls, refreshStatus, refreshGroups, refreshSaveRequests, refreshContacts])
+  }, [refreshChats, refreshCalls, refreshStatus, refreshGroups, refreshSaveRequests, refreshContacts, refreshNotifCount])
 
   const bootStarted = useRef(false)
   useEffect(() => {
@@ -2016,6 +2030,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     }
     window.addEventListener('sc:delete-chats', onDelete)
+    const onGameInvite = () => {
+      setNotifUnreadCount((n) => n + 1)
+    }
+    window.addEventListener('sc:rt-game-invite', onGameInvite)
     const onDeleteCalls = (ev: Event) => {
       const ids = new Set((((ev as CustomEvent).detail?.ids || []) as string[]).map(String))
       if (!ids.size) return
@@ -2031,6 +2049,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     window.addEventListener('sc:delete-locked-chats', onDeleteLocked)
     return () => {
       window.removeEventListener('sc:delete-chats', onDelete)
+      window.removeEventListener('sc:rt-game-invite', onGameInvite)
       window.removeEventListener('sc:delete-calls', onDeleteCalls)
       window.removeEventListener('sc:delete-locked-chats', onDeleteLocked)
     }
@@ -2188,6 +2207,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       statusList,
       calls,
       saveRequestPending,
+      notifUnreadCount,
+      refreshNotifCount,
       refreshChats,
       syncSubscription,
       refreshContacts,
@@ -2199,6 +2220,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshSubscription,
       refreshCalls,
       refreshSaveRequests,
+      refreshNotifCount,
       patchStatusList,
       upsertChatPreview,
       login,
@@ -2227,6 +2249,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       statusList,
       calls,
       saveRequestPending,
+      notifUnreadCount,
       setSetting,
       saveProfile,
       refreshChats,
@@ -2240,6 +2263,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshSubscription,
       refreshCalls,
       refreshSaveRequests,
+      refreshNotifCount,
       patchStatusList,
       upsertChatPreview,
       login,

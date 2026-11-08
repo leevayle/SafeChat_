@@ -32,21 +32,34 @@ def _print_ready_banner() -> None:
     """CLI banner after startup (SafeChat wordmark in brand colors)."""
     RED = "\033[38;2;227;64;76m"      # #E3404C Safe
     PURPLE = "\033[38;2;138;43;226m"  # #8A2BE2 Chat
-    BLUE = "\033[38;2;89;132;242m"    # #5984F2 trailing dots
+    BLUE = "\033[38;2;89;132;242m"    # #5984F2 end mark
     R = "\033[0m"
+    # Small solid blue block (not a dust-dot) at the end of each logo line
+    box = BLUE + "■" + R
     art = [
-        RED + "  ____         __      " + PURPLE + " ____ _           _  " + BLUE + "·" + R,
-        RED + " / ___|  __ _ / _| ___ " + PURPLE + "/ ___| |__   __ _| |_ " + BLUE + "·" + R,
-        RED + " \\___ \\/ _` | |_ / _ \\" + PURPLE + "| |   | '_ \\ / _` | __|" + BLUE + "·" + R,
-        RED + "  ___) | (_| |  _|  __/" + PURPLE + "| |___| | | | (_| | |_ " + BLUE + "·" + R,
-        RED + " |____/ \\__,_|_|  \\___|" + PURPLE + " \\____|_| |_|\\__,_|\\__|" + BLUE + "·" + R,
-        R,
-        f"  {RED}●{R}  {PURPLE}●{R}  {BLUE}●{R}   server ready",
-        "",
+        RED + "  ____         __      " + PURPLE + " ____ _           _  " + box,
+        RED + " / ___|  __ _ / _| ___ " + PURPLE + "/ ___| |__   __ _| |_ " + box,
+        RED + " \\___ \\/ _` | |_ / _ \\" + PURPLE + "| |   | '_ \\ / _` | __|" + box,
+        RED + "  ___) | (_| |  _|  __/" + PURPLE + "| |___| | | | (_| | |_ " + box,
+        RED + " |____/ \\__,_|_|  \\___|" + PURPLE + " \\____|_| |_|\\__,_|\\__|" + box,
     ]
     print()
     for line in art:
         print(line)
+    # Three blank lines, then centered tagline under the logo
+    print()
+    print()
+    print()
+    taglines = [
+        "Your conversations.",
+        "Your people.",
+        "Your space.",
+    ]
+    # Visual width of logo art (~42 cols of glyphs)
+    width = 44
+    for line in taglines:
+        pad = max(0, (width - len(line)) // 2)
+        print(" " * pad + line)
     print()
 
 
@@ -65,9 +78,8 @@ async def lifespan(app: FastAPI):
         try:
             await connect_to_mongo()
         except Exception as e:
-            logger.error("MongoDB failed: %s", e)
+            logger.error("MongoDB connection failed: %s", e)
             raise
-        logger.info("server ready")
         try:
             _print_ready_banner()
         except Exception:

@@ -1270,6 +1270,14 @@ export const api = {
     return req<any>(`/api/v1/statuses/${id}/like`, { method: 'POST' })
   },
 
+  notifUnreadCount: async () => {
+    try {
+      const data = await req<any>('/api/v1/notifications/unread-count')
+      return { count: Number(data?.count ?? data ?? 0) }
+    } catch {
+      return { count: 0 }
+    }
+  },
   listNotifications: async () => {
     const list = await req<any[]>('/api/v1/notifications')
     return { notifications: list || [] }

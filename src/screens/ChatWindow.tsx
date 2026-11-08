@@ -1827,15 +1827,6 @@ return (
         >
           <Video size={22} />
         </button>
-        <button
-          type="button"
-          disabled
-          aria-label="Play tic tac toe"
-          title="Coming soon"
-          className="flex h-10 w-10 items-center justify-center rounded-full text-gray-300"
-        >
-          <span className="text-lg font-black leading-none">#</span>
-        </button>
         <div className="relative">
           <button
             type="button"

@@ -572,14 +572,15 @@ function Shell() {
               onBack={() => setOverlay(null)}
               onSupport={() => setOverlay('support')}
               onLogout={async () => {
-                setOverlay(null)
+                // Keep Settings (logout overlay) mounted until session is cleared
                 setChat(null)
                 setGroup(null)
                 setCall(null)
                 setTab('chats')
                 restored.current = false
                 await logout()
-                setStage('splash')
+                setOverlay(null)
+                setStage('login')
               }}
             />
           </div>
