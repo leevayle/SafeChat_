@@ -30,39 +30,48 @@ export function Login({
     setError('')
     setOkMsg('')
     try {
-      await login(phone.trim().replace(/[^+\d]/g, ''), password)
-      setOkMsg('Signed in - opening your chats…')
-      try { showToast('Welcome back') } catch { /* */ }
-      // Always hand off to inbox - do not stay on this screen after auth
+      const user = await login(phone.trim().replace(/[^+\d]/g, ''), password)
+      const uname =
+        (user as any)?.username ||
+        (user as any)?.name ||
+        phone.trim().replace(/^@/, '') ||
+        'friend'
+      setOkMsg('Signed in, opening your chats…')
+      try {
+        showToast(`Welcome ${uname}!`)
+      } catch { /* */ }
       onSuccess()
     } catch (e: any) {
       setError(e?.message || 'Login failed')
       setLoading(false)
       return
     }
-    // Keep button in loading state briefly while stage flips to app
     setLoading(false)
   }
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden bg-gradient-to-b from-[#F8F1FF] via-white to-[#EEF2FF] px-7 safe-pt safe-pb ">
-      
-      
-
-      
+    <div className="relative flex h-full flex-col overflow-hidden bg-gradient-to-b from-[#F8F1FF] via-white to-[#EEF2FF] px-7 safe-pt safe-pb">
+      <button
+        type="button"
+        onClick={onBack}
+        className="absolute left-4 top-[max(0.85rem,env(safe-area-inset-top))] z-20 flex h-11 w-11 items-center justify-center rounded-full bg-white/70 text-ink ring-1 ring-black/5 backdrop-blur transition hover:bg-white active:scale-95"
+        aria-label="Back"
+      >
+        <ArrowLeft size={20} />
+      </button>
 
       <motion.div
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.45 }}
-        className="relative z-10 mt-6 flex flex-col items-center text-center mt-30"
+        className="relative z-10 mt-[max(3.5rem,env(safe-area-inset-top))] flex flex-col items-center text-center"
       >
         <LogoIcon size={72} />
         <div className="mt-3">
-          <Wordmark className="text-3xl " />
+          <Wordmark className="text-3xl" />
         </div>
-        <h2 className="mt-5 text-2xl font-black tracking-tight text-ink mt-10">Welcome back</h2>
-        <p className="mt-1.5 max-w-[280px] text-sm font-semibold text-gray-500 pb-10">
+        <h2 className="mt-6 text-2xl font-black tracking-tight text-ink">Welcome</h2>
+        <p className="mt-1.5 max-w-[280px] text-sm font-semibold text-gray-500">
           Sign in to start Safechatting now!
         </p>
       </motion.div>
@@ -71,32 +80,35 @@ export function Login({
         initial={{ opacity: 0, y: 18 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.08, duration: 0.4 }}
-        className="relative z-10 mt-8 space-y-3.5"
+        className="relative z-10 mt-10 space-y-4"
       >
-        <div className="rounded-3xl bg-white/90 p-4   ">
-          <label className="mb-1.5 block text-xs font-bold text-gray-500 ">Phone number</label>
+        <div>
+          <label className="mb-1.5 block text-left text-xs font-bold text-gray-500">
+            Phone or username
+          </label>
           <input
             value={phone}
-            onChange={(e) => setPhone(e.target.value.replace(/[^+\d\s()-]/g, ''))}
-            placeholder="+254..."
-            type="tel"
-            inputMode="tel"
-            autoComplete="tel"
-            className="h-12 w-full rounded-2xl bg-gray-100 px-4 text-[15px] font-semibold outline-none ring-1 ring-transparent transition focus:bg-white focus:ring-brand-purple/25"
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+2547… or username"
+            autoComplete="username"
+            className="h-12 w-full rounded-2xl bg-transparent px-4 text-[15px] font-semibold outline-none ring-1 ring-black/10 transition focus:ring-brand-purple/30"
+            onKeyDown={(e) => e.key === 'Enter' && submit()}
           />
-          <label className="mb-1.5 mt-3.5 block text-xs font-bold text-gray-500">Password</label>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-left text-xs font-bold text-gray-500">Password</label>
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
+            placeholder="Your password"
             autoComplete="current-password"
-            className="h-12 w-full rounded-2xl bg-gray-100 px-4 text-[15px] font-semibold outline-none ring-1 ring-transparent transition focus:bg-white focus:ring-brand-purple/25"
+            className="h-12 w-full rounded-2xl bg-transparent px-4 text-[15px] font-semibold outline-none ring-1 ring-black/10 transition focus:ring-brand-purple/30"
             onKeyDown={(e) => e.key === 'Enter' && submit()}
           />
-          {error && <p className="mt-3 text-sm font-bold text-brand-red">{error}</p>}
-          {okMsg && <p className="mt-3 text-sm font-bold text-brand-purple">{okMsg}</p>}
         </div>
+        {error && <p className="text-left text-sm font-bold text-brand-red">{error}</p>}
+        {okMsg && <p className="text-left text-sm font-bold text-brand-purple">{okMsg}</p>}
       </motion.div>
 
       <div className="relative z-10 mt-auto space-y-3 pt-8">
@@ -111,7 +123,7 @@ export function Login({
         <button
           type="button"
           onClick={() => onSignup?.()}
-          className="h-12 w-full rounded-full bg-white text-sm font-extrabold text-brand-purple shadow-sm ring-1 ring-brand-purple/20 transition hover:bg-brand-purple/5 active:scale-[0.99] mb-10"
+          className="mb-10 h-12 w-full rounded-full bg-white/80 text-sm font-extrabold text-brand-purple ring-1 ring-brand-purple/15 transition hover:bg-brand-purple/5 active:scale-[0.99]"
         >
           Create a new account
         </button>

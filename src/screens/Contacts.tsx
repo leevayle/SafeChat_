@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Search, Plus, Pencil, Phone, MessageCircle, X, UserPlus, Trash2, Star } from 'lucide-react'
+import { Search, Plus, Pencil, Phone, MessageCircle, X, UserPlus, Trash2, Star , Loader2, Check } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { ScreenHeader } from '../components/ui'
 import { useStore } from '../store'
@@ -25,6 +25,9 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const [phoneCountry, setPhoneCountry] = useState('+254')
   const [searchHits, setSearchHits] = useState<any[]>([])
   const [searching, setSearching] = useState(false)
+  /** idle | loading | sent | saved */
+  const [requestState, setRequestState] = useState<Record<string, 'loading' | 'sent' | 'saved'>>({})
+
   const [busy, setBusy] = useState(false)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [notFoundPhone, setNotFoundPhone] = useState<string | null>(null)
@@ -47,34 +50,20 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
 
   const openEdit = (c: ApiContact) => {
     setEdit(c)
-    let note = c.note || ''
-    try {
-      const map = JSON.parse(localStorage.getItem('sc_contact_notes') || '{}') as Record<string, string>
-      const key = c.peerId || c.id
-      if (map[key]) note = map[key]
-    } catch { /* */ }
-    setDraft({ savedName: c.savedName || c.name, note, phone: c.phone || '' })
+    setDraft({ savedName: c.savedName || c.name, note: c.note || '', phone: c.phone })
   }
 
   const contactKey = (c: ApiContact) => c.peerId || c.id
 
-    const saveEdit = async () => {
+  const saveEdit = async () => {
     if (!edit) return
     setBusy(true)
     try {
       await api.updateContact(contactKey(edit), {
         savedName: draft.savedName,
         note: draft.note,
+        phone: draft.phone,
       })
-      // Private note is local-only (backend stores nickname only)
-      try {
-        const key = contactKey(edit)
-        const raw = localStorage.getItem('sc_contact_notes') || '{}'
-        const map = JSON.parse(raw) as Record<string, string>
-        if (draft.note) map[key] = draft.note
-        else delete map[key]
-        localStorage.setItem('sc_contact_notes', JSON.stringify(map))
-      } catch { /* */ }
       await refreshContacts()
       showToast('Contact updated')
       setEdit(null)
@@ -115,6 +104,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
     // Phone numbers (+...) - no live search; resolve only on Send
     if (value.trim().startsWith('+')) {
       setSearchHits([])
+      setSearching(false)
       setAddForm((f) => ({ ...f, username: '', phone: value.trim() }))
       setAddMode('phone')
       return
@@ -123,6 +113,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
     setAddForm((f) => ({ ...f, username: value.replace(/^@/, ''), phone: '' }))
     if (value.trim().length < 2) {
       setSearchHits([])
+      setSearching(false)
       return
     }
     setSearching(true)
@@ -139,6 +130,8 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const addContact = async (peer?: { id: string; username: string; phone: string; name: string }) => {
     setBusy(true)
     setNotFoundPhone(null)
+    const key = peer?.id || peer?.username || identity
+    if (key) setRequestState((m) => ({ ...m, [key]: 'loading' }))
     try {
       let username = (peer?.username || addForm.username || '').replace(/^@/, '').trim()
       let phoneFull = (peer?.phone || addForm.phone || identity || '').trim()
@@ -185,14 +178,20 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
         savedName: addForm.savedName || peer?.name || username || phoneFull,
         sharePhone: addForm.sharePhone,
       })
-      await refreshContacts()
       showToast(res.pending ? 'Save request sent' : 'Contact saved')
-      setAdding(false)
+      if (key) setRequestState((m) => ({ ...m, [key]: res.pending ? 'sent' : 'saved' }))
+      if (!res.pending) setAdding(false)
+      void refreshContacts()
       setIdentity('')
       setAddForm({ username: '', phone: '', savedName: '', sharePhone: true })
       setSearchHits([])
     } catch (e: any) {
       showToast(e?.message || 'Could not add contact')
+      if (key) setRequestState((m) => {
+        const n = { ...m }
+        delete n[key]
+        return n
+      })
     } finally {
       setBusy(false)
     }
@@ -310,38 +309,51 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
                 ? 'Phone numbers are checked only when you send the request.'
                 : 'Type a username to search, or start with + for a phone number.'}
             </p>
-            {searching && !identity.trim().startsWith('+') && (
-              <div className="space-y-2 rounded-2xl bg-gray-50 p-3 ring-1 ring-black/5">
-                {[0,1,2].map((i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <div className="h-10 w-10 animate-pulse rounded-full bg-gray-200" />
-                    <div className="min-w-0 flex-1 space-y-1.5">
-                      <div className="h-3 w-2/5 animate-pulse rounded bg-gray-200" />
-                      <div className="h-2.5 w-1/3 animate-pulse rounded bg-gray-100" />
-                    </div>
-                  </div>
-                ))}
-                <p className="text-center text-[11px] font-bold text-gray-400">Searching…</p>
-              </div>
-            )}
-            {searchHits.length > 0 && !searching && !identity.trim().startsWith('+') && (
-              <ul className="overflow-hidden rounded-2xl border border-gray-100">
-                {searchHits.map((u) => (
-                  <li key={u.id}>
-                    <button
-                      type="button"
-                      onClick={() => addContact(u)}
-                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50"
-                    >
-                      <Avatar contact={u} size={40} />
-                      <div>
-                        <p className="font-extrabold">{u.name}</p>
-                        <p className="text-xs font-semibold text-gray-500">@{u.username}</p>
+            {(searching || searchHits.length > 0) && !identity.trim().startsWith('+') && (
+              <ul className="rounded-2xl border border-gray-100">
+                {searching &&
+                  [0, 1, 2].map((i) => (
+                    <li key={`sk-${i}`} className="flex items-center gap-3 px-3 py-2.5">
+                      <div className="sk-shimmer h-10 w-10 shrink-0 rounded-full" />
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <div className="sk-shimmer h-3 w-2/5 rounded" />
+                        <div className="sk-shimmer h-2.5 w-1/3 rounded" />
                       </div>
-                      <Plus size={18} className="ml-auto text-brand-purple" />
-                    </button>
-                  </li>
-                ))}
+                    </li>
+                  ))}
+                {!searching &&
+                  searchHits.map((u) => {
+                    const st = requestState[u.id] || requestState[u.username]
+                    const inContacts = contacts.some(
+                      (c) => c.id === u.id || c.username === u.username,
+                    )
+                    return (
+                      <li key={u.id}>
+                        <button
+                          type="button"
+                          disabled={st === 'loading' || st === 'sent' || inContacts || st === 'saved'}
+                          onClick={() => addContact(u)}
+                          className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-gray-50 disabled:opacity-80"
+                        >
+                          <Avatar contact={u} size={40} />
+                          <div className="min-w-0 flex-1">
+                            <p className="font-extrabold">{u.name}</p>
+                            <p className="text-xs font-semibold text-gray-500">@{u.username}</p>
+                          </div>
+                          {st === 'loading' ? (
+                            <Loader2 size={18} className="ml-auto animate-spin text-brand-purple" />
+                          ) : inContacts || st === 'saved' ? (
+                            <Check size={18} className="ml-auto text-emerald-500" />
+                          ) : st === 'sent' ? (
+                            <Check size={18} className="ml-auto text-brand-blue" />
+                          ) : (
+                            <Plus size={18} className="ml-auto text-brand-purple" />
+                          )}
+                        </button>
+                      </li>
+                    )
+                  })}
+
               </ul>
             )}
             <label className="block text-xs font-extrabold text-gray-500">Save as (only you see this)</label>
@@ -395,10 +407,10 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
                 <div className="mt-5 flex gap-2">
                   <button
                     type="button"
-                    className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold"
+                    className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-600"
                     onClick={() => setNotFoundPhone(null)}
                   >
-                    Okay
+                    Not now
                   </button>
                   <a
                     href={`sms:${notFoundPhone}?body=${encodeURIComponent(
@@ -422,51 +434,24 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
           <ScreenHeader title="Edit contact" onBack={() => setEdit(null)} />
           <div className="space-y-3 px-5 pt-2">
             <p className="text-xs font-bold text-gray-400">@{edit.username || 'not on SafeChat'}</p>
-            <label className="block text-xs font-extrabold text-gray-500">Name (only you see this)</label>
+            <label className="block text-xs font-extrabold text-gray-500">Name on your phone (only you see this)</label>
             <input
               value={draft.savedName}
               onChange={(e) => setDraft((d) => ({ ...d, savedName: e.target.value }))}
               className="w-full rounded-2xl border border-gray-200 px-4 py-3 font-semibold outline-none focus:border-brand-purple"
             />
-            <label className="block text-xs font-extrabold text-gray-500">Note (only you see this)</label>
+            <label className="block text-xs font-extrabold text-gray-500">Note</label>
             <input
               value={draft.note}
               onChange={(e) => setDraft((d) => ({ ...d, note: e.target.value }))}
               className="w-full rounded-2xl border border-gray-200 px-4 py-3 font-semibold outline-none focus:border-brand-purple"
-              placeholder="Private note"
             />
-            {!!(draft.phone || edit.phone) && (
-              <>
-                <label className="block text-xs font-extrabold text-gray-500">Phone (shared with you)</label>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const num = draft.phone || edit.phone || ''
-                    if (!num) return
-                    try {
-                      await navigator.clipboard?.writeText(num)
-                      showToast('Number copied')
-                    } catch {
-                      showToast(num)
-                    }
-                  }}
-                  onContextMenu={async (e) => {
-                    e.preventDefault()
-                    const num = draft.phone || edit.phone || ''
-                    if (!num) return
-                    try {
-                      await navigator.clipboard?.writeText(num)
-                      showToast('Number copied')
-                    } catch { /* */ }
-                  }}
-                  className="flex w-full items-center justify-between rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-left font-semibold text-gray-700"
-                  aria-label="Copy phone number"
-                >
-                  <span className="select-all">{draft.phone || edit.phone}</span>
-                  <span className="text-[11px] font-bold text-brand-purple">Tap to copy</span>
-                </button>
-              </>
-            )}
+            <label className="block text-xs font-extrabold text-gray-500">Phone</label>
+            <input
+              value={draft.phone}
+              onChange={(e) => setDraft((d) => ({ ...d, phone: e.target.value }))}
+              className="w-full rounded-2xl border border-gray-200 px-4 py-3 font-semibold outline-none focus:border-brand-purple"
+            />
             <PillButton onClick={saveEdit} disabled={busy}>
               {busy ? 'Saving…' : 'Save changes'}
             </PillButton>

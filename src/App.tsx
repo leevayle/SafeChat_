@@ -226,6 +226,18 @@ function Shell() {
     return () => window.removeEventListener('sc:rt-call', onCall)
   }, [stage, me])
 
+  // Premium recharge deep-link from Notifications
+  useEffect(() => {
+    const openPremium = () => {
+      setOverlay('settings')
+      try {
+        sessionStorage.setItem('sc_settings_page', 'premium')
+      } catch { /* */ }
+    }
+    window.addEventListener('sc:open-premium', openPremium)
+    return () => window.removeEventListener('sc:open-premium', openPremium)
+  }, [])
+
   /** Device session helpers — localStorage is the source of truth for "has logged in on this device" */
   const readDeviceSession = () => {
     const hasTokens =
@@ -310,7 +322,7 @@ function Shell() {
   if (stage !== 'app') {
     return (
       <div className="flex min-h-dvh justify-center bg-[#f0f2f5]">
-        <main className="relative h-dvh max-h-[932px] w-full max-w-[430px] overflow-hidden bg-white">
+        <main className="relative h-dvh w-full min-h-[568px] max-w-[430px] overflow-hidden bg-white">
           {stage === 'splash' && (
             <Splash
               onDone={() => {
@@ -404,7 +416,7 @@ function Shell() {
   if (planStatus === 'deactivated' && stage === 'app') {
     return (
       <div className="flex min-h-dvh justify-center bg-[#f0f2f5]">
-        <main className="relative h-dvh max-h-[932px] w-full max-w-[430px] overflow-hidden bg-white">
+        <main className="relative h-dvh w-full max-w-[430px] overflow-hidden bg-white">
           <DeactivatedGate
             onActivated={() => {
               /* session refreshed via reload */
@@ -423,7 +435,7 @@ function Shell() {
   // ── Main app — no stage AnimatePresence (no hop) ───────
   return (
     <div className="flex min-h-dvh justify-center bg-[#f0f2f5]">
-      <main className="relative h-dvh max-h-[932px] w-full max-w-[430px] overflow-hidden bg-white">
+      <main className="relative h-dvh w-full min-h-[568px] max-w-[430px] overflow-hidden bg-white">
         {/* Tab pages */}
         <div
           className="relative h-full"
@@ -538,14 +550,14 @@ function Shell() {
               onBack={() => setOverlay(null)}
               onSupport={() => setOverlay('support')}
               onLogout={async () => {
+                setOverlay(null)
                 setChat(null)
                 setGroup(null)
                 setCall(null)
                 setTab('chats')
                 restored.current = false
                 await logout()
-                setOverlay(null)
-                setStage('login')
+                setStage('splash')
               }}
             />
           </div>

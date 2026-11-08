@@ -16,7 +16,7 @@ function mediaUrl(path?: string | null) {
 
 const SEGMENT_MS = 5000
 
-/** Make http(s) and www links open outside the app */
+/** Make http(s) and www links open outside the app (tap link only, rest of status stays normal) */
 function linkifyStatusText(text: string) {
   const parts = text.split(/(https?:\/\/[^\s]+|www\.[^\s]+)/gi)
   return parts.map((part, i) => {
@@ -28,8 +28,16 @@ function linkifyStatusText(text: string) {
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="underline decoration-white/70 underline-offset-2 text-brand-orange"
-          onClick={(e) => e.stopPropagation()}
+          className="mx-0.5 inline-block rounded-lg bg-white/20 px-2 py-0.5 text-[0.95em] font-bold text-white underline decoration-white/50 underline-offset-2 backdrop-blur-[2px] transition hover:bg-white/30"
+          onClick={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+            try {
+              window.open(href, '_blank', 'noopener,noreferrer')
+            } catch {
+              window.location.href = href
+            }
+          }}
           data-status-action
         >
           {part}
@@ -244,7 +252,7 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
     } catch { /* */ }
   }, [current?.id, isOwner])
 
-  // Register view only for OTHER people's statuses — never for your own
+  // Register view only for OTHER people's statuses, never for your own
   useEffect(() => {
     if (!current?.id || !me?.id) return
     if (isOwner) return
@@ -270,11 +278,9 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
       )
     }
 
-    api
-      .viewStatus(current.id)
-      .then(() => refreshStatus().catch(() => {}))
-      .catch(() => {})
-  }, [current?.id, current?.views, isOwner, me?.id, patchStatusList, refreshStatus])
+    // Server register only, local list already patched above (no full refresh flash)
+    api.viewStatus(current.id).catch(() => {})
+  }, [current?.id, current?.views, isOwner, me?.id, patchStatusList])
 
   // Sync video element with pause / resume
   useEffect(() => {
@@ -344,7 +350,7 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
       if (side === 'left') goPrev()
       else if (side === 'right') goNext()
     } else if (wasPaused) {
-      // long hold released — resume
+      // long hold released, resume
     }
   }
 
@@ -363,27 +369,22 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
     if (!current || !isOwner) return
     setPaused(true)
     setViewersOpen(true)
-    // Prefer cache — if present, show immediately with no loading flash
-    let hadCache = false
+    setViewersLoading(true)
+    // Instant from cache, then refresh
     try {
       const cached = await loadCachedViewers<ViewerRow>(current.id)
       if (cached?.length) {
         setViewers(cached)
         setViewersLoading(false)
-        hadCache = true
-      } else {
-        setViewersLoading(true)
       }
-    } catch {
-      setViewersLoading(true)
-    }
-    // Soft refresh in background; keep cached list visible
+    } catch { /* */ }
     try {
       const { viewers: list } = await api.statusViewers(current.id)
       setViewers(list)
       void saveCachedViewers(current.id, list)
     } catch {
-      if (!hadCache) showToast('Could not load viewers')
+      showToast('Could not load viewers')
+      setViewers((v) => v)
     } finally {
       setViewersLoading(false)
     }
@@ -408,11 +409,12 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
     setDeleting(true)
     setPaused(true)
     const id = current.id
-    const snapshot = current
-    const remaining = items.filter((s) => s.id !== id)
-    patchStatusList((list) => list.filter((s) => s.id !== id))
+    showToast('Deleting status…')
     try {
       await api.deleteStatus(id)
+      // Only remove from UI after the server confirms delete
+      const remaining = items.filter((s) => s.id !== id)
+      patchStatusList((list) => list.filter((s) => s.id !== id))
       showToast('Status deleted')
       if (remaining.length === 0) {
         onClose()
@@ -422,16 +424,9 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
         progressRef.current = 0
         setPaused(false)
       }
-      window.setTimeout(() => { void refreshStatus().catch(() => {}) }, 800)
+      window.setTimeout(() => { void refreshStatus().catch(() => {}) }, 2500)
     } catch {
-      // Rollback optimistic remove
-      patchStatusList((list) => {
-        if (list.some((s) => s.id === snapshot.id)) return list
-        return [...list, snapshot].sort(
-          (a, b) => (Date.parse(a.createdAt || '') || 0) - (Date.parse(b.createdAt || '') || 0),
-        )
-      })
-      showToast('Delete failed')
+      showToast('Delete failed, try again')
       setPaused(false)
     } finally {
       setDeleting(false)
@@ -506,7 +501,7 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
 
   return (
     <div
-      className="relative flex h-full w-full flex-col select-none text-white"
+      className="relative flex h-full flex-col select-none text-white"
       style={{ background: bgCss }}
       onContextMenu={(e) => e.preventDefault()}
       onPointerUp={onPressEnd}
@@ -575,7 +570,7 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="flex w-full flex-col items-center gap-4 px-0"
+            className="flex w-full max-w-sm flex-col items-center gap-4"
           >
             {(current.type === 'video' || (current as any).video) ? (
               <video
@@ -647,22 +642,19 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
                 onClick={async (e) => {
                   e.stopPropagation()
                   try {
-                    const isVideo = current?.type === 'video' || !!(current as any)?.video
-                    const src = isVideo
-                      ? ((current as any)?.video || current?.image)
-                      : current?.image
+                    const src = current?.image
                     if (src) {
                       const a = document.createElement('a')
                       a.href = src.startsWith('http') || src.startsWith('data:') || src.startsWith('blob:')
                         ? src
                         : mediaUrl(src)
-                      a.download = `safechat-status-${current?.id || 'media'}.${isVideo ? 'mp4' : 'jpg'}`
+                      a.download = `safechat-status-${current?.id || 'img'}.jpg`
                       a.target = '_blank'
                       a.rel = 'noopener'
                       document.body.appendChild(a)
                       a.click()
                       a.remove()
-                      showToast(isVideo ? 'Downloading video…' : 'Saving…')
+                      showToast('Saving…')
                     } else {
                       await navigator.clipboard?.writeText(current?.text || '')
                       showToast('Status text copied')
@@ -672,15 +664,9 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
                   }
                 }}
                 className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm"
-                aria-label={
-                  (current?.type === 'video' || (current as any)?.video || current?.image)
-                    ? 'Download'
-                    : 'Copy text'
-                }
+                aria-label={current?.image ? 'Download' : 'Copy text'}
               >
-                {(current?.type === 'video' || (current as any)?.video || current?.image)
-                  ? <Download size={20} />
-                  : <Copy size={20} />}
+                {current?.image ? <Download size={20} /> : <Copy size={20} />}
               </button>
             </div>
 

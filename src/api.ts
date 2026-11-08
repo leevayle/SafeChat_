@@ -19,7 +19,6 @@ export type ApiUser = {
   createdAt?: string
   email?: string | null
   account_role?: string
-  email?: string
   subscriptionPlan?: string
   accountStatus?: string
   verifiedBadge?: boolean
@@ -156,6 +155,16 @@ export async function ensureSessionFresh(): Promise<boolean> {
   return ensureFreshAccess()
 }
 
+/**
+ * Force a refresh-token rotate (used when WS/API got 401/403 despite a non-expired JWT).
+ * Returns true only when a new access token was stored.
+ */
+export async function forceRefreshSession(): Promise<boolean> {
+  if (sessionDead) return false
+  if (!refreshToken()) return false
+  return tryRefresh()
+}
+
 /** True when an access token is present (does not validate server-side). */
 export function hasAccessToken(): boolean {
   return !!accessToken()
@@ -263,6 +272,7 @@ function mapUser(u: any): ApiUser {
 
 function mapContact(c: any): ApiContact {
   const peerId = String(c.contact_user_id || c.peerId || c.id || '')
+  const ps = c.premium_settings || c.premiumSettings || {}
   return {
     id: peerId,
     entryId: String(c.id || peerId),
@@ -280,11 +290,15 @@ function mapContact(c: any): ApiContact {
     hue: hueFor(peerId || c.username || 'x'),
     createdAt: c.created_at,
     subscriptionPlan: (c.subscription_plan || c.subscriptionPlan || 'pro').replace('free', 'pro'),
-    verifiedBadge: !!(c.verified_badge ?? c.verifiedBadge),
+    verifiedBadge: !!(c.verified_badge ?? c.verifiedBadge ?? ps.verified_badge),
     premium:
       (c.subscription_plan || c.subscriptionPlan) === 'premium' &&
-      (c.verified_badge ?? c.verifiedBadge) !== false,
-  }
+      (c.verified_badge ?? c.verifiedBadge ?? ps.verified_badge) !== false,
+    premiumSettings: ps,
+    busy: !!(c.busy ?? (c.preferences || {}).busy_enabled),
+    busyMessage: c.busy_message || c.busyMessage || (c.preferences || {}).busy_message || '',
+    busyUntil: c.busy_until || c.busyUntil || (c.preferences || {}).busy_until || null,
+  } as ApiContact
 }
 
 function mapMessage(m: any, meId?: string): ApiMsg {
@@ -316,8 +330,10 @@ function mapMessage(m: any, meId?: string): ApiMsg {
     statusReply = { preview: sr[1], time: sr[2] || undefined, statusId: sr[3] || undefined }
     text = sr[4]
   }
+  const clientKey = m.client_key || m.clientKey || m.idempotency_key || undefined
   return {
     id: String(m.id || m._id),
+    clientKey: clientKey ? String(clientKey) : undefined,
     from,
     to: String(m.to || ''),
     text,
@@ -645,6 +661,12 @@ export const api = {
     return { available: !!available }
   },
 
+  checkPhone: async (phone: string) => {
+    const data = await req<any>(`/api/v1/auth/phone/check?phone=${encodeURIComponent(phone)}`)
+    const available = data?.available ?? data?.data?.available ?? false
+    return { available: !!available }
+  },
+
   sendPhoneCode: (phone_number: string) => req<any>('/api/v1/auth/phone/send-code', {
     method: 'POST', body: JSON.stringify({ phone_number }),
   }),
@@ -755,13 +777,19 @@ export const api = {
             statusPrivacy: data.settings.status_privacy,
             verifiedBadge: data.settings.verified_badge !== false,
             forceReadReceipts: !!data.settings.force_read_receipts,
-            liveTyping: !!data.settings.live_typing,
-            statusAdsEnabled: !!data.settings.status_ads_enabled,
+            // Defaults: live typing ON, status ads ON unless user turned them off
+            liveTyping: data.settings.live_typing !== false,
+            statusAdsEnabled: data.settings.status_ads_enabled !== false,
           }
         : {}),
       accountStatus: data?.account_status || 'active',
       verifiedBadge: data?.subscription_plan === 'premium' && !!(data?.premium_settings?.verified_badge ?? true),
-      premiumSettings: data?.premium_settings || {},
+      premiumSettings: data?.premium_settings || {
+        verified_badge: true,
+        force_read_receipts: false,
+        live_typing: true,
+        status_ads_enabled: true,
+      },
       deactivatedAt: data?.deactivated_at || null,
       scheduledDeletionAt: data?.scheduled_deletion_at || null,
     }
@@ -798,11 +826,14 @@ export const api = {
     })
   },
 
-  mpesaStkPush: async (body: { phone: string; plan: string }) => {
-    return req<{ checkoutRequestId: string; merchantRequestId?: string }>('/api/v1/payments/mpesa/stk', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    })
+  mpesaStkPush: async (body: { phone: string; plan: string; gift_username?: string }) => {
+    return req<{ checkoutRequestId: string; merchantRequestId?: string; amount?: number; plan?: string }>(
+      '/api/v1/payments/mpesa/stk',
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+    )
   },
   mpesaVerify: async (checkoutRequestId: string) => {
     return req<{ paid: boolean; plan?: string; subscription_plan?: string }>(
@@ -851,6 +882,7 @@ export const api = {
     savedName?: string
     message?: string
     sharePhone?: boolean
+    nickname?: string
   }) => {
     if (!body.username) throw new Error('Username required to add contact')
     const data = await req<any>('/api/v1/contacts/requests', {
@@ -862,13 +894,22 @@ export const api = {
         from_nickname: body.savedName || body.nickname || undefined,
       }),
     })
-    // Mutual auto-accept may already create the contact
-    const r = await api.contacts()
-    const uname = body.username.replace(/^@/, '').toLowerCase()
-    return {
-      request: data,
-      contact: r.contacts.find((c) => c.username === uname) || null,
-      pending: !r.contacts.find((c) => c.username === uname),
+    // Fast path: trust response — only fetch contacts if already mutual/accepted
+    const status = String(data?.status || data?.request_status || '').toLowerCase()
+    const accepted = status === 'accepted' || data?.contact_created === true
+    if (!accepted) {
+      return { request: data, contact: null, pending: true }
+    }
+    try {
+      const r = await api.contacts()
+      const uname = body.username.replace(/^@/, '').toLowerCase()
+      return {
+        request: data,
+        contact: r.contacts.find((c) => c.username === uname) || null,
+        pending: false,
+      }
+    } catch {
+      return { request: data, contact: null, pending: false }
     }
   },
 
@@ -977,18 +1018,27 @@ export const api = {
     return { chats: Array.from(byPeer.values()) }
   },
 
-  openPrivateChat: async (opts: string | { username?: string; userId?: string }) => {
-    const username = typeof opts === 'string' ? opts : (opts.username || '')
-    const userId = typeof opts === 'string' ? '' : (opts.userId || '')
-    const body: Record<string, string> = {}
-    if (username) body.participant_username = username.replace(/^@/, '').trim()
-    if (userId) body.peer_user_id = userId
-    if (!body.participant_username && !body.peer_user_id) {
-      throw Object.assign(new Error('Missing contact username'), { status: 422 })
+  openPrivateChat: async (
+    target: string | { username?: string; userId?: string },
+  ) => {
+    let username =
+      typeof target === 'string'
+        ? target
+        : (target.username || '').replace(/^@/, '').trim()
+    // Self-notes: resolve current user's username when targeting own id
+    if (!username && typeof target !== 'string' && target.userId) {
+      const me = meId()
+      if (target.userId === me) {
+        try {
+          const u = getStoredUser()
+          username = (u?.username || '').replace(/^@/, '')
+        } catch { /* */ }
+      }
     }
+    if (!username) throw new Error('Username required to open chat')
     const conv = await req<any>('/api/v1/conversations/private', {
       method: 'POST',
-      body: JSON.stringify(body),
+      body: JSON.stringify({ participant_username: username }),
     })
     return mapConversation(conv, meId())
   },
@@ -1278,16 +1328,19 @@ export const api = {
     return {}
   },
   getTyping: async (_contactId: string) => ({ typing: false }),
-  /** Lightweight presence for a user id */
+  /** Lightweight presence for a user id (includes busy message) */
   presence: async (userId: string) => {
     try {
       const data = await req<any>(`/api/v1/users/presence/${encodeURIComponent(userId)}`)
       return {
         online: !!data?.online,
         lastSeen: data?.last_seen || data?.lastSeen || null,
+        busy: !!data?.busy,
+        busyMessage: data?.busy_message || data?.busyMessage || '',
+        busyUntil: data?.busy_until || data?.busyUntil || null,
       }
     } catch {
-      return { online: false, lastSeen: null }
+      return { online: false, lastSeen: null, busy: false, busyMessage: '', busyUntil: null }
     }
   },
   editMessage: async (messageId: string, content: string) => {

@@ -40,7 +40,6 @@ import {
 import { setCachedMessages, getCachedMessages, clearMessageCache } from './lib/messageCache'
 import { warmPhoto } from './lib/photoCache'
 
-export 
 const LS_OWNER_KEY = 'sc_user_id'
 
 function wipeForeignLocalState() {
@@ -63,6 +62,65 @@ function wipeForeignLocalState() {
     keys.forEach((k) => localStorage.removeItem(k))
   } catch {
     /* ignore */
+  }
+}
+
+/** Local notifications for premium expiring / expired — shown in Notifications tab once. */
+function pushLocalNotif(item: {
+  id: string
+  kind: string
+  title: string
+  body: string
+  action?: string
+}) {
+  try {
+    const raw = localStorage.getItem('sc_local_notifs')
+    const list: any[] = raw ? JSON.parse(raw) : []
+    if (list.some((n) => n.id === item.id)) return // once only
+    const row = {
+      ...item,
+      iso: new Date().toISOString(),
+      unread: true,
+    }
+    const next = [row, ...list].slice(0, 40)
+    localStorage.setItem('sc_local_notifs', JSON.stringify(next))
+    try {
+      window.dispatchEvent(new CustomEvent('sc:local-notif', { detail: row }))
+    } catch { /* */ }
+  } catch { /* */ }
+}
+
+function pushPremiumLifecycleNotifs(
+  prevPlan: string,
+  nextPlan: string,
+  expIso: string | null,
+) {
+  // Expired transition
+  if (prevPlan === 'premium' && nextPlan !== 'premium') {
+    pushLocalNotif({
+      id: `premium-expired-${expIso || 'now'}`,
+      kind: 'premium_expired',
+      title: 'Premium ended',
+      body: 'Your Premium membership has expired. Recharge to keep checkmark, live typing, and more.',
+      action: 'recharge',
+    })
+    return
+  }
+  if (nextPlan !== 'premium' || !expIso) return
+  const exp = Date.parse(expIso)
+  if (!Number.isFinite(exp)) return
+  const msLeft = exp - Date.now()
+  const day = 24 * 60 * 60 * 1000
+  if (msLeft > 0 && msLeft <= day) {
+    // One notification per expiry date
+    const dayKey = new Date(exp).toISOString().slice(0, 10)
+    pushLocalNotif({
+      id: `premium-expiring-${dayKey}`,
+      kind: 'premium_expiring',
+      title: 'Premium ends within 24 hours',
+      body: 'Your Premium membership is about to expire. Recharge to stay Premium.',
+      action: 'recharge',
+    })
   }
 }
 
@@ -374,7 +432,7 @@ const defaultSettings: Settings = {
   liveTyping: true,
   hideLiveTyping: false,
   verifiedBadge: true,
-  statusAdsEnabled: false,
+  statusAdsEnabled: true,
   statusLikeNotif: true,
   busyEnabled: false,
   busyScope: 'everyone',
@@ -600,7 +658,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         verifiedBadge: isPremium && ((user as any).verifiedBadge !== false) && ps.verified_badge !== false,
         forceReadReceipts: isPremium && !!(ps.force_read_receipts ?? (s as any)?.forceReadReceipts),
         liveTyping: isPremium && (ps.live_typing !== false) && ((s as any)?.liveTyping !== false),
-        statusAdsEnabled: isPremium && !!(ps.status_ads_enabled ?? (s as any)?.statusAdsEnabled),
+        // Default ON unless the user explicitly turned ads off
+        statusAdsEnabled:
+          isPremium &&
+          (ps.status_ads_enabled !== false) &&
+          ((s as any)?.statusAdsEnabled !== false),
         // Appearance always wins from resolve (server > cache > defaults)
         theme: appearance.theme,
         chatAccent: appearance.chatAccent,
@@ -629,18 +691,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         .toString()
         .replace('free', 'pro')
       applyUser(user, serverSettings as Record<string, unknown>)
-      // Only toast when plan actually changes (upgrade / expiry)
-      if (prevPlan !== nextPlan) {
-        if (nextPlan === 'premium') {
-          showToast('Premium unlocked on this device')
-        } else if (prevPlan === 'premium') {
-          showToast('Premium ended — back to Pro')
-        }
-      }
+      // Premium lifecycle → Notifications tab only (no toast spam)
+      try {
+        const expIso =
+          (user as any).premiumExpiresAt ||
+          (serverSettings as any)?.premiumExpiresAt ||
+          null
+        pushPremiumLifecycleNotifs(prevPlan, nextPlan, expIso)
+      } catch { /* */ }
     } catch {
       /* soft — keep last known plan */
     }
-  }, [applyUser, showToast])
+  }, [applyUser])
 
   const wipeSession = useCallback(() => {
     try {
@@ -792,6 +854,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         return next
       })
+      // Seed busy map so Online is replaced by custom message without waiting for WS
+      setBusyMap((prev) => {
+        const next = { ...prev }
+        for (const ct of c) {
+          const id = String(ct.id || ct.peerId || '')
+          if (!id) continue
+          if ((ct as any).busy && (ct as any).busyMessage) {
+            next[id] = {
+              message: (ct as any).busyMessage || 'busy',
+              until: (ct as any).busyUntil || null,
+            }
+          }
+        }
+        return next
+      })
       setContacts((prev) => {
         if (prev.length === c.length) {
           let same = true
@@ -803,7 +880,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               a.name !== b.name ||
               a.photo !== b.photo ||
               a.phone_number !== b.phone_number ||
-              a.username !== b.username
+              a.username !== b.username ||
+              a.busy !== b.busy ||
+              a.busyMessage !== b.busyMessage
             ) {
               same = false
               break
@@ -924,24 +1003,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (same) return prev
         }
         void saveCachedStatuses(merged.filter((s: any) => !s.pending))
-        // Owner online again: pull viewers from DB into cache so open is instant
-        const myId = getStoredUser()?.id
-        if (myId) {
-          void (async () => {
-            try {
-              const { saveCachedViewers } = await import('./lib/appCache')
-              const mine = merged.filter(
-                (s: any) => s.userId === myId && s.id && !String(s.id).startsWith('local-'),
-              )
-              for (const s of mine.slice(0, 12)) {
-                try {
-                  const { viewers: list } = await api.statusViewers(s.id)
-                  if (list) await saveCachedViewers(s.id, list)
-                } catch { /* */ }
-              }
-            } catch { /* */ }
-          })()
-        }
         return merged
       })
     } catch (e: any) {
@@ -952,9 +1013,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshSaveRequests = useCallback(async () => {
     if (!hasAccessToken() || isSessionDead()) return
     try {
-      const { requests } = await api.incomingContactRequests()
-      const n = (requests || []).filter((r: any) => r.status === 'pending').length
+      const [inRes, outRes] = await Promise.all([
+        api.incomingContactRequests(),
+        api.outgoingContactRequests().catch(() => ({ requests: [] as any[] })),
+      ])
+      const n = (inRes.requests || []).filter((r: any) => r.status === 'pending').length
       setSaveRequestPending(n)
+      // When someone accepted our request, pull contacts so messaging works immediately
+      const newlyAccepted = (outRes.requests || []).some((r: any) => r.status === 'accepted')
+      if (newlyAccepted) {
+        try {
+          const { contacts: list } = await api.contacts()
+          setContacts(list || [])
+        } catch { /* */ }
+      }
     } catch (e: any) {
       if ((e as any)?.status === 401 && !(e as any)?.soft) wipeSession()
     }
@@ -1194,7 +1266,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
       } catch { /* */ }
 
-      // Soft /auth/me + ordered hydrate
+      // /auth/me + ordered hydrate — boot is authoritative: hard 401 means re-login
       void (async () => {
         try {
           const { user, settings: s } = await api.me()
@@ -1205,8 +1277,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           applyUser(user, s as Record<string, unknown>)
           setSessionOk(true)
         } catch (e: any) {
-          // Soft /me failure must not kick the user out mid-session
-          if ((e as any)?.status === 401 && !(e as any)?.soft) {
+          // On cold boot a 401 (even "soft") means tokens are dead — send to login
+          if ((e as any)?.status === 401) {
             wipeSession()
           }
         }
@@ -1307,32 +1379,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         },
         onMessage: (cid, m) => {
           if (!m?.id) return
+          const mid = String(m.id)
+          const ck = String(m.client_key || m.clientKey || mid)
           const mine = String(m.from) === String(myId)
-          // Recipient: ack delivered BEFORE UI render — fire and forget
-          if (!mine) {
-            void api.markDelivered(m.id).catch(() => {})
-          }
-          // Keep thread cache in sync so opening inbox shows the message
-          try {
-            const prev = getCachedMessages(cid) || []
-            if (!prev.some((x) => x.id === m.id || (m.client_key && x.clientKey === m.client_key))) {
-              const mapped: any = {
-                id: String(m.id),
-                clientKey: m.client_key || m.clientKey || m.id,
-                from: String(m.from || ''),
-                text: m.text || '',
-                time: m.time || new Date().toISOString(),
-                timeLabel: '',
-                mine,
-                state: (m.state as any) || 'sent',
-                image: m.image || null,
-                replyToId: m.reply_to_message_id || m.replyToId || null,
-                replyToText: m.reply_to_text || m.replyToText || null,
-                reactions: m.reactions || [],
-              }
-              setCachedMessages(cid, [...prev, mapped])
-            }
-          } catch { /* */ }
+
+          // 1) Build the full message object once (time-ordered, complete fields)
           let previewText = m.text || (m.image ? '📷 Photo' : '')
           const sr = String(previewText).match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
           if (sr) {
@@ -1340,72 +1391,119 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             previewText = body ? `Status reply: ${body}` : 'Status reply'
           }
           const iso = m.time || new Date().toISOString()
-          const timeLabel = new Date(iso).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: false,
-          })
-          // Patch home preview by conversationId (stable contactId from existing row)
+          let timeLabel = ''
+          try {
+            timeLabel = new Date(iso).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false,
+            })
+          } catch {
+            timeLabel = ''
+          }
+          const mapped: any = {
+            id: mid,
+            clientKey: ck,
+            from: String(m.from || ''),
+            text: m.text || '',
+            time: iso,
+            timeLabel,
+            mine,
+            state: (m.state as any) || 'sent',
+            image: m.image || null,
+            replyToId: m.reply_to_message_id || m.replyToId || null,
+            replyToText: m.reply_to_text || m.replyToText || null,
+            reactions: m.reactions || [],
+          }
+
+          // 2) Cache first — UI only sees the message after cache is updated
+          try {
+            const prev = getCachedMessages(cid) || []
+            const exists = prev.some(
+              (x: any) => x.id === mid || x.clientKey === ck || (x.clientKey && x.clientKey === mid),
+            )
+            if (!exists) {
+              // Insert by timestamp so order is stable when opening the thread
+              const next = [...prev, mapped].sort(
+                (a: any, b: any) => (Date.parse(a.time) || 0) - (Date.parse(b.time) || 0),
+              )
+              setCachedMessages(cid, next)
+            } else {
+              // In-place upgrade only — never append a second copy
+              setCachedMessages(
+                cid,
+                prev.map((x: any) =>
+                  x.id === mid || x.clientKey === ck || x.clientKey === mid
+                    ? { ...x, ...mapped, clientKey: x.clientKey || ck }
+                    : x,
+                ),
+              )
+            }
+          } catch { /* */ }
+
+          // 3) Delivery / read side-effects (no UI)
+          if (!mine) {
+            void api.markDelivered(mid).catch(() => {})
+          }
+          const openNow = !!(activeConvRef.current && activeConvRef.current === cid)
+          if (openNow && !mine) {
+            void api.markRead(cid).catch(() => {})
+            void import('./realtime').then(({ wsReceipt }) => {
+              try { wsReceipt({ conversationId: cid, messageId: mid, state: 'read' }) } catch { /* */ }
+            }).catch(() => {})
+          }
+
+          // 4) Home feed — one atomic update with full row details
+          const already = seenInboundRef.current.has(mid)
+          if (!mine) seenInboundRef.current.add(mid)
           setChats((prev) => {
             const idx = prev.findIndex((c) => c.conversationId === cid)
-            let nextList
+            let nextList: typeof prev
             if (idx >= 0) {
               const cur = prev[idx]
-              const mid = String(m.id)
-              const already = seenInboundRef.current.has(mid)
-              if (!mine) seenInboundRef.current.add(mid)
-              const openNow = activeConvRef.current && activeConvRef.current === cid
-              if (!mine) {
-                void import('./realtime').then(({ wsReceipt }) => {
-                  try {
-                    if (openNow) {
-                      // Peer is inside this chat → read (blue ticks for sender)
-                      void api.markRead(cid).catch(() => {})
-                      wsReceipt({ conversationId: cid, messageId: mid, state: 'read' })
-                    } else {
-                      // Online but not in this chat → delivered only (grey double)
-                      wsReceipt({ conversationId: cid, messageId: mid, state: 'delivered' })
-                    }
-                  } catch { /* */ }
-                }).catch(() => {})
+              // Resolve display name from contacts if the row is sparse
+              let name = cur.name
+              let photo = cur.photo
+              let hue = cur.hue
+              if (!name && !mine) {
+                const ct = (contactsRef.current || []).find(
+                  (x: any) => x.id === cur.contactId || x.peerId === cur.contactId || x.id === m.from,
+                )
+                if (ct) {
+                  name = ct.savedName || ct.name || name
+                  photo = photo || ct.photo
+                  hue = hue || ct.hue
+                }
               }
               const updated = {
                 ...cur,
+                name,
+                photo,
+                hue,
                 last: previewText,
                 time: timeLabel,
                 iso,
                 mine,
-                state: mine ? ((m.state as any) || 'sent') : undefined,
+                state: mine ? ((m.state as any) || 'sent') : cur.state,
                 unread: mine || openNow ? 0 : already ? (cur.unread || 0) : (cur.unread || 0) + 1,
+                conversationId: cid,
               }
               nextList = [...prev]
               nextList.splice(idx, 1)
               nextList = [updated, ...nextList]
             } else if (mine) {
-              // Own send: home row should already exist via upsertChatPreview — never create with self as contactId
+              // Own send: home row should already exist via upsertChatPreview
               return prev
             } else {
-              const openNow = activeConvRef.current && activeConvRef.current === cid
-              if (openNow) {
-                void api.markRead(cid).catch(() => {})
-                void import('./realtime').then(({ wsReceipt }) => {
-                  try { wsReceipt({ conversationId: cid, messageId: mid, state: 'read' }) } catch { /* */ }
-                }).catch(() => {})
-              } else {
-                void import('./realtime').then(({ wsReceipt }) => {
-                  try { wsReceipt({ conversationId: cid, messageId: mid, state: 'delivered' }) } catch { /* */ }
-                }).catch(() => {})
-              }
-              const fromId = String(m.from)
               const ct = (contactsRef.current || []).find(
-                (x: any) => x.id === fromId || x.peerId === fromId,
+                (x: any) => x.id === m.from || x.peerId === m.from,
               )
               nextList = [
                 {
-                  contactId: fromId,
+                  contactId: String(m.from),
                   conversationId: cid,
-                  name: (ct?.savedName || ct?.name || m.from_name || m.sender_display_name || '').trim() || undefined,
-                  photo: ct?.photo ?? m.from_photo ?? null,
+                  name: ct?.savedName || ct?.name,
+                  photo: ct?.photo ?? null,
                   hue: ct?.hue,
                   last: previewText,
                   time: timeLabel,
@@ -1420,11 +1518,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             void saveCachedChats(nextList)
             return nextList
           })
+
+          // 5) Notify open ChatWindow once — it merges by id/clientKey (no double bubble)
           try {
-            window.dispatchEvent(new CustomEvent('sc:rt-msg', { detail: { cid, m, mine } }))
-          } catch {
-            /* */
-          }
+            window.dispatchEvent(
+              new CustomEvent('sc:rt-msg', {
+                detail: { cid, m: { ...m, id: mid, client_key: ck, clientKey: ck, time: iso }, mine },
+              }),
+            )
+          } catch { /* */ }
         },
         onReceipt: (cid, messageId, s) => {
           const state =
@@ -1453,6 +1555,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
         },
         onAck: (payload) => {
+          // Server logged the message — flip home-row ticks pending → sent immediately
+          const cid = (payload as any)?.c as string | undefined
+          const st = ((payload as any)?.s as string) || 'sent'
+          if (cid && (payload as any)?.ok !== false) {
+            setChats((prev) => {
+              const idx = prev.findIndex((c) => c.conversationId === cid)
+              if (idx < 0) return prev
+              const row = prev[idx]
+              if (!row.mine) return prev
+              const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 }
+              const nextRank = rank[st] ?? 1
+              const curRank = rank[row.state || 'pending'] ?? 0
+              if (nextRank <= curRank) return prev
+              const next = [...prev]
+              next[idx] = { ...row, state: st as any }
+              void saveCachedChats(next)
+              return next
+            })
+          }
           try {
             window.dispatchEvent(new CustomEvent('sc:rt-ack', { detail: payload }))
           } catch {
@@ -1543,10 +1664,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const login = async (identity: string, password: string) => {
     const raw = identity.trim()
+    const cleanedPhone = raw.replace(/[^\d+]/g, '')
     const looksPhone = raw.startsWith('+') || /^\d{7,15}$/.test(raw.replace(/[\s-]/g, ''))
-    const session = looksPhone
-      ? await api.login({ phone_number: raw.replace(/[^\d+]/g, ''), password })
-      : await api.login({ username: raw.replace(/^@/, '').toLowerCase(), password })
+    let session
+    if (looksPhone) {
+      try {
+        session = await api.login({ phone_number: cleanedPhone, password })
+      } catch (e) {
+        // Fallback: some users type phone without + but username may match digits-only accounts
+        session = await api.login({
+          phone_number: cleanedPhone,
+          username: raw.replace(/^@/, '').toLowerCase(),
+          password,
+        }).catch(() => { throw e })
+      }
+    } else {
+      try {
+        session = await api.login({ username: raw.replace(/^@/, '').toLowerCase(), password })
+      } catch (e) {
+        // If username failed, retry as phone (user may omit +)
+        if (/^\+?\d{7,15}$/.test(cleanedPhone)) {
+          session = await api.login({ phone_number: cleanedPhone, password })
+        } else {
+          throw e
+        }
+      }
+    }
     const { access_token, refresh_token, user } = session
     if (!access_token || !user?.id) {
       throw new Error('Login succeeded but session was incomplete — try again')
@@ -1734,7 +1877,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   contactsRef.current = contacts
 
   // Device preferences are local-only. Never send them to the profile endpoint.
-  const setSetting = useCallback(<K extends keyof Settings>(k: K, v: Settings[K], opts?: { silent?: boolean; skipServer?: boolean }) => {
+  // Busy fields are draft-only until the user taps "Update busy status".
+  const setSetting = useCallback(<K extends keyof Settings>(k: K, v: Settings[K]) => {
     const next = { ...settings, [k]: v }
     setSettings(next)
     // Appearance keys: CSS variables only — no component remount
@@ -1758,6 +1902,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       /* ignore storage quota / private browsing errors */
     }
+    // Busy draft keys: local only — no API call / toast (button handles save)
+    const busyDraftKeys = new Set([
+      'busyEnabled',
+      'busyMessage',
+      'busyUntil',
+      'busyScope',
+      'busyDurationMin',
+    ])
+    if (busyDraftKeys.has(k as string)) {
+      return
+    }
     const serverKey: Record<string, string> = {
       theme: 'theme',
       chatAccent: 'chat_accent',
@@ -1778,24 +1933,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       colorMode: 'color_mode',
       liquidGlass: 'liquid_glass',
       hideLiveTyping: 'hide_live_typing',
-      busyEnabled: 'busy_enabled',
-      busyMessage: 'busy_message',
-      busyUntil: 'busy_until',
-      busyScope: 'busy_scope',
-    }
-    if (opts?.skipServer) {
-      if (!opts?.silent) showToast('Setting updated')
-      return
     }
     const sk = serverKey[k as string]
+    // Background preference sync — no toast (only button-driven actions toast)
     if (sk && hasAccessToken() && !isSessionDead()) {
-      void api.updatePreferences({ [sk]: v })
-        .then(() => { if (!opts?.silent) showToast('Setting saved') })
-        .catch(() => { if (!opts?.silent) showToast('Could not save setting') })
-    } else {
-      if (!opts?.silent) showToast('Setting updated')
+      void api.updatePreferences({ [sk]: v }).catch(() => { /* quiet */ })
     }
-  }, [settings, showToast])
+  }, [settings])
 
   // Persist profile fields with one PATCH and update the local session cache;
   // profile saves must not call /auth/me again.
@@ -1947,10 +2091,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!d?.status) return
       const mapped = mapIncoming(d.status)
       if (!mapped?.id) return
-      let isNew = false
       patchStatusList((list) => {
         if (list.some((s: any) => s.id === mapped.id)) return list
-        isNew = true
         // Drop matching optimistic local row
         const withoutLocal = list.filter((s: any) => {
           if (!String(s.id).startsWith('local-status-')) return true
@@ -1964,17 +2106,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           (a: any, b: any) => (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0),
         )
       })
-      // Background status update: name the poster, never "Up to date"
-      try {
-        const myId = getStoredUser()?.id
-        if (isNew && mapped.userId && mapped.userId !== myId) {
-          const name =
-            mapped.user?.name ||
-            mapped.user?.username ||
-            'Someone'
-          showToast(`${name} posted a new status`)
-        }
-      } catch { /* */ }
     }
 
     const onDel = (ev: Event) => {
@@ -1991,7 +2122,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('sc:rt-status-new', onNew)
       window.removeEventListener('sc:rt-status-delete', onDel)
     }
-  }, [patchStatusList, showToast])
+  }, [patchStatusList])
 
   const value = useMemo(
     () => ({

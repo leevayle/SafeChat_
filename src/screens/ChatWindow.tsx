@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock } from 'lucide-react'
+import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
+import { NotesBoard } from '../components/NotesBoard'
+import { EmptyState } from '../components/EmptyState'
 import { api, hasAccessToken, type ApiMsg } from '../api'
 import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
 import { isRealtimeOpen, wsSendMessage, wsReceipt, wsLiveTyping, wsTyping } from '../realtime'
 import { FONT_SIZES, WALLPAPERS, useStore } from '../store'
 import { playInboxLandingChime } from '../lib/sounds'
-import { compressForWeb, fileToDataUrl } from '../lib/imageProcess'
+import { compressForWeb } from '../lib/imageProcess'
 import { getCachedMessages, setCachedMessages, hydrateThreadFromDisk } from '../lib/messageCache'
-import { ChatImageCropper } from '../components/ChatImageCropper'
 import { warmPhoto } from '../lib/photoCache'
 import { putOutbox, removeOutbox } from '../lib/appCache'
 
@@ -35,6 +36,15 @@ function mediaUrl(path?: string | null) {
   if (!path) return ''
   if (path.startsWith('http') || path.startsWith('data:')) return path
   return `${API_ORIGIN}${path}`
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(String(r.result))
+    r.onerror = reject
+    r.readAsDataURL(file)
+  })
 }
 
 const STATE_RANK: Record<string, number> = {
@@ -209,7 +219,7 @@ const MessageBubble = memo(function MessageBubble({
         if (dx > 28) onReply?.(m)
         setDx(0)
       }}
-      className={`relative flex ${mine ? 'justify-end' : 'justify-start'} ${highlight ? 'z-10' : ''} ${m.reactions?.length ? 'mb-3' : ''}`}
+      className={`relative flex ${mine ? 'justify-end' : 'justify-start'} ${highlight ? 'z-10' : ''}`}
     >
       <div
         role={mine && m.state === 'failed' ? 'button' : undefined}
@@ -262,7 +272,7 @@ const MessageBubble = memo(function MessageBubble({
         {m.image && (
           <button
             type="button"
-            className="block w-full overflow-hidden rounded-2xl"
+            className={`block w-full overflow-hidden ${mine ? 'rounded-2xl rounded-br-sm' : 'rounded-2xl rounded-bl-sm'}`}
             onClick={(e) => {
               e.stopPropagation()
               onOpenImage?.(mediaUrl(m.image))
@@ -271,7 +281,7 @@ const MessageBubble = memo(function MessageBubble({
             <img
               src={mediaUrl(m.image)}
               alt=""
-              className="sc-msg-image max-h-60 w-full bg-transparent object-contain rounded-2xl"
+              className={`sc-msg-image max-h-60 w-full bg-transparent object-contain ${mine ? 'rounded-2xl rounded-br-sm' : 'rounded-2xl rounded-bl-sm'}`}
               loading="lazy"
             />
           </button>
@@ -314,24 +324,17 @@ const MessageBubble = memo(function MessageBubble({
         )}
 
         <p
-          className={`flex items-center justify-end gap-1 px-3.5 pb-1 pt-0.5 text-[10px] font-bold tracking-wide leading-none ${
+          className={`flex items-center justify-end gap-1 px-3.5 pb-1.5 pt-0.5 text-[10px] font-bold tracking-wide ${
             mine ? 'text-white/70' : 'text-gray-400'
           }`}
         >
           {(m as any).editing ? <span className="mr-0.5 opacity-80">editing…</span> : (m as any).edited ? <span className="mr-0.5 opacity-80">edited</span> : null}
           {m.timeLabel || formatLocalTime(m.time)}
-          <span className="inline-flex translate-y-[1px] items-center">
-            <ReceiptTicks state={m.state} readReceipts={readReceipts} mine={mine} />
-          </span>
+          <ReceiptTicks state={m.state} readReceipts={readReceipts} mine={mine} />
         </p>
-      </div>
-        {/* Reactions hang on the bubble border — no extra bubble height */}
+        {/* Reactions at the very bottom of the bubble border - no overlap on text */}
         {!!(m.reactions && m.reactions.length) && (
-          <div
-            className={`pointer-events-none absolute -bottom-2.5 z-[1] flex flex-wrap gap-0.5 ${
-              mine ? 'right-2' : 'left-2'
-            }`}
-          >
+          <div className="flex flex-wrap gap-0.5 px-2.5 pb-1.5 pt-0.5">
             {Object.entries(
               (m.reactions || []).reduce((acc: Record<string, number>, r: any) => {
                 const e = typeof r === 'string' ? r : r.emoji
@@ -342,7 +345,7 @@ const MessageBubble = memo(function MessageBubble({
             ).map(([emoji, count]) => (
               <span
                 key={emoji}
-                className="flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[11px] shadow-sm ring-1 ring-black/8"
+                className="flex h-5 min-w-5 items-center justify-center rounded-full bg-black/5 px-1 text-[11px] ring-1 ring-black/6"
               >
                 {emoji}
                 {(count as number) > 1 ? (
@@ -352,6 +355,7 @@ const MessageBubble = memo(function MessageBubble({
             ))}
           </div>
         )}
+      </div>
     </motion.div>
   )
 })
@@ -366,6 +370,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         ch.conversationId === contactId,
     ) || null
   const peerId = chatPreview?.contactId || contactId
+  const isSelfChat = !!(me?.id && (peerId === me.id || contactId === me.id))
   const contactHit = contacts.find((x) => x.id === peerId || x.peerId === peerId)
   // Prefer contact book photo, fall back to chat-list photo (never force null)
   const c = contactHit
@@ -442,7 +447,6 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [emoji, setEmoji] = useState(false)
   const [loading, setLoading] = useState(true)
   const [pendingImage, setPendingImage] = useState<string | null>(null)
-  const [cropSrc, setCropSrc] = useState<string | null>(null)
   const [replyTo, setReplyTo] = useState<ApiMsg | null>(null)
   const [profileOpen, setProfileOpen] = useState(false)
   // ESC → back to chats home
@@ -460,6 +464,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   }, [onBack, profileOpen, actionMsg])
 
   const [peerOnline, setPeerOnline] = useState(false)
+  const [peerBusy, setPeerBusy] = useState<{ message?: string; until?: string | null } | null>(null)
   const [peerLastSeen, setPeerLastSeen] = useState<string | null>(null)
   const [chatMenu, setChatMenu] = useState(false)
   const [chatMuted, setChatMuted] = useState(() => {
@@ -470,20 +475,6 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       return false
     }
   })
-  const [chatLocked, setChatLocked] = useState(() => {
-    try {
-      const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
-      return !!map[contactId]
-    } catch {
-      return false
-    }
-  })
-  // Unlock is session-only; re-lock requires PIN every open
-  const [unlocked, setUnlocked] = useState(false)
-  const [lockSheet, setLockSheet] = useState<'off' | 'setup' | 'confirm' | 'unlock' | null>(null)
-  const [pinDraft, setPinDraft] = useState('')
-  const [pinConfirm, setPinConfirm] = useState('')
-  const [pinError, setPinError] = useState('')
   const [statusReply, setStatusReply] = useState<{ preview: string; time?: string; statusId?: string } | null>(null)
   const prevMsgCountRef = useRef(0)
   const inputRef = useRef<HTMLTextAreaElement | HTMLInputElement>(null)
@@ -524,8 +515,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       return fromList
     }
 
-    const username = ((c as any).username || '').replace(/^@/, '').trim()
     const peer = peerId || contactId
+    const isSelf = !!me?.id && peer === me.id
+    let username = ((c as any).username || '').replace(/^@/, '').trim()
+    if (!username && isSelf) username = (me?.username || '').replace(/^@/, '').trim()
     if (!username && !peer) {
       showToast('Could not open chat - contact is missing')
       return null
@@ -633,11 +626,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               state: pickState(sm.state, match.state),
               text: sm.text || match.text,
               image: sm.image ?? match.image,
-              time: match.time || sm.time,
-              timeLabel: match.timeLabel || sm.timeLabel,
+              timeLabel: sm.timeLabel || match.timeLabel,
               replyToId: sm.replyToId || match.replyToId,
               replyToText: sm.replyToText || match.replyToText,
-              reactions: (sm as any).reactions?.length ? (sm as any).reactions : (match as any).reactions,
             }
           }
           claimedIds.add(sm.id)
@@ -800,9 +791,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         statusReply = { preview: sr[1], time: sr[2] || undefined, statusId: sr[3] || undefined }
         text = sr[4]
       }
+      const ck = (detail.m as any).client_key || (detail.m as any).clientKey || detail.m.id
       const incoming = {
         id: detail.m.id,
-        clientKey: detail.m.id,
+        clientKey: ck,
         from: detail.m.from,
         to: contactId,
         text,
@@ -817,11 +809,24 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       }
       // Delivered was already fired in the store handler before this event.
       setMsgs((prev) => {
-        // Already have this server id or clientKey — never append a second bubble
-        if (prev.some((x) => x.id === incoming.id || x.clientKey === incoming.id || (incoming.clientKey && x.clientKey === incoming.clientKey))) {
+        // Already have this server id or clientKey, never append a second bubble
+        const exists = prev.some(
+          (x) =>
+            x.id === incoming.id ||
+            x.clientKey === incoming.id ||
+            (incoming.clientKey && (x.clientKey === incoming.clientKey || x.id === incoming.clientKey)),
+        )
+        if (exists) {
           return prev.map((x) =>
-            x.id === incoming.id || x.clientKey === incoming.id
-              ? { ...x, id: incoming.id, state: rankState(incoming.state) >= rankState(x.state) ? (incoming.state as any) : x.state }
+            x.id === incoming.id ||
+            x.clientKey === incoming.id ||
+            (incoming.clientKey && (x.clientKey === incoming.clientKey || x.id === incoming.clientKey))
+              ? {
+                  ...x,
+                  id: incoming.id,
+                  clientKey: x.clientKey || incoming.clientKey,
+                  state: rankState(incoming.state) >= rankState(x.state) ? (incoming.state as any) : x.state,
+                }
               : x,
           )
         }
@@ -1283,8 +1288,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       return
     }
     try {
-      const src = await fileToDataUrl(f)
-      setCropSrc(src)
+      // Compress + optimize for web; do not crop
+      const data = await compressForWeb(f)
+      setPendingImage(data)
     } catch {
       showToast('Could not process image')
     }
@@ -1292,7 +1298,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
 
 
-  // Presence for this peer
+  // Presence for this peer (includes busy message so Online is replaced)
   useEffect(() => {
     let alive = true
     const load = async () => {
@@ -1301,6 +1307,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         if (!alive) return
         setPeerOnline(!!p.online)
         setPeerLastSeen(p.lastSeen || null)
+        const busy = !!(p as any).busy
+        const msg = (p as any).busyMessage || (p as any).busy_message || ''
+        const until = (p as any).busyUntil || (p as any).busy_until || null
+        setPeerBusy(busy && msg ? { message: msg, until } : null)
       } catch {
         /* */
       }
@@ -1527,7 +1537,18 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }, [contactId])
 
-  return (
+    if (isSelfChat) {
+    return (
+      <NotesBoard
+        userId={me?.id || 'me'}
+        displayName={me?.name || c.name || 'You'}
+        username={me?.username || c.username}
+        onBack={onBack}
+      />
+    )
+  }
+
+return (
     <div className="flex h-full flex-col" style={{ background: WALLPAPERS[settings.wallpaper] || '#F3F4F6' }}>
       <header className="z-10 flex shrink-0 items-center gap-1 border-b border-white/40 bg-white/80 backdrop-blur-md px-2 pb-3.5 pt-[max(1.5rem,calc(env(safe-area-inset-top)+0.75rem))] shadow-sm">
         <button
@@ -1545,41 +1566,39 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         >
           <Avatar contact={{ ...c, online: peerOnline || c.online, premium: !!(c as any).verifiedBadge }} size={44} />
           <div className="min-w-0 flex-1">
-            <p className="truncate font-extrabold leading-tight">{c.name}</p>
+            <p className="truncate font-extrabold leading-tight">
+              {isSelfChat ? (me?.name || c.name || 'You') : c.name}
+            </p>
             <p
-              className={`text-xs font-bold ${
-                peerRecording || liveDraft || typing || peerOnline || c.online
-                  ? 'text-brand-blue'
-                  : 'text-gray-400'
+              className={`truncate text-xs font-bold ${
+                isSelfChat
+                  ? 'text-gray-400'
+                  : peerRecording || liveDraft || typing || peerOnline || c.online
+                    ? 'text-brand-blue'
+                    : 'text-gray-400'
               }`}
             >
               {(() => {
+                if (isSelfChat) {
+                  const u = (me?.username || c.username || '').replace(/^@/, '')
+                  return u ? `@${u}` : 'Notes'
+                }
                 if (peerRecording) return 'recording…'
                 if ((c as any).onCall) return 'on a call'
                 if (liveDraft || typing) return 'typing…'
                 const peer = peerId || contactId
-                const busyInfo = busyMap?.[peer] || ((c as any).busy ? { message: (c as any).busyMessage || 'busy', until: (c as any).busyUntil } : null)
-                const busyActive = !!(busyInfo && busyInfo.message && (!busyInfo.until || Date.parse(busyInfo.until) > Date.now()))
+                const busyInfo =
+                  peerBusy ||
+                  busyMap?.[peer] ||
+                  ((c as any).busy ? { message: (c as any).busyMessage || 'busy', until: (c as any).busyUntil } : null)
+                const busyActive = !!(
+                  busyInfo &&
+                  busyInfo.message &&
+                  (!busyInfo.until || Date.parse(String(busyInfo.until)) > Date.now())
+                )
                 const online = !!(presenceMap?.[peer] || peerOnline || c.online)
                 const last = peerLastSeen || (c as any).lastSeen
-                if (busyActive) {
-                  const msg = busyInfo!.message || 'busy'
-                  // Phase: even ticks show busy (marquee if long), odd show Online/last seen
-                  if (subtitleTick % 2 === 1) {
-                    if (online) return 'Online'
-                    if (last) return formatLastSeen(last)
-                  }
-                  if (msg.length > 18) {
-                    return (
-                      <span className="block max-w-[11rem] overflow-hidden">
-                        <span className="inline-block whitespace-nowrap animate-[sc-marquee_6s_linear_infinite]">
-                          {msg}
-                        </span>
-                      </span>
-                    )
-                  }
-                  return msg
-                }
+                if (busyActive) return busyInfo!.message || 'busy'
                 if (online) return 'Online'
                 if (last) return formatLastSeen(last)
                 return c.username ? `@${c.username}` : ''
@@ -1587,6 +1606,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             </p>
           </div>
         </button>
+        {!isSelfChat && (
+          <>
         <button
           type="button"
           aria-label="Voice call"
@@ -1620,7 +1641,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                 aria-label="Close menu"
                 onClick={() => setChatMenu(false)}
               />
-              <div className="absolute right-0 top-11 z-50 w-52 overflow-hidden rounded-2xl bg-white py-1.5 shadow-xl ring-1 ring-black/5">
+              <div className="absolute right-0 top-11 z-50 w-52 overflow-hidden rounded-2xl bg-white py-1.5 text-ink shadow-xl ring-1 ring-black/5">
                 <button
                   type="button"
                   className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold hover:bg-gray-50"
@@ -1640,34 +1661,6 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                 >
                   {chatMuted ? <Bell size={18} className="text-brand-purple" /> : <BellOff size={18} className="text-brand-purple" />}
                   {chatMuted ? 'Unmute notifications' : 'Mute notifications'}
-                </button>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold hover:bg-gray-50"
-                  onClick={() => {
-                    setChatMenu(false)
-                    setPinDraft('')
-                    setPinError('')
-                    let pin = ''
-                    try { pin = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
-                    if (!pin) {
-                      showToast?.('Set a chat lock PIN in Settings → Privacy')
-                      return
-                    }
-                    if (chatLocked) {
-                      ;(window as any).__sc_lock_remove = true
-                      setLockSheet('unlock')
-                    } else {
-                      ;(window as any).__sc_lock_remove = false
-                      setLockSheet('unlock') // enter PIN to confirm lock
-                      ;(window as any).__sc_lock_apply = true
-                    }
-                  }}
-                >
-                  {chatLocked
-                    ? <Unlock size={18} className="text-brand-purple" />
-                    : <Lock size={18} className="text-brand-purple" />}
-                  {chatLocked ? 'Unlock chat' : 'Lock chat'}
                 </button>
                 <button
                   type="button"
@@ -1695,6 +1688,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             </>
           )}
         </div>
+          </>
+        )}
       </header>
 
       <div
@@ -1707,9 +1702,11 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         </p>
         {loading && <p className="py-6 text-center text-sm font-bold text-gray-400">Loading…</p>}
         {!loading && msgs.length === 0 && (
-          <p className="py-10 text-center font-bold text-gray-400">
-            Say hi to {c.name.split(' ')[0]} and start your chat.
-          </p>
+          <EmptyState
+            title={`Say hi to ${c.name.split(' ')[0]}`}
+            subtitle="This inbox is empty. Send a message when you're ready, it stays between you two."
+            className="py-8"
+          />
         )}
         <AnimatePresence initial={false}>
           {msgs.map((m) => {
@@ -1783,7 +1780,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               </div>
             </motion.div>
           )}
-          {/* Live character bubble - Premium viewers only */}
+          {/* Live character bubble - Premium viewers only; text uses theme accent (same as caret) */}
           {liveDraft != null && liveDraft !== '' && (
             <motion.div
               key="live-typing"
@@ -1794,7 +1791,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               className="flex"
             >
               <div className="max-w-[85%] rounded-3xl rounded-bl-md bg-white px-3.5 py-2.5 shadow-sm ring-1 ring-brand-purple/15">
-                <p className="whitespace-pre-wrap break-words font-mono text-[14px] font-medium leading-snug tracking-tight text-ink">
+                <p className="whitespace-pre-wrap break-words font-mono text-[14px] font-medium leading-snug tracking-tight text-brand-purple">
                   {liveDraft}
                   <span
                     className="ml-0.5 inline-block h-[1.1em] w-[2px] translate-y-[2px] bg-brand-purple align-middle"
@@ -1808,17 +1805,6 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         <div ref={end} className="h-2 shrink-0 pb-1" />
       </div>
 
-      {cropSrc && (
-        <ChatImageCropper
-          src={cropSrc}
-          title="Crop photo"
-          onCancel={() => setCropSrc(null)}
-          onDone={(dataUrl) => {
-            setCropSrc(null)
-            setPendingImage(dataUrl)
-          }}
-        />
-      )}
       {pendingImage && (
         <div className="relative border-t border-gray-100 bg-white px-4 py-2">
           <img src={pendingImage} alt="" className="h-24 rounded-2xl object-cover" />
@@ -2276,170 +2262,6 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               type="button"
               className="mt-2 w-full rounded-full bg-gray-100 py-3.5 text-sm font-extrabold text-gray-600"
               onClick={() => setBlockOpen(false)}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Chat lock gate — required every time this chat is opened */}
-      {chatLocked && !unlocked && (
-        <div className="absolute inset-0 z-[60] flex flex-col items-center justify-center bg-white/95 px-8 backdrop-blur-sm">
-          <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-purple/10">
-            <Lock size={28} className="text-brand-purple" />
-          </div>
-          <p className="text-lg font-black text-ink">Chat locked</p>
-          <p className="mt-1 text-center text-sm font-semibold text-gray-500">
-            Enter your PIN to open this chat
-          </p>
-          <input
-            type="password"
-            inputMode="numeric"
-            pattern="[0-9]*"
-            maxLength={8}
-            autoFocus
-            value={pinDraft}
-            onChange={(e) => {
-              setPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))
-              setPinError('')
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                try {
-                  const pin = localStorage.getItem('sc_chat_lock_pin') || ''
-                  if (pin && pinDraft === pin) {
-                    setUnlocked(true)
-                    setPinDraft('')
-                    setPinError('')
-                  } else {
-                    setPinError('Wrong PIN')
-                  }
-                } catch {
-                  setPinError('Wrong PIN')
-                }
-              }
-            }}
-            className="mt-5 w-full max-w-xs rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
-            placeholder="••••"
-          />
-          {pinError ? <p className="mt-2 text-sm font-bold text-brand-red">{pinError}</p> : null}
-          <button
-            type="button"
-            className="mt-4 w-full max-w-xs rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
-            onClick={() => {
-              try {
-                const pin = localStorage.getItem('sc_chat_lock_pin') || ''
-                if (pin && pinDraft === pin) {
-                  setUnlocked(true)
-                  setPinDraft('')
-                  setPinError('')
-                } else {
-                  setPinError('Wrong PIN')
-                }
-              } catch {
-                setPinError('Wrong PIN')
-              }
-            }}
-          >
-            Unlock
-          </button>
-          <button
-            type="button"
-            className="mt-2 text-sm font-bold text-gray-500"
-            onClick={onBack}
-          >
-            Back
-          </button>
-        </div>
-      )}
-
-      {/* Chat lock — uses global PIN from Settings → Privacy */}
-      {lockSheet && (
-        <div className="absolute inset-0 z-[65] flex flex-col justify-end bg-black/40" onClick={() => setLockSheet(null)}>
-          <div className="rounded-t-3xl bg-white px-5 pb-8 pt-4" onClick={(e) => e.stopPropagation()}>
-            <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-gray-200" />
-            <p className="text-lg font-black">
-              {(window as any).__sc_lock_remove
-                ? 'Remove chat lock'
-                : (window as any).__sc_lock_apply
-                  ? 'Lock this chat'
-                  : 'Unlock chat'}
-            </p>
-            <p className="mt-1 text-sm font-semibold text-gray-500">
-              {(window as any).__sc_lock_apply
-                ? 'Enter your chat lock PIN to confirm'
-                : 'Enter your chat lock PIN'}
-            </p>
-            <input
-              type="password"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={8}
-              autoFocus
-              value={pinDraft}
-              onChange={(e) => {
-                setPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))
-                setPinError('')
-              }}
-              className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
-              placeholder="••••"
-            />
-            {pinError ? <p className="mt-2 text-sm font-bold text-brand-red">{pinError}</p> : null}
-            <button
-              type="button"
-              className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
-              onClick={() => {
-                try {
-                  const pin = localStorage.getItem('sc_chat_lock_pin') || ''
-                  if (!pin || pinDraft !== pin) {
-                    setPinError('Wrong PIN')
-                    return
-                  }
-                  const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
-                  if ((window as any).__sc_lock_remove) {
-                    delete map[contactId]
-                    if (peerId) delete map[peerId]
-                    localStorage.setItem('sc_chat_locks', JSON.stringify(map))
-                    setChatLocked(false)
-                    setUnlocked(true)
-                    showToast?.('Chat unlocked')
-                  } else if ((window as any).__sc_lock_apply) {
-                    map[contactId] = true
-                    if (peerId && peerId !== contactId) map[peerId] = true
-                    localStorage.setItem('sc_chat_locks', JSON.stringify(map))
-                    setChatLocked(true)
-                    setUnlocked(true)
-                    showToast?.('Chat locked')
-                  } else {
-                    setUnlocked(true)
-                  }
-                  ;(window as any).__sc_lock_remove = false
-                  ;(window as any).__sc_lock_apply = false
-                  setLockSheet(null)
-                  setPinDraft('')
-                  setPinError('')
-                } catch {
-                  setPinError('Wrong PIN')
-                }
-              }}
-            >
-              {(window as any).__sc_lock_remove
-                ? 'Remove lock'
-                : (window as any).__sc_lock_apply
-                  ? 'Lock chat'
-                  : 'Unlock'}
-            </button>
-            <button
-              type="button"
-              className="mt-2 w-full rounded-full bg-gray-100 py-3.5 text-sm font-extrabold text-gray-600"
-              onClick={() => {
-                setLockSheet(null)
-                setPinDraft('')
-                setPinError('')
-                ;(window as any).__sc_lock_remove = false
-                ;(window as any).__sc_lock_apply = false
-              }}
             >
               Cancel
             </button>
