@@ -29,24 +29,26 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 
 def _print_ready_banner() -> None:
-    """CLI banner after startup (SafeChat wordmark in brand colors)."""
+    """CLI banner: continuous SafeChat. with blue ellipsis."""
     RED = "\033[38;2;227;64;76m"      # #E3404C Safe
     PURPLE = "\033[38;2;138;43;226m"  # #8A2BE2 Chat
-    BLUE = "\033[38;2;89;132;242m"    # #5984F2 end mark
+    BLUE = "\033[38;2;89;132;242m"    # #5984F2 ellipsis
     R = "\033[0m"
-    # Small solid blue block (not a dust-dot) at the end of each logo line
-    box = BLUE + "■" + R
+    # One continuous wordmark (no gap between Safe and Chat)
     art = [
-        RED + "  ____         __      " + PURPLE + " ____ _           _  " + box,
-        RED + " / ___|  __ _ / _| ___ " + PURPLE + "/ ___| |__   __ _| |_ " + box,
-        RED + " \\___ \\/ _` | |_ / _ \\" + PURPLE + "| |   | '_ \\ / _` | __|" + box,
-        RED + "  ___) | (_| |  _|  __/" + PURPLE + "| |___| | | | (_| | |_ " + box,
-        RED + " |____/ \\__,_|_|  \\___|" + PURPLE + " \\____|_| |_|\\__,_|\\__|" + box,
+        RED + "  ____         __      " + PURPLE + "____ _           _" + R,
+        RED + " / ___|  __ _ / _| ___ " + PURPLE + "/ ___| |__   __ _| |_" + R,
+        RED + " \\___ \\ / _` | |_ / _ \\\\" + PURPLE + "| |   | '_ \\ / _` | __|" + R,
+        RED + "  ___) | (_| |  _|  __/" + PURPLE + "| |___| | | | (_| | |_" + R,
+        RED + " |____/ \\__,_|_|  \\___|" + PURPLE + " \\____|_| |_|\\__,_|\\__|" + R,
     ]
     print()
-    for line in art:
-        print(line)
-    # Three blank lines, then centered tagline under the logo
+    for i, line in enumerate(art):
+        # trailing period on last glyph row only
+        if i == len(art) - 1:
+            print(line + PURPLE + "." + R + " " + BLUE + "..." + R)
+        else:
+            print(line)
     print()
     print()
     print()
@@ -55,7 +57,6 @@ def _print_ready_banner() -> None:
         "Your people.",
         "Your space.",
     ]
-    # Visual width of logo art (~42 cols of glyphs)
     width = 44
     for line in taglines:
         pad = max(0, (width - len(line)) // 2)
