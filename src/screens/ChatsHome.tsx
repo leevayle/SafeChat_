@@ -58,6 +58,12 @@ export function ChatsHome({
   const [searching, setSearching] = useState(false)
   const [q, setQ] = useState('')
   const [menu, setMenu] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('sc_pinned_chats') || '[]') } catch { return [] }
+  })
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const longPressMoved = useRef(false)
   const [chatsLocked, setChatsLocked] = useState(() => {
     try { return localStorage.getItem('sc_chats_locked') === '1' } catch { return false }
   })
@@ -127,7 +133,7 @@ export function ChatsHome({
       if (nextT >= prevT) byPeer.set(key, c)
     }
     const qLower = q ? q.toLowerCase() : ''
-    return Array.from(byPeer.values()).filter((c) => {
+    const filtered = Array.from(byPeer.values()).filter((c) => {
       const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
       if (
         qLower &&
@@ -139,7 +145,15 @@ export function ChatsHome({
       if (filter === 'Online') return ct.online
       return true
     })
-  }, [filter, q, chats, contactMap, presenceMap])
+    // Pinned chats first
+    filtered.sort((a, b) => {
+      const ap = pinnedIds.includes(a.contactId) ? 1 : 0
+      const bp = pinnedIds.includes(b.contactId) ? 1 : 0
+      if (ap !== bp) return bp - ap
+      return 0
+    })
+    return filtered
+  }, [filter, q, chats, contactMap, presenceMap, pinnedIds])
 
   const statusUsers = useMemo(() => {
     const byUser = new Map<string, any>()
@@ -163,6 +177,52 @@ export function ChatsHome({
     }
     return Array.from(byUser.values()).slice(0, 12)
   }, [statusList, contactMap, me])
+
+  const toggleSelectChat = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
+  const clearSelection = () => setSelectedIds([])
+  const persistPinned = (ids: string[]) => {
+    setPinnedIds(ids)
+    try { localStorage.setItem('sc_pinned_chats', JSON.stringify(ids)) } catch { /* */ }
+  }
+  const pinSelected = () => {
+    const next = Array.from(new Set([...pinnedIds, ...selectedIds]))
+    persistPinned(next)
+    showToast(selectedIds.length > 1 ? 'Chats pinned' : 'Chat pinned')
+    clearSelection()
+  }
+  const deleteSelected = () => {
+    try {
+      window.dispatchEvent(new CustomEvent('sc:delete-chats', { detail: { ids: [...selectedIds] } }))
+    } catch { /* */ }
+    showToast(selectedIds.length > 1 ? 'Chats deleted' : 'Chat deleted')
+    clearSelection()
+  }
+  const lockSelected = () => {
+    let pin = ''
+    try { pin = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+    if (!pin) {
+      showToast('Set a chat lock PIN in Settings → Security first')
+      clearSelection()
+      onSettings()
+      return
+    }
+    const entered = window.prompt('Enter chat lock PIN to lock')
+    if (entered == null) return
+    if (entered !== pin) {
+      showToast('Wrong PIN')
+      return
+    }
+    try {
+      const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+      for (const id of selectedIds) map[id] = true
+      localStorage.setItem('sc_chat_locks', JSON.stringify(map))
+      showToast(selectedIds.length > 1 ? 'Chats locked' : 'Chat locked')
+    } catch { /* */ }
+    clearSelection()
+  }
+
 
   return (
     <div className="relative flex h-full flex-col bg-white">
@@ -212,6 +272,19 @@ export function ChatsHome({
         </div>
       </header>
 
+      {selectedIds.length > 0 && (
+        <div className="z-30 flex items-center gap-1 border-b border-black/5 bg-brand-purple/10 px-2 py-2">
+          <button type="button" onClick={clearSelection} className="rounded-full px-3 py-2 text-xs font-extrabold text-gray-600">
+            Cancel
+          </button>
+          <span className="flex-1 text-center text-xs font-extrabold text-brand-purple">{selectedIds.length} selected</span>
+          <button type="button" onClick={pinSelected} className="rounded-full px-3 py-2 text-xs font-extrabold text-brand-purple">Pin</button>
+          <button type="button" onClick={deleteSelected} className="rounded-full px-3 py-2 text-xs font-extrabold text-brand-red">Delete</button>
+          <button type="button" disabled className="rounded-full px-3 py-2 text-xs font-extrabold text-gray-300">Hide</button>
+          <button type="button" disabled className="rounded-full px-3 py-2 text-xs font-extrabold text-gray-300">Archive</button>
+          <button type="button" onClick={lockSelected} className="rounded-full px-3 py-2 text-xs font-extrabold text-brand-purple">Lock</button>
+        </div>
+      )}
       {/* z-40: hamburger menu covers header + list + FAB + bottom nav */}
       <AnimatePresence>
         {menu && (
@@ -239,28 +312,7 @@ export function ChatsHome({
                   { label: 'New group', fn: onNewGroup, Icon: Users },
                   { label: 'Contacts', fn: onContacts, Icon: ContactRound },
                   { label: 'Save requests', fn: onSaveRequests, Icon: UserRoundPlus, badge: pendingCount },
-                  { label: 'Notifications', fn: onNotifications, Icon: BellRing, badge: systemNotifCount },
-                  {
-                    label: chatsLocked ? 'Unlock chats' : 'Lock chats',
-                    fn: () => {
-                      setMenu(false)
-                      try {
-                        const has = !!localStorage.getItem('sc_chat_lock_pin')
-                        if (chatsLocked) {
-                          setLockUi('unlock')
-                        } else if (!has) {
-                          setLockUi('set')
-                        } else {
-                          try { localStorage.setItem('sc_chats_locked', '1') } catch { /* */ }
-                          setChatsLocked(true)
-                          showToast('Chats locked')
-                        }
-                      } catch {
-                        setLockUi('set')
-                      }
-                    },
-                    Icon: Lock,
-                  },
+                  { label: 'Notifications', fn: onNotifications, Icon: BellRing },
                   {
                     label: 'Refresh',
                     fn: () => {
@@ -493,8 +545,38 @@ export function ChatsHome({
                   >
                     <button
                       type="button"
-                      onClick={() => onOpenChat(c.contactId)}
-                      className="flex w-full items-center gap-3 border-b border-gray-100/80 px-3 py-3.5 text-left last:border-0 hover:bg-gray-50/80"
+                      onClick={() => {
+                        if (selectedIds.length) {
+                          toggleSelectChat(c.contactId)
+                          return
+                        }
+                        onOpenChat(c.contactId)
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        toggleSelectChat(c.contactId)
+                      }}
+                      onPointerDown={() => {
+                        longPressMoved.current = false
+                        if (longPressTimer.current) clearTimeout(longPressTimer.current)
+                        longPressTimer.current = setTimeout(() => {
+                          if (!longPressMoved.current) toggleSelectChat(c.contactId)
+                        }, 450)
+                      }}
+                      onPointerMove={() => {
+                        longPressMoved.current = true
+                      }}
+                      onPointerUp={() => {
+                        if (longPressTimer.current) clearTimeout(longPressTimer.current)
+                      }}
+                      onPointerCancel={() => {
+                        if (longPressTimer.current) clearTimeout(longPressTimer.current)
+                      }}
+                      className={`flex w-full items-center gap-3 border-b border-gray-100/80 px-3 py-3.5 text-left last:border-0 ${
+                        selectedIds.includes(c.contactId)
+                          ? 'bg-brand-purple/15 ring-1 ring-inset ring-brand-purple/30'
+                          : 'hover:bg-gray-50/80'
+                      }`}
                     >
                       {meta && meta.total > 0 ? (
                         <span
@@ -525,7 +607,12 @@ export function ChatsHome({
                       )}
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
-                          <p className="truncate font-extrabold">{(ct as any).savedName || ct.name}</p>
+                          <p className="truncate font-extrabold">
+                            {pinnedIds.includes(c.contactId) ? (
+                              <span className="mr-1 text-brand-purple" aria-hidden>📌</span>
+                            ) : null}
+                            {(ct as any).savedName || ct.name}
+                          </p>
                           <div className="flex shrink-0 flex-col items-end gap-0.5">
                             <span
                               className={`text-xs font-bold ${

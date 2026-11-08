@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban } from 'lucide-react'
+import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { NotesBoard } from '../components/NotesBoard'
+import { ChatImageCropper } from '../components/ChatImageCropper'
+import { fileToDataUrl } from '../lib/imageProcess'
 import { EmptyState } from '../components/EmptyState'
 import { api, hasAccessToken, type ApiMsg } from '../api'
 import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
@@ -36,15 +38,6 @@ function mediaUrl(path?: string | null) {
   if (!path) return ''
   if (path.startsWith('http') || path.startsWith('data:')) return path
   return `${API_ORIGIN}${path}`
-}
-
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader()
-    r.onload = () => resolve(String(r.result))
-    r.onerror = reject
-    r.readAsDataURL(file)
-  })
 }
 
 const STATE_RANK: Record<string, number> = {
@@ -434,6 +427,25 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
   const [blockOpen, setBlockOpen] = useState(false)
+  const [lockPrompt, setLockPrompt] = useState(false)
+  const [lockPinDraft, setLockPinDraft] = useState('')
+  const [lockPinError, setLockPinError] = useState('')
+  const [chatLocked, setChatLocked] = useState(() => {
+    try {
+      const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+      return !!(map[contactId])
+    } catch { return false }
+  })
+  const [unlockedThisSession, setUnlockedThisSession] = useState(false)
+  const [cropSrc, setCropSrc] = useState<string | null>(null)
+  const [selfNotesOpen, setSelfNotesOpen] = useState(false)
+  const [lastSeenPhase, setLastSeenPhase] = useState<'label' | 'time'>('time')
+  const [selfSettingsOpen, setSelfSettingsOpen] = useState(false)
+  const [showSelfNotes, setShowSelfNotes] = useState(true)
+  const [showSelfChecklists, setShowSelfChecklists] = useState(true)
+  const [showSelfReminders, setShowSelfReminders] = useState(true)
+  const [showSelfMsgs, setShowSelfMsgs] = useState(true)
+  const [selfNoteItems, setSelfNoteItems] = useState<any[]>([])
   const [blocking, setBlocking] = useState(false)
   const [recording, setRecording] = useState(false)
   const [recordSecs, setRecordSecs] = useState(0)
@@ -1288,9 +1300,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       return
     }
     try {
-      // Compress + optimize for web; do not crop
-      const data = await compressForWeb(f)
-      setPendingImage(data)
+      const data = await fileToDataUrl(f)
+      setCropSrc(data)
     } catch {
       showToast('Could not process image')
     }
@@ -1537,16 +1548,92 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }, [contactId])
 
-    if (isSelfChat) {
+
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const loop = (phase: 'label' | 'time') => {
+      if (cancelled) return
+      setLastSeenPhase(phase)
+      // Time stays longer than the words "last seen"
+      const ms = phase === 'time' ? 4500 : 1600
+      timer = setTimeout(() => loop(phase === 'time' ? 'label' : 'time'), ms)
+    }
+    loop('time')
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [contactId])
+
+  // Load self notes into timeline when self chat
+  useEffect(() => {
+    if (!isSelfChat || !me?.id) return
+    try {
+      const raw = localStorage.getItem(`sc_notes_${me.id}`)
+      setSelfNoteItems(raw ? JSON.parse(raw) : [])
+    } catch {
+      setSelfNoteItems([])
+    }
+    const onStorage = () => {
+      try {
+        const raw = localStorage.getItem(`sc_notes_${me.id}`)
+        setSelfNoteItems(raw ? JSON.parse(raw) : [])
+      } catch { /* */ }
+    }
+    window.addEventListener('sc_notes_preview', onStorage)
+    return () => window.removeEventListener('sc_notes_preview', onStorage)
+  }, [isSelfChat, me?.id])
+
+  if (chatLocked && !unlockedThisSession && !isSelfChat) {
     return (
-      <NotesBoard
-        userId={me?.id || 'me'}
-        displayName={me?.name || c.name || 'You'}
-        username={me?.username || c.username}
-        onBack={onBack}
-      />
+      <div className="flex h-full flex-col items-center justify-center bg-white px-6">
+        <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-purple/10 text-brand-purple">
+          <Lock size={28} />
+        </div>
+        <p className="text-lg font-black text-ink">Chat locked</p>
+        <p className="mt-1 text-center text-sm font-semibold text-gray-400">Enter your PIN to open this chat</p>
+        <input
+          type="password"
+          inputMode="numeric"
+          maxLength={8}
+          value={lockPinDraft}
+          onChange={(e) => {
+            setLockPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))
+            setLockPinError('')
+          }}
+          className="mt-5 w-full max-w-xs rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+          placeholder="••••"
+          autoFocus
+        />
+        {lockPinError ? <p className="mt-2 text-sm font-bold text-brand-red">{lockPinError}</p> : null}
+        <button
+          type="button"
+          className="mt-4 w-full max-w-xs rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
+          onClick={() => {
+            try {
+              const pin = localStorage.getItem('sc_chat_lock_pin') || ''
+              if (pin && lockPinDraft === pin) {
+                setUnlockedThisSession(true)
+                setLockPinDraft('')
+                setLockPinError('')
+              } else setLockPinError('Wrong PIN')
+            } catch {
+              setLockPinError('Wrong PIN')
+            }
+          }}
+        >
+          Unlock
+        </button>
+        <button type="button" className="mt-2 text-sm font-bold text-gray-500" onClick={onBack}>
+          Back
+        </button>
+      </div>
     )
   }
+
+    // Self-chat uses the normal chat surface (notes as rectangular items in the timeline)
+
 
 return (
     <div className="flex h-full flex-col" style={{ background: WALLPAPERS[settings.wallpaper] || '#F3F4F6' }}>
@@ -1570,13 +1657,13 @@ return (
               {isSelfChat ? (me?.name || c.name || 'You') : c.name}
             </p>
             <p
-              className={`truncate text-xs font-bold ${
+              className={`text-xs font-bold ${
                 isSelfChat
                   ? 'text-gray-400'
                   : peerRecording || liveDraft || typing || peerOnline || c.online
                     ? 'text-brand-blue'
                     : 'text-gray-400'
-              }`}
+              } max-w-[11rem] overflow-hidden`}
             >
               {(() => {
                 if (isSelfChat) {
@@ -1600,12 +1687,55 @@ return (
                 const last = peerLastSeen || (c as any).lastSeen
                 if (busyActive) return busyInfo!.message || 'busy'
                 if (online) return 'Online'
-                if (last) return formatLastSeen(last)
+                if (last) {
+                  const timeBit = formatLastSeen(last).replace(/^last seen\s*/i, '')
+                  // Time stays longer: phase 'time' for ~2.8s of 4s cycle via CSS not needed;
+                  // interval toggles; prefer showing time more often
+                  if (lastSeenPhase === 'label') return 'last seen'
+                  return timeBit || formatLastSeen(last)
+                }
                 return c.username ? `@${c.username}` : ''
               })()}
             </p>
           </div>
         </button>
+        {isSelfChat && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setSelfSettingsOpen((v) => !v)}
+              className="flex h-10 w-10 items-center justify-center rounded-full text-brand-purple hover:bg-brand-purple/10"
+              aria-label="Self chat settings"
+            >
+              <MoreVertical size={20} />
+            </button>
+            {selfSettingsOpen && (
+              <>
+                <button type="button" className="fixed inset-0 z-40" aria-label="Close" onClick={() => setSelfSettingsOpen(false)} />
+                <div className="absolute right-0 top-11 z-50 w-52 overflow-hidden rounded-2xl bg-white py-1.5 shadow-xl ring-1 ring-black/5">
+                  {[
+                    { label: 'Notes', on: showSelfNotes, set: setShowSelfNotes },
+                    { label: 'Checklists', on: showSelfChecklists, set: setShowSelfChecklists },
+                    { label: 'Reminders', on: showSelfReminders, set: setShowSelfReminders },
+                    { label: 'Messages', on: showSelfMsgs, set: setShowSelfMsgs },
+                  ].map((row) => (
+                    <button
+                      key={row.label}
+                      type="button"
+                      className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm font-bold hover:bg-gray-50"
+                      onClick={() => row.set(!row.on)}
+                    >
+                      <span>{row.label}</span>
+                      <span className={row.on ? 'text-brand-purple text-xs font-black' : 'text-gray-300 text-xs font-black'}>
+                        {row.on ? 'On' : 'Off'}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
         {!isSelfChat && (
           <>
         <button
@@ -1684,6 +1814,28 @@ return (
                   <Ban size={18} />
                   Block
                 </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold hover:bg-gray-50"
+                  onClick={() => {
+                    setChatMenu(false)
+                    let pin = ''
+                    try { pin = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+                    if (!pin) {
+                      showToast?.('Set a chat lock PIN in Settings → Security')
+                      try {
+                        window.dispatchEvent(new CustomEvent('sc:open-settings-security'))
+                      } catch { /* */ }
+                      return
+                    }
+                    setLockPinDraft('')
+                    setLockPinError('')
+                    setLockPrompt(true)
+                  }}
+                >
+                  <Lock size={18} className="text-brand-purple" />
+                  {chatLocked ? 'Unlock chat' : 'Lock chat'}
+                </button>
               </div>
             </>
           )}
@@ -1691,6 +1843,99 @@ return (
           </>
         )}
       </header>
+
+
+      {isSelfChat && (
+        <div className="flex shrink-0 gap-2 overflow-x-auto border-b border-black/5 bg-white/90 px-3 py-2">
+          <button
+            type="button"
+            onClick={() => {
+              const now = new Date().toISOString()
+              const id = `note_${Date.now()}`
+              const item = { id, kind: 'note', title: '', body: '', createdAt: now, updatedAt: now }
+              try {
+                const key = `sc_notes_${me?.id}`
+                const prev = JSON.parse(localStorage.getItem(key) || '[]')
+                const next = [item, ...prev]
+                localStorage.setItem(key, JSON.stringify(next))
+                setSelfNoteItems(next)
+                window.dispatchEvent(new CustomEvent('sc_notes_preview'))
+              } catch { /* */ }
+              // open simple prompt for title/body
+              const title = window.prompt('Note title') || 'Note'
+              const body = window.prompt('Note text') || ''
+              try {
+                const key = `sc_notes_${me?.id}`
+                const prev = JSON.parse(localStorage.getItem(key) || '[]')
+                const next = prev.map((n: any) => n.id === id ? { ...n, title, body, updatedAt: new Date().toISOString() } : n)
+                localStorage.setItem(key, JSON.stringify(next))
+                setSelfNoteItems(next)
+              } catch { /* */ }
+            }}
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
+          >
+            Note
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const title = window.prompt('Checklist title') || 'Checklist'
+              const line = window.prompt('First item') || ''
+              const now = new Date().toISOString()
+              const id = `cl_${Date.now()}`
+              const item = {
+                id,
+                kind: 'checklist',
+                title,
+                body: '',
+                items: line ? [{ id: `i_${Date.now()}`, text: line, done: false }] : [],
+                createdAt: now,
+                updatedAt: now,
+              }
+              try {
+                const key = `sc_notes_${me?.id}`
+                const prev = JSON.parse(localStorage.getItem(key) || '[]')
+                const next = [item, ...prev]
+                localStorage.setItem(key, JSON.stringify(next))
+                setSelfNoteItems(next)
+                window.dispatchEvent(new CustomEvent('sc_notes_preview'))
+              } catch { /* */ }
+            }}
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
+          >
+            Checklist
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const title = window.prompt('Reminder') || 'Reminder'
+              const when = window.prompt('When (e.g. tomorrow 9am)') || ''
+              const now = new Date().toISOString()
+              const id = `rm_${Date.now()}`
+              const item = {
+                id,
+                kind: 'reminder',
+                title,
+                body: when,
+                remindAt: now,
+                createdAt: now,
+                updatedAt: now,
+              }
+              try {
+                const key = `sc_notes_${me?.id}`
+                const prev = JSON.parse(localStorage.getItem(key) || '[]')
+                const next = [item, ...prev]
+                localStorage.setItem(key, JSON.stringify(next))
+                setSelfNoteItems(next)
+                window.dispatchEvent(new CustomEvent('sc_notes_preview'))
+              } catch { /* */ }
+            }}
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
+          >
+            Reminder
+          </button>
+        </div>
+      )}
 
       <div
         ref={msgsScrollRef}
@@ -1708,8 +1953,38 @@ return (
             className="py-8"
           />
         )}
+
+        {isSelfChat &&
+          selfNoteItems
+            .filter((n) => {
+              if (n.kind === 'note' && !showSelfNotes) return false
+              if (n.kind === 'checklist' && !showSelfChecklists) return false
+              if (n.kind === 'reminder' && !showSelfReminders) return false
+              return true
+            })
+            .map((n) => (
+              <div
+                key={n.id}
+                className="mx-auto w-full max-w-[85%] rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-black/5"
+              >
+                <p className="text-[10px] font-black uppercase tracking-wide text-brand-purple">
+                  {n.kind === 'checklist' ? 'Checklist' : n.kind === 'reminder' ? 'Reminder' : 'Note'}
+                </p>
+                <p className="mt-0.5 font-extrabold text-ink">{n.title || 'Untitled'}</p>
+                {n.kind === 'checklist' ? (
+                  <p className="mt-1 text-xs font-semibold text-gray-400">
+                    {(n.items || []).filter((x: any) => x.done).length}/{(n.items || []).length} done
+                  </p>
+                ) : (
+                  <p className="mt-1 line-clamp-3 text-sm font-semibold text-gray-500">{n.body || ''}</p>
+                )}
+                <p className="mt-1 text-[10px] font-bold text-gray-300">
+                  {n.updatedAt ? new Date(n.updatedAt).toLocaleString() : ''}
+                </p>
+              </div>
+            ))}
         <AnimatePresence initial={false}>
-          {msgs.map((m) => {
+          {(showSelfMsgs || !isSelfChat) && msgs.map((m) => {
             const mine = m.mine ?? m.from === me?.id
             const key = m.clientKey || m.id
             const animateIn = !animatedKeys.current.has(key)
@@ -2221,12 +2496,101 @@ return (
           >
             <X size={22} />
           </button>
+          <button
+            type="button"
+            className="absolute left-4 top-[max(1rem,env(safe-area-inset-top))] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/15 text-white"
+            onClick={(e) => {
+              e.stopPropagation()
+              try {
+                const a = document.createElement('a')
+                a.href = lightboxUrl
+                a.download = `safechat-${Date.now()}.jpg`
+                a.target = '_blank'
+                document.body.appendChild(a)
+                a.click()
+                a.remove()
+              } catch { /* */ }
+            }}
+            aria-label="Download"
+          >
+            <Download size={22} />
+          </button>
           <img
             src={lightboxUrl}
             alt=""
             className="max-h-[92%] max-w-[96%] object-contain"
             onClick={(e) => e.stopPropagation()}
           />
+        </div>
+      )}
+
+      {cropSrc && (
+        <ChatImageCropper
+          src={cropSrc}
+          title="Crop photo"
+          onCancel={() => setCropSrc(null)}
+          onDone={(dataUrl) => {
+            setCropSrc(null)
+            setPendingImage(dataUrl)
+          }}
+        />
+      )}
+
+      {lockPrompt && (
+        <div className="absolute inset-0 z-[65] flex flex-col items-center justify-center bg-black/40 px-6" onClick={() => setLockPrompt(false)}>
+          <div className="w-full max-w-xs rounded-3xl bg-white p-5" onClick={(e) => e.stopPropagation()}>
+            <p className="text-center text-lg font-black text-ink">{chatLocked ? 'Unlock chat' : 'Lock chat'}</p>
+            <p className="mt-1 text-center text-xs font-semibold text-gray-400">Enter your chat lock PIN</p>
+            <input
+              type="password"
+              inputMode="numeric"
+              maxLength={8}
+              autoFocus
+              value={lockPinDraft}
+              onChange={(e) => {
+                setLockPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))
+                setLockPinError('')
+              }}
+              className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+              placeholder="••••"
+            />
+            {lockPinError ? <p className="mt-2 text-center text-sm font-bold text-brand-red">{lockPinError}</p> : null}
+            <button
+              type="button"
+              className="mt-4 w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
+              onClick={() => {
+                try {
+                  const pin = localStorage.getItem('sc_chat_lock_pin') || ''
+                  if (!pin || lockPinDraft !== pin) {
+                    setLockPinError('Wrong PIN')
+                    return
+                  }
+                  const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+                  if (chatLocked) {
+                    delete map[contactId]
+                    setChatLocked(false)
+                    setUnlockedThisSession(true)
+                    showToast?.('Chat unlocked')
+                  } else {
+                    map[contactId] = true
+                    setChatLocked(true)
+                    setUnlockedThisSession(false)
+                    showToast?.('Chat locked')
+                  }
+                  localStorage.setItem('sc_chat_locks', JSON.stringify(map))
+                  setLockPrompt(false)
+                  setLockPinDraft('')
+                } catch {
+                  setLockPinError('Could not update lock')
+                }
+              }}
+            >
+              {chatLocked ? 'Unlock' : 'Lock'}
+            </button>
+            <button type="button" className="mt-2 w-full py-2 text-sm font-bold text-gray-500" onClick={() => setLockPrompt(false)}>
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 

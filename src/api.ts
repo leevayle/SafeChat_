@@ -1018,6 +1018,15 @@ export const api = {
     return { chats: Array.from(byPeer.values()) }
   },
 
+  deleteConversation: async (conversationId: string) => {
+    try {
+      await req(`/api/v1/conversations/${conversationId}`, { method: 'DELETE' })
+    } catch {
+      /* optional endpoint */
+    }
+    return { ok: true }
+  },
+
   openPrivateChat: async (
     target: string | { username?: string; userId?: string },
   ) => {

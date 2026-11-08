@@ -26,6 +26,39 @@ logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
+
+def _print_ready_banner() -> None:
+    """CLI banner after startup (colored SafeChat wordmark)."""
+    # ANSI: purple, orange/reddish, blue
+    P = "\033[38;2;123;44;191m"
+    O = "\033[38;2;232;93;4m"
+    B = "\033[38;2;99;137;235m"
+    R = "\033[0m"
+    # Dot-matrix style SAFECHAT
+    rows = [
+        "  ·····     ···     ·····   ·····   ·····  ·  ·     ···    ·····  ",
+        " ·          ·  ·    ·       ·       ·      ·  ·    ·  ·      ·    ",
+        "  ····      ····    ····    ····    ·      ····    ····      ·    ",
+        "     ·      ·  ·    ·       ·       ·      ·  ·    ·  ·      ·    ",
+        " ·····      ·  ·    ·····   ·····   ·····  ·  ·    ·  ·      ·    ",
+    ]
+    # Simpler big text via block letters
+    art = [
+        f"{P}  ____         __      {O} ____ _           _   {B}  ",
+        f"{P} / ___|  __ _ / _| ___ {O}/ ___| |__   __ _| |_ {B} ",
+        f"{P} \\___ \\ / _` | |_ / _ \\{O}| |   | '_ \\ / _` | __|{B}",
+        f"{P}  ___) | (_| |  _|  __/{O}| |___| | | | (_| | |_ {B} ",
+        f"{P} |____/ \\__,_|_|  \\___|{O} \\____|_| |_|\\__,_|\\__|{B}",
+        f"{R}",
+        f"  {P}●{R}  {O}●{R}  {B}●{R}   server ready",
+        "",
+    ]
+    print()
+    for line in art:
+        print(line)
+    print()
+
+
 async def lifespan(app: FastAPI):
     logger.info("Boot · starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
     try:
@@ -34,6 +67,10 @@ async def lifespan(app: FastAPI):
         logger.error("Boot · MongoDB failed: %s", e)
         raise
     logger.info("Boot · server ready")
+    try:
+        _print_ready_banner()
+    except Exception:
+        pass
     yield
     logger.info("Shutdown · closing MongoDB…")
     await close_mongo_connection()

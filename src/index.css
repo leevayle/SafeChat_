@@ -352,3 +352,11 @@ img.sc-media-transparent,
   background: transparent !important;
   object-fit: contain;
 }
+
+
+@keyframes sc-marquee {
+  0% { transform: translateX(0); }
+  30% { transform: translateX(0); }
+  70% { transform: translateX(calc(-50% - 0.5rem)); }
+  100% { transform: translateX(calc(-50% - 0.5rem)); }
+}

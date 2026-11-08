@@ -1571,6 +1571,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               const next = [...prev]
               next[idx] = { ...row, state: st as any }
               void saveCachedChats(next)
+        try { (window as any).__sc_chats_snap = next } catch { /* */ }
               return next
             })
           }
@@ -1991,6 +1992,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setGroups((gs) => gs.filter((g) => g.id !== id))
   }
 
+
+
+  useEffect(() => {
+    const onDelete = (ev: Event) => {
+      const ids = ((ev as CustomEvent).detail?.ids || []) as string[]
+      if (!ids.length) return
+      const set = new Set(ids.map(String))
+      setChats((prev) => {
+        const next = prev.filter((c) => !set.has(String(c.contactId)) && !set.has(String(c.conversationId)))
+        void saveCachedChats(next)
+        return next
+      })
+    }
+    const onDeleteLocked = (ev: Event) => {
+      const ids = ((ev as CustomEvent).detail?.ids || []) as string[]
+      if (!ids.length) return
+      const set = new Set(ids.map(String))
+      setChats((prev) => {
+        const next = prev.filter((c) => !set.has(String(c.contactId)) && !set.has(String(c.conversationId)))
+        void saveCachedChats(next)
+        return next
+      })
+    }
+    window.addEventListener('sc:delete-chats', onDelete)
+    window.addEventListener('sc:delete-locked-chats', onDeleteLocked)
+    return () => {
+      window.removeEventListener('sc:delete-chats', onDelete)
+      window.removeEventListener('sc:delete-locked-chats', onDeleteLocked)
+    }
+  }, [])
 
   // Live status: new posts, deletes, views/likes — full WS maximization
   useEffect(() => {

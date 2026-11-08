@@ -77,17 +77,42 @@ export function NotesBoard({
   displayName,
   username,
   onBack,
+  embedded = false,
+  showMessages = true,
 }: {
   userId: string
   displayName: string
   username?: string
   onBack: () => void
+  /** When true: no full-screen chrome takeover — strip for ChatWindow self-chat */
+  embedded?: boolean
+  showMessages?: boolean
 }) {
   const { settings, showToast, upsertChatPreview } = useStore()
   const [notes, setNotes] = useState<NoteItem[]>(() => loadNotes(userId))
   const [editing, setEditing] = useState<NoteItem | null>(null)
   const [composer, setComposer] = useState<NoteKind | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [showNotes, setShowNotes] = useState(() => {
+    try { return localStorage.getItem(`sc_self_show_notes_${userId}`) !== '0' } catch { return true }
+  })
+  const [showChecklists, setShowChecklists] = useState(() => {
+    try { return localStorage.getItem(`sc_self_show_checklists_${userId}`) !== '0' } catch { return true }
+  })
+  const [showReminders, setShowReminders] = useState(() => {
+    try { return localStorage.getItem(`sc_self_show_reminders_${userId}`) !== '0' } catch { return true }
+  })
+  const [showSelfMessages, setShowSelfMessages] = useState(() => {
+    try { return localStorage.getItem(`sc_self_show_messages_${userId}`) !== '0' } catch { return true }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(`sc_self_show_notes_${userId}`, showNotes ? '1' : '0')
+      localStorage.setItem(`sc_self_show_checklists_${userId}`, showChecklists ? '1' : '0')
+      localStorage.setItem(`sc_self_show_reminders_${userId}`, showReminders ? '1' : '0')
+      localStorage.setItem(`sc_self_show_messages_${userId}`, showSelfMessages ? '1' : '0')
+    } catch { /* */ }
+  }, [userId, showNotes, showChecklists, showReminders, showSelfMessages])
   const [lockUi, setLockUi] = useState<'none' | 'set' | 'confirm' | 'unlock'>('none')
   const [pendingPin, setPendingPin] = useState('')
   const [locked, setLocked] = useState(() => {
@@ -124,14 +149,19 @@ export function NotesBoard({
     }
   }, [notes, userId, displayName, upsertChatPreview])
 
-  const sorted = useMemo(
-    () =>
-      [...notes].sort((a, b) => {
+  const sorted = useMemo(() => {
+    return notes
+      .filter((n) => {
+        if (n.kind === 'note' && !showNotes) return false
+        if (n.kind === 'checklist' && !showChecklists) return false
+        if (n.kind === 'reminder' && !showReminders) return false
+        return true
+      })
+      .sort((a, b) => {
         if (!!b.pinned !== !!a.pinned) return b.pinned ? 1 : -1
         return (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0)
-      }),
-    [notes],
-  )
+      })
+  }, [notes, showNotes, showChecklists, showReminders])
 
   const openNew = (kind: NoteKind) => {
     const now = new Date().toISOString()
@@ -384,7 +414,26 @@ export function NotesBoard({
       </header>
 
       {settingsOpen && (
-        <div className="border-b border-black/5 bg-white/90 px-4 py-3 backdrop-blur">
+        <div className="absolute right-3 top-[max(4.5rem,calc(env(safe-area-inset-top)+3.5rem))] z-40 w-56 overflow-hidden rounded-2xl bg-white p-2 shadow-xl ring-1 ring-black/8">
+          {[
+            { label: 'Notes', on: showNotes, set: setShowNotes },
+            { label: 'Checklists', on: showChecklists, set: setShowChecklists },
+            { label: 'Reminders', on: showReminders, set: setShowReminders },
+            { label: 'Messages', on: showSelfMessages, set: setShowSelfMessages },
+          ].map((row) => (
+            <button
+              key={row.label}
+              type="button"
+              onClick={() => row.set(!row.on)}
+              className="flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-left text-sm font-extrabold text-ink hover:bg-gray-50"
+            >
+              <span>{row.label}</span>
+              <span className={`text-xs font-black ${row.on ? 'text-brand-purple' : 'text-gray-300'}`}>
+                {row.on ? 'On' : 'Off'}
+              </span>
+            </button>
+          ))}
+          <div className="my-1 h-px bg-gray-100" />
           <button
             type="button"
             onClick={() => {
@@ -401,9 +450,9 @@ export function NotesBoard({
                 setLockUi('set')
               }
             }}
-            className="flex w-full items-center gap-3 rounded-2xl bg-white px-3 py-3 text-left text-sm font-extrabold ring-1 ring-black/5"
+            className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-extrabold text-ink hover:bg-gray-50"
           >
-            <Lock size={18} className="text-brand-purple" />
+            <Lock size={16} className="text-brand-purple" />
             Lock notes
           </button>
         </div>
@@ -429,7 +478,7 @@ export function NotesBoard({
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 pb-24">
+      <div className="flex-1 overflow-y-auto px-3 pb-4">
         {sorted.length === 0 && (
           <div className="flex flex-col items-center px-6 py-16 text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-purple/10 text-brand-purple">
@@ -491,14 +540,18 @@ export function NotesBoard({
         </div>
       </div>
 
-      <button
-        type="button"
-        onClick={() => openNew('note')}
-        className="fab-theme absolute bottom-6 right-5 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white"
-        aria-label="New note"
-      >
-        <Plus size={26} />
-      </button>
+      {/* Plus FAB removed — use kind chips / menu instead */}
+      <div className="flex shrink-0 items-center justify-center gap-2 border-t border-black/5 bg-white/90 px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <button type="button" onClick={() => openNew('note')} className="rounded-full bg-brand-purple/10 px-3 py-2 text-xs font-extrabold text-brand-purple">
+          Note
+        </button>
+        <button type="button" onClick={() => openNew('checklist')} className="rounded-full bg-brand-purple/10 px-3 py-2 text-xs font-extrabold text-brand-purple">
+          Checklist
+        </button>
+        <button type="button" onClick={() => openNew('reminder')} className="rounded-full bg-brand-purple/10 px-3 py-2 text-xs font-extrabold text-brand-purple">
+          Reminder
+        </button>
+      </div>
     </div>
   )
 }

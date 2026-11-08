@@ -111,12 +111,24 @@ export function Settings({
     return 'home'
   })
   const [picker, setPicker] = useState<{ title: string; options: string[]; key: keyof S } | null>(null)
+  const [loggingOut, setLoggingOut] = useState(false)
   const [confirm, setConfirm] = useState<'logout' | 'delete' | null>(null)
   const [deleteStep, setDeleteStep] = useState<'password' | 'phrase'>('password')
   const [deletePassword, setDeletePassword] = useState('')
   const [deletePhrase, setDeletePhrase] = useState('')
   const [deletingAccount, setDeletingAccount] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [chatPinStep, setChatPinStep] = useState<'idle' | 'warn' | 'set' | 'confirm' | 'change' | 'disable' | 'forgot' | 'forgot_confirm' | 'forgot_list'>('idle')
+  const [chatPinDraft, setChatPinDraft] = useState('')
+  const [chatPinConfirm, setChatPinConfirm] = useState('')
+  const [chatPinError, setChatPinError] = useState('')
+  const [forgotPhrase, setForgotPhrase] = useState('')
+  const [lockedChatPreview, setLockedChatPreview] = useState<{ id: string; name: string }[]>([])
+  const [deletingLocks, setDeletingLocks] = useState(false)
+  const [hasChatPin, setHasChatPin] = useState(() => {
+    try { return !!localStorage.getItem('sc_chat_lock_pin') } catch { return false }
+  })
+
   const [savingProfile, setSavingProfile] = useState(false)
   const [busyUpdating, setBusyUpdating] = useState(false)
   const [mpesaPlan, setMpesaPlan] = useState<'daily' | 'weekly' | 'monthly'>('weekly')
@@ -832,26 +844,8 @@ export function Settings({
           )}
 
           {page === 'security' && (
-            <motion.div key="sec" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
+            <motion.div key="sec" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4 px-1">
               <Card>
-                <Row
-                  label="Lock chats"
-                  value={(() => { try { return localStorage.getItem('sc_chats_locked') === '1' ? 'On' : 'Off' } catch { return 'Off' } })()}
-                  onClick={() => {
-                    try {
-                      const has = !!localStorage.getItem('sc_chat_lock_pin')
-                      if (!has) {
-                        setToast('Set a PIN from the chats menu first')
-                        return
-                      }
-                      const on = localStorage.getItem('sc_chats_locked') === '1'
-                      localStorage.setItem('sc_chats_locked', on ? '0' : '1')
-                      setToast(on ? 'Chats unlocked' : 'Chats locked')
-                    } catch {
-                      setToast('Could not update lock')
-                    }
-                  }}
-                />
                 <Row
                   label="App lock"
                   hint="Require login when opening the app"
@@ -864,6 +858,429 @@ export function Settings({
                   }
                 />
               </Card>
+
+              <Card>
+                <div className="space-y-3 px-3 py-3">
+                  <div>
+                    <p className="text-sm font-extrabold text-ink">Chat lock PIN</p>
+                    <p className="mt-1 text-xs font-semibold leading-relaxed text-gray-400">
+                      Used to lock individual chats from the chat menu. Keep this PIN safe.
+                    </p>
+                  </div>
+                  {!hasChatPin ? (
+                    <button
+                      type="button"
+                      className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
+                      onClick={() => {
+                        setChatPinError('')
+                        setChatPinDraft('')
+                        setChatPinConfirm('')
+                        setChatPinStep('warn')
+                      }}
+                    >
+                      Set chat lock PIN
+                    </button>
+                  ) : (
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
+                        onClick={() => {
+                          setChatPinError('')
+                          setChatPinDraft('')
+                          setChatPinConfirm('')
+                          setChatPinStep('change')
+                        }}
+                      >
+                        Change PIN
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full rounded-full bg-gray-100 py-3 text-sm font-extrabold text-ink"
+                        onClick={() => {
+                          setChatPinError('')
+                          setChatPinDraft('')
+                          setChatPinStep('disable')
+                        }}
+                      >
+                        Disable chat lock for all chats
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full rounded-full bg-brand-red/10 py-3 text-sm font-extrabold text-brand-red"
+                        onClick={() => {
+                          setForgotPhrase('')
+                          setChatPinError('')
+                          setChatPinStep('forgot')
+                        }}
+                      >
+                        Forgot PIN
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </Card>
+
+              {/* Modal: warn before set */}
+              {chatPinStep === 'warn' && (
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={() => setChatPinStep('idle')}>
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                    <p className="text-lg font-black text-ink">Before you set a PIN</p>
+                    <p className="mt-2 text-sm font-semibold leading-relaxed text-gray-500">
+                      If you lose this PIN, locked chats stay locked. The only recovery is to permanently delete every locked chat on this device.
+                    </p>
+                    <button
+                      type="button"
+                      className="mt-5 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
+                      onClick={() => setChatPinStep('set')}
+                    >
+                      I understand
+                    </button>
+                    <button
+                      type="button"
+                      className="mt-2 w-full rounded-full py-3 text-sm font-extrabold text-gray-500"
+                      onClick={() => setChatPinStep('idle')}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {chatPinStep === 'set' && (
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={() => setChatPinStep('idle')}>
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                    <p className="text-lg font-black text-ink">Choose a PIN</p>
+                    <p className="mt-1 text-xs font-semibold text-gray-400">4 to 8 digits</p>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={8}
+                      value={chatPinDraft}
+                      onChange={(e) => {
+                        setChatPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))
+                        setChatPinError('')
+                      }}
+                      className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+                      placeholder="••••"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      disabled={chatPinDraft.length < 4}
+                      className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white disabled:opacity-40"
+                      onClick={() => {
+                        setChatPinConfirm('')
+                        setChatPinStep('confirm')
+                      }}
+                    >
+                      Continue
+                    </button>
+                    <button type="button" className="mt-2 w-full py-3 text-sm font-extrabold text-gray-500" onClick={() => setChatPinStep('idle')}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {chatPinStep === 'confirm' && (
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center">
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl">
+                    <p className="text-lg font-black text-ink">Confirm PIN</p>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={8}
+                      value={chatPinConfirm}
+                      onChange={(e) => {
+                        setChatPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 8))
+                        setChatPinError('')
+                      }}
+                      className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+                      placeholder="••••"
+                      autoFocus
+                    />
+                    {chatPinError ? <p className="mt-2 text-center text-xs font-bold text-brand-red">{chatPinError}</p> : null}
+                    <button
+                      type="button"
+                      disabled={chatPinConfirm.length < 4}
+                      className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white disabled:opacity-40"
+                      onClick={() => {
+                        if (chatPinConfirm !== chatPinDraft) {
+                          setChatPinError('PINs do not match')
+                          return
+                        }
+                        try {
+                          localStorage.setItem('sc_chat_lock_pin', chatPinDraft)
+                          setHasChatPin(true)
+                          setChatPinStep('idle')
+                          setChatPinDraft('')
+                          setChatPinConfirm('')
+                          setToast('Chat lock PIN saved')
+                        } catch {
+                          setChatPinError('Could not save PIN')
+                        }
+                      }}
+                    >
+                      Save PIN
+                    </button>
+                    <button type="button" className="mt-2 w-full py-3 text-sm font-extrabold text-gray-500" onClick={() => setChatPinStep('set')}>
+                      Back
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {chatPinStep === 'change' && (
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={() => setChatPinStep('idle')}>
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                    <p className="text-lg font-black text-ink">Change PIN</p>
+                    <p className="mt-1 text-xs font-semibold text-gray-400">Current PIN, then new PIN</p>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={8}
+                      value={chatPinDraft}
+                      onChange={(e) => {
+                        setChatPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))
+                        setChatPinError('')
+                      }}
+                      className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+                      placeholder="Current PIN"
+                      autoFocus
+                    />
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={8}
+                      value={chatPinConfirm}
+                      onChange={(e) => {
+                        setChatPinConfirm(e.target.value.replace(/\D/g, '').slice(0, 8))
+                        setChatPinError('')
+                      }}
+                      className="mt-2 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+                      placeholder="New PIN"
+                    />
+                    {chatPinError ? <p className="mt-2 text-center text-xs font-bold text-brand-red">{chatPinError}</p> : null}
+                    <button
+                      type="button"
+                      className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
+                      onClick={() => {
+                        try {
+                          const cur = localStorage.getItem('sc_chat_lock_pin') || ''
+                          if (chatPinDraft !== cur) {
+                            setChatPinError('Current PIN is wrong')
+                            return
+                          }
+                          if (chatPinConfirm.length < 4) {
+                            setChatPinError('New PIN must be at least 4 digits')
+                            return
+                          }
+                          localStorage.setItem('sc_chat_lock_pin', chatPinConfirm)
+                          setChatPinStep('idle')
+                          setChatPinDraft('')
+                          setChatPinConfirm('')
+                          setToast('PIN updated')
+                        } catch {
+                          setChatPinError('Could not update PIN')
+                        }
+                      }}
+                    >
+                      Save new PIN
+                    </button>
+                    <button type="button" className="mt-2 w-full py-3 text-sm font-extrabold text-gray-500" onClick={() => setChatPinStep('idle')}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {chatPinStep === 'disable' && (
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={() => setChatPinStep('idle')}>
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                    <p className="text-lg font-black text-ink">Disable chat lock</p>
+                    <p className="mt-1 text-xs font-semibold text-gray-400">Enter PIN to unlock all chats and remove the lock PIN</p>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={8}
+                      value={chatPinDraft}
+                      onChange={(e) => {
+                        setChatPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))
+                        setChatPinError('')
+                      }}
+                      className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
+                      placeholder="PIN"
+                      autoFocus
+                    />
+                    {chatPinError ? <p className="mt-2 text-center text-xs font-bold text-brand-red">{chatPinError}</p> : null}
+                    <button
+                      type="button"
+                      className="mt-4 w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white"
+                      onClick={() => {
+                        try {
+                          const cur = localStorage.getItem('sc_chat_lock_pin') || ''
+                          if (chatPinDraft !== cur) {
+                            setChatPinError('Wrong PIN')
+                            return
+                          }
+                          localStorage.removeItem('sc_chat_lock_pin')
+                          localStorage.removeItem('sc_chat_locks')
+                          localStorage.removeItem('sc_chats_locked')
+                          setHasChatPin(false)
+                          setChatPinStep('idle')
+                          setChatPinDraft('')
+                          setToast('Chat lock disabled')
+                        } catch {
+                          setChatPinError('Could not disable')
+                        }
+                      }}
+                    >
+                      Disable chat lock
+                    </button>
+                    <button type="button" className="mt-2 w-full py-3 text-sm font-extrabold text-gray-500" onClick={() => setChatPinStep('idle')}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {chatPinStep === 'forgot' && (
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={() => setChatPinStep('idle')}>
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                    <p className="text-lg font-black text-brand-red">Forgot PIN</p>
+                    <p className="mt-2 text-sm font-semibold leading-relaxed text-gray-500">
+                      Continuing permanently deletes all locked chats from this device and clears your chat lock PIN. This cannot be undone.
+                    </p>
+                    <button
+                      type="button"
+                      className="mt-5 w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white"
+                      onClick={() => {
+                        setForgotPhrase('')
+                        setChatPinStep('forgot_confirm')
+                      }}
+                    >
+                      I understand
+                    </button>
+                    <button type="button" className="mt-2 w-full py-3 text-sm font-extrabold text-gray-500" onClick={() => setChatPinStep('idle')}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {chatPinStep === 'forgot_confirm' && (
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center">
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl">
+                    <p className="text-lg font-black text-ink">Confirm deletion</p>
+                    <p className="mt-2 text-xs font-semibold text-gray-500">
+                      Type <span className="font-black text-ink">delete all my locked chats</span> exactly
+                    </p>
+                    <input
+                      type="text"
+                      value={forgotPhrase}
+                      onChange={(e) => {
+                        setForgotPhrase(e.target.value)
+                        setChatPinError('')
+                      }}
+                      className="mt-3 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm font-semibold outline-none focus:border-brand-purple"
+                      placeholder="delete all my locked chats"
+                      autoFocus
+                    />
+                    {chatPinError ? <p className="mt-2 text-xs font-bold text-brand-red">{chatPinError}</p> : null}
+                    <button
+                      type="button"
+                      className="mt-4 w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white"
+                      onClick={() => {
+                        if (forgotPhrase.trim().toLowerCase() !== 'delete all my locked chats') {
+                          setChatPinError('Phrase does not match')
+                          return
+                        }
+                        // Build list of locked chats for final screen
+                        let locks: Record<string, unknown> = {}
+                        try {
+                          locks = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+                        } catch { /* */ }
+                        const ids = Object.keys(locks).filter((k) => locks[k])
+                        const chats = (typeof window !== 'undefined' && (window as any).__sc_chats_snap) || []
+                        const preview = ids.map((id) => {
+                          const row = (chats as any[]).find(
+                            (c: any) => String(c.contactId) === id || String(c.conversationId) === id,
+                          )
+                          const name = (row?.name || row?.savedName || '').trim()
+                          return { id, name: name || `Chat ${id.slice(-6)}` }
+                        })
+                        setLockedChatPreview(preview)
+                        setChatPinStep('forgot_list')
+                      }}
+                    >
+                      Continue
+                    </button>
+                    <button type="button" className="mt-2 w-full py-3 text-sm font-extrabold text-gray-500" onClick={() => setChatPinStep('idle')}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {chatPinStep === 'forgot_list' && (
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center">
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl">
+                    <p className="text-lg font-black text-ink">You are about to delete the following chats</p>
+                    <ul className="mt-3 max-h-48 space-y-2 overflow-y-auto rounded-2xl bg-gray-50 p-3">
+                      {lockedChatPreview.length === 0 ? (
+                        <li className="text-sm font-semibold text-gray-400">No locked chats found</li>
+                      ) : (
+                        lockedChatPreview.map((c) => (
+                          <li key={c.id} className="truncate text-sm font-extrabold text-ink">
+                            {c.name}
+                          </li>
+                        ))
+                      )}
+                    </ul>
+                    <button
+                      type="button"
+                      disabled={deletingLocks}
+                      className="mt-4 w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white disabled:opacity-50"
+                      onClick={async () => {
+                        setDeletingLocks(true)
+                        const ids = lockedChatPreview.map((c) => c.id)
+                        const n = ids.length
+                        try {
+                          window.dispatchEvent(new CustomEvent('sc:delete-locked-chats', { detail: { ids } }))
+                          // Best-effort server delete per conversation if API exists
+                          for (const id of ids) {
+                            try {
+                              await (api as any).deleteConversation(id)
+                            } catch { /* */ }
+                          }
+                          localStorage.removeItem('sc_chat_lock_pin')
+                          localStorage.removeItem('sc_chat_locks')
+                          localStorage.removeItem('sc_chats_locked')
+                          setHasChatPin(false)
+                          setChatPinStep('idle')
+                          setForgotPhrase('')
+                          setLockedChatPreview([])
+                          setToast(`${n} chat${n === 1 ? '' : 's'} deleted successfully`)
+                        } catch {
+                          setToast('Could not finish deleting')
+                        } finally {
+                          setDeletingLocks(false)
+                        }
+                      }}
+                    >
+                      {deletingLocks ? 'Deleting…' : 'Delete'}
+                    </button>
+                    <button
+                      type="button"
+                      className="mt-2 w-full py-3 text-sm font-extrabold text-gray-500"
+                      onClick={() => setChatPinStep('idle')}
+                    >
+                      Exit
+                    </button>
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
 
@@ -1548,8 +1965,11 @@ export function Settings({
             <PrimaryButton
               danger
               onClick={() => {
-                onLogout()
                 setConfirm(null)
+                setLoggingOut(true)
+                window.setTimeout(() => {
+                  try { onLogout() } catch { /* */ }
+                }, 700)
               }}
             >
               Log out
@@ -1633,6 +2053,19 @@ export function Settings({
         )}
       </Sheet>
 
+      {loggingOut && (
+        <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-gradient-to-b from-[#F8F1FF] via-white to-[#EEF2FF]">
+          <div className="flex flex-col items-center gap-4 rounded-3xl bg-transparent px-10 py-8">
+            <div className="flex h-12 items-end gap-1.5" aria-hidden>
+              <span className="h-3 w-3 animate-bounce rounded-full bg-brand-purple [animation-delay:-0.3s]" />
+              <span className="h-3 w-3 animate-bounce rounded-full bg-brand-orange [animation-delay:-0.15s]" />
+              <span className="h-3 w-3 animate-bounce rounded-full bg-brand-blue" />
+            </div>
+            <p className="text-base font-extrabold text-ink">Logging you out…</p>
+            <p className="text-xs font-semibold text-gray-400">Please wait</p>
+          </div>
+        </div>
+      )}
       <Toast msg={toast} clear={() => setToast(null)} />
 
       {cropSrc && (

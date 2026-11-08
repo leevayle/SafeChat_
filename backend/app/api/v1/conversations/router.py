@@ -1,10 +1,12 @@
 """Conversation list and private chat creation."""
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 from typing import Optional
 from app.api.deps import get_current_user
 from app.schemas.messaging import CreatePrivateConversationRequest
 from app.services.messaging_service import MessagingService
 from app.core.exceptions import success_response
+from app.core.database import get_database
 
 router = APIRouter(prefix="/conversations", tags=["Conversations"])
 
@@ -43,3 +45,16 @@ async def get_conversation(
 ):
     conv = await MessagingService.get_conversation(conversation_id, user["id"])
     return success_response("Conversation", conv)
+
+
+@router.delete("/{conversation_id}")
+async def delete_conversation(conversation_id: str, user: dict = Depends(get_current_user)):
+    """Remove membership / hide conversation for current user (best-effort)."""
+    db = get_database()
+    uid = user["id"]
+    await db.conversation_members.update_one(
+        {"conversation_id": conversation_id, "user_id": uid},
+        {"$set": {"hidden": True, "deleted_at": datetime.now(timezone.utc)}},
+        upsert=False,
+    )
+    return success_response("Conversation removed")

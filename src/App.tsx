@@ -89,6 +89,15 @@ function Shell() {
   const [registrationToken, setRegistrationToken] = useState('')
   const [developmentCode, setDevelopmentCode] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('chats')
+  useEffect(() => {
+    const openSec = () => {
+      setOverlay('settings')
+      // Settings reads sessionStorage flag for security page
+      try { sessionStorage.setItem('sc_settings_page', 'security') } catch { /* */ }
+    }
+    window.addEventListener('sc:open-settings-security', openSec)
+    return () => window.removeEventListener('sc:open-settings-security', openSec)
+  }, [])
   const TAB_ORDER: Tab[] = ['chats', 'groups', 'status', 'calls']
   const swipeX = useRef<number | null>(null)
   const swipeY = useRef<number | null>(null)
