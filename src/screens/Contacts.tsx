@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Search, Plus, Pencil, Phone, MessageCircle, X, UserPlus, Trash2, Star , Loader2, Check } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
@@ -25,6 +25,8 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const [phoneCountry, setPhoneCountry] = useState('+254')
   const [searchHits, setSearchHits] = useState<any[]>([])
   const [searching, setSearching] = useState(false)
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const searchGen = useRef(0)
   /** idle | loading | sent | saved */
   const [requestState, setRequestState] = useState<Record<string, 'loading' | 'sent' | 'saved'>>({})
 
@@ -99,10 +101,11 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
     }
   }
 
-  const runSearch = async (value: string) => {
+  const runSearch = (value: string) => {
     setIdentity(value)
     // Phone numbers (+...) - no live search; resolve only on Send
     if (value.trim().startsWith('+')) {
+      if (searchTimer.current) clearTimeout(searchTimer.current)
       setSearchHits([])
       setSearching(false)
       setAddForm((f) => ({ ...f, username: '', phone: value.trim() }))
@@ -112,19 +115,28 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
     setAddMode('username')
     setAddForm((f) => ({ ...f, username: value.replace(/^@/, ''), phone: '' }))
     if (value.trim().length < 2) {
+      if (searchTimer.current) clearTimeout(searchTimer.current)
       setSearchHits([])
       setSearching(false)
       return
     }
+    // Debounce network search so typing stays snappy
+    if (searchTimer.current) clearTimeout(searchTimer.current)
     setSearching(true)
-    try {
-      const { users } = await api.searchUsers(value.trim().replace(/^@/, ''))
-      setSearchHits(users)
-    } catch {
-      setSearchHits([])
-    } finally {
-      setSearching(false)
-    }
+    const q = value.trim().replace(/^@/, '')
+    const gen = ++searchGen.current
+    searchTimer.current = setTimeout(async () => {
+      try {
+        const { users } = await api.searchUsers(q)
+        if (gen !== searchGen.current) return
+        setSearchHits(users)
+      } catch {
+        if (gen !== searchGen.current) return
+        setSearchHits([])
+      } finally {
+        if (gen === searchGen.current) setSearching(false)
+      }
+    }, 280)
   }
 
   const addContact = async (peer?: { id: string; username: string; phone: string; name: string }) => {

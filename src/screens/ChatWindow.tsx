@@ -450,6 +450,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [showSelfGames, setShowSelfGames] = useState(true)
   const [selfGameOpen, setSelfGameOpen] = useState(false)
   const [selfGameId, setSelfGameId] = useState<string | null>(null)
+  const [selfActiveTab, setSelfActiveTab] = useState<'note' | 'checklist' | 'reminder' | 'game' | null>(null)
+  const [selfSwitchWarn, setSelfSwitchWarn] = useState<null | { next: 'note' | 'checklist' | 'reminder' | 'game' }>(null)
   const [selfNoteItems, setSelfNoteItems] = useState<any[]>([])
   const [selfEditor, setSelfEditor] = useState<any | null>(null)
   const [msgAction, setMsgAction] = useState<{ id: string; clientKey?: string } | null>(null)
@@ -1053,6 +1055,50 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   }, [peerId, contactId, settings])
 
   const openedOnce = useRef(false)
+
+  const openSelfTab = (tab: 'note' | 'checklist' | 'reminder' | 'game') => {
+    const busy =
+      (selfEditor && (selfEditor.title || selfEditor.body || (selfEditor.items || []).some((x: any) => x.text))) ||
+      (selfGameOpen && (selfActiveTab === 'game'))
+    // Warn if leaving editor with content or leaving active game
+    if (selfEditor && tab !== (selfEditor.kind === 'checklist' ? 'checklist' : selfEditor.kind === 'reminder' ? 'reminder' : 'note')) {
+      if (selfEditor.title || selfEditor.body || (selfEditor.items || []).some((x: any) => (x.text || '').trim())) {
+        setSelfSwitchWarn({ next: tab })
+        return
+      }
+    }
+    if (selfGameOpen && tab !== 'game') {
+      setSelfSwitchWarn({ next: tab })
+      return
+    }
+    applySelfTab(tab)
+  }
+  const applySelfTab = (tab: 'note' | 'checklist' | 'reminder' | 'game') => {
+    setSelfSwitchWarn(null)
+    setSelfActiveTab(tab)
+    if (tab === 'game') {
+      setSelfEditor(null)
+      setSelfGameId(null)
+      setSelfGameOpen(true)
+      return
+    }
+    setSelfGameOpen(false)
+    setSelfGameId(null)
+    const now = new Date().toISOString()
+    const kind = tab
+    setSelfEditor({
+      id: `${kind}_${Date.now()}`,
+      kind,
+      title: '',
+      body: '',
+      items: kind === 'checklist' ? [{ id: `i_${Date.now()}`, text: '', done: false }] : undefined,
+      remindAt: kind === 'reminder' ? now : undefined,
+      createdAt: now,
+      updatedAt: now,
+      _isNew: true,
+    })
+  }
+
   const pinToBottom = (smooth = false) => {
     const el = msgsScrollRef.current
     if (el) {
@@ -1066,14 +1112,13 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     end.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' })
   }
   useEffect(() => {
-    const smooth = openedOnce.current
-    // Double rAF + microtask so layout finishes before pin (no gap under last bubble)
+    // Always land on last message instantly (no smooth scroll when opening / updating list)
     requestAnimationFrame(() => {
-      pinToBottom(smooth)
-      requestAnimationFrame(() => pinToBottom(smooth))
+      pinToBottom(false)
+      requestAnimationFrame(() => pinToBottom(false))
     })
     openedOnce.current = true
-  }, [msgs.length, pendingImage, liveDraft, typing, loading])
+  }, [msgs.length, pendingImage, liveDraft, typing, loading, selfNoteItems.length])
   // Always reveal typing / live bubble at the bottom
   useEffect(() => {
     if (!typing && !(liveDraft && liveDraft.length)) return
@@ -1623,6 +1668,19 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             setLockPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))
             setLockPinError('')
           }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter') return
+            try {
+              const pin = localStorage.getItem('sc_chat_lock_pin') || ''
+              if (pin && lockPinDraft === pin) {
+                setUnlockedThisSession(true)
+                setLockPinDraft('')
+                setLockPinError('')
+              } else setLockPinError('Wrong PIN')
+            } catch {
+              setLockPinError('Wrong PIN')
+            }
+          }}
           className="mt-5 w-full max-w-xs rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
           placeholder="••••"
           autoFocus
@@ -1769,6 +1827,15 @@ return (
         >
           <Video size={22} />
         </button>
+        <button
+          type="button"
+          disabled
+          aria-label="Play tic tac toe"
+          title="Coming soon"
+          className="flex h-10 w-10 items-center justify-center rounded-full text-gray-300"
+        >
+          <span className="text-lg font-black leading-none">#</span>
+        </button>
         <div className="relative">
           <button
             type="button"
@@ -1806,6 +1873,13 @@ return (
                 >
                   {chatMuted ? <Bell size={18} className="text-brand-purple" /> : <BellOff size={18} className="text-brand-purple" />}
                   {chatMuted ? 'Unmute notifications' : 'Mute notifications'}
+                </button>
+                <button
+                  type="button"
+                  disabled
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold text-gray-300"
+                >
+                  Play tic tac toe
                 </button>
                 <button
                   type="button"
@@ -1865,19 +1939,12 @@ return (
           {showSelfNotes && (
             <button
               type="button"
-              onClick={() => {
-                const now = new Date().toISOString()
-                setSelfEditor({
-                  id: `note_${Date.now()}`,
-                  kind: 'note',
-                  title: '',
-                  body: '',
-                  createdAt: now,
-                  updatedAt: now,
-                  _isNew: true,
-                })
-              }}
-              className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
+              onClick={() => openSelfTab('note')}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-extrabold ${
+                selfActiveTab === 'note' || (selfEditor && selfEditor.kind === 'note')
+                  ? 'bg-brand-purple text-white'
+                  : 'bg-brand-purple/10 text-brand-purple'
+              }`}
             >
               Note
             </button>
@@ -1885,20 +1952,12 @@ return (
           {showSelfChecklists && (
             <button
               type="button"
-              onClick={() => {
-                const now = new Date().toISOString()
-                setSelfEditor({
-                  id: `cl_${Date.now()}`,
-                  kind: 'checklist',
-                  title: '',
-                  body: '',
-                  items: [{ id: `i_${Date.now()}`, text: '', done: false }],
-                  createdAt: now,
-                  updatedAt: now,
-                  _isNew: true,
-                })
-              }}
-              className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
+              onClick={() => openSelfTab('checklist')}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-extrabold ${
+                selfActiveTab === 'checklist' || (selfEditor && selfEditor.kind === 'checklist')
+                  ? 'bg-brand-purple text-white'
+                  : 'bg-brand-purple/10 text-brand-purple'
+              }`}
             >
               Checklist
             </button>
@@ -1906,20 +1965,12 @@ return (
           {showSelfReminders && (
             <button
               type="button"
-              onClick={() => {
-                const now = new Date().toISOString()
-                setSelfEditor({
-                  id: `rm_${Date.now()}`,
-                  kind: 'reminder',
-                  title: '',
-                  body: '',
-                  remindAt: now,
-                  createdAt: now,
-                  updatedAt: now,
-                  _isNew: true,
-                })
-              }}
-              className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
+              onClick={() => openSelfTab('reminder')}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-extrabold ${
+                selfActiveTab === 'reminder' || (selfEditor && selfEditor.kind === 'reminder')
+                  ? 'bg-brand-purple text-white'
+                  : 'bg-brand-purple/10 text-brand-purple'
+              }`}
             >
               Reminder
             </button>
@@ -1927,11 +1978,12 @@ return (
           {showSelfGames && (
             <button
               type="button"
-              onClick={() => {
-                setSelfGameId(null)
-                setSelfGameOpen(true)
-              }}
-              className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
+              onClick={() => openSelfTab('game')}
+              className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-extrabold ${
+                selfActiveTab === 'game' || selfGameOpen
+                  ? 'bg-brand-purple text-white'
+                  : 'bg-brand-purple/10 text-brand-purple'
+              }`}
             >
               Game
             </button>
@@ -1939,6 +1991,124 @@ return (
         </div>
       )}
 
+      {selfGameOpen ? (
+        <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
+          <TicTacToe
+            initialGameId={selfGameId}
+            onClose={() => {
+              setSelfGameOpen(false)
+              setSelfGameId(null)
+              setSelfActiveTab(null)
+            }}
+          />
+        </div>
+      ) : selfEditor ? (
+        <div className="min-h-0 flex-1 flex flex-col overflow-hidden bg-white">
+          <header className="flex shrink-0 items-center gap-2 border-b border-black/5 px-3 py-2">
+            <button
+              type="button"
+              onClick={() => { setSelfEditor(null); setSelfActiveTab(null) }}
+              className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-black/5"
+            >
+              <ArrowLeft size={22} />
+            </button>
+            <p className="flex-1 text-base font-black text-ink">
+              {selfEditor.kind === 'checklist' ? 'Checklist' : selfEditor.kind === 'reminder' ? 'Reminder' : 'Note'}
+            </p>
+            <button
+              type="button"
+              className="rounded-full bg-brand-purple px-4 py-2 text-sm font-extrabold text-white"
+              onClick={() => {
+                if (!me?.id) return
+                const now = new Date().toISOString()
+                const saved = { ...selfEditor, updatedAt: now, _isNew: undefined }
+                try {
+                  const key = `sc_notes_${me.id}`
+                  const prev = JSON.parse(localStorage.getItem(key) || '[]') as any[]
+                  const idx = prev.findIndex((x) => x.id === saved.id)
+                  let next: any[]
+                  if (idx >= 0) next = prev.map((x, i) => (i === idx ? saved : x))
+                  else next = [saved, ...prev]
+                  next.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0))
+                  localStorage.setItem(key, JSON.stringify(next))
+                  setSelfNoteItems(next)
+                  window.dispatchEvent(new CustomEvent('sc_notes_preview'))
+                } catch { /* */ }
+                setSelfEditor(null)
+                showToast?.('Saved')
+              }}
+            >
+              Save
+            </button>
+          </header>
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+            <input
+              value={selfEditor.title || ''}
+              onChange={(e) => setSelfEditor({ ...selfEditor, title: e.target.value })}
+              placeholder="Title"
+              className="w-full border-0 bg-transparent text-xl font-black outline-none placeholder:text-gray-300"
+              autoFocus
+            />
+            {selfEditor.kind === 'note' && (
+              <textarea
+                value={selfEditor.body || ''}
+                onChange={(e) => setSelfEditor({ ...selfEditor, body: e.target.value })}
+                placeholder="Write something…"
+                rows={12}
+                className="w-full resize-none border-0 bg-transparent text-[15px] font-semibold leading-relaxed outline-none placeholder:text-gray-300"
+              />
+            )}
+            {selfEditor.kind === 'reminder' && (
+              <textarea
+                value={selfEditor.body || ''}
+                onChange={(e) => setSelfEditor({ ...selfEditor, body: e.target.value })}
+                placeholder="When or details…"
+                rows={4}
+                className="w-full resize-none border-0 bg-transparent text-[15px] font-semibold outline-none placeholder:text-gray-300"
+              />
+            )}
+            {selfEditor.kind === 'checklist' && (
+              <div className="space-y-2">
+                {(selfEditor.items || []).map((it: any, idx: number) => (
+                  <div key={it.id || idx} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={!!it.done}
+                      onChange={() => {
+                        const items = [...(selfEditor.items || [])]
+                        items[idx] = { ...items[idx], done: !items[idx].done }
+                        setSelfEditor({ ...selfEditor, items })
+                      }}
+                    />
+                    <input
+                      value={it.text || ''}
+                      onChange={(e) => {
+                        const items = [...(selfEditor.items || [])]
+                        items[idx] = { ...items[idx], text: e.target.value }
+                        setSelfEditor({ ...selfEditor, items })
+                      }}
+                      className="flex-1 border-0 bg-transparent text-sm font-semibold outline-none"
+                      placeholder="Item"
+                    />
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="text-sm font-extrabold text-brand-purple"
+                  onClick={() =>
+                    setSelfEditor({
+                      ...selfEditor,
+                      items: [...(selfEditor.items || []), { id: `i_${Date.now()}`, text: '', done: false }],
+                    })
+                  }
+                >
+                  Add item
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
       <div
         ref={msgsScrollRef}
         className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4 pb-6"
@@ -1948,53 +2118,84 @@ return (
           Today
         </p>
         {loading && <p className="py-6 text-center text-sm font-bold text-gray-400">Loading…</p>}
-        {!loading && msgs.length === 0 && (
+        {!loading && msgs.length === 0 && !selfNoteItems.length && (
           <EmptyState
-            title={`Say hi to ${c.name.split(' ')[0]}`}
-            subtitle="This inbox is empty. Send a message when you're ready, it stays between you two."
+            title={isSelfChat ? 'Your personal space' : `Say hi to ${c.name.split(' ')[0]}`}
+            subtitle={
+              isSelfChat
+                ? 'Notes, checklists, reminders, and messages to yourself live here.'
+                : "This inbox is empty. Send a message when you're ready, it stays between you two."
+            }
             className="py-8"
           />
         )}
 
-        {isSelfChat &&
-          [...selfNoteItems]
-            .filter((n) => {
-              if (n.kind === 'note' && !showSelfNotes) return false
-              if (n.kind === 'checklist' && !showSelfChecklists) return false
-              if (n.kind === 'reminder' && !showSelfReminders) return false
-              return true
-            })
-            .sort((a, b) => (Date.parse(a.updatedAt) || 0) - (Date.parse(b.updatedAt) || 0))
-            .map((n) => (
-              <button
-                type="button"
-                key={n.id}
-                onClick={() => setSelfEditor({ ...n, _isNew: false })}
-                className="mx-auto block w-full max-w-[85%] rounded-2xl bg-white px-4 py-3 text-left shadow-sm ring-1 ring-black/5"
-              >
-                <p className="text-[10px] font-black uppercase tracking-wide text-brand-purple">
-                  {n.kind === 'checklist' ? 'Checklist' : n.kind === 'reminder' ? 'Reminder' : 'Note'}
-                </p>
-                <p className="mt-0.5 font-extrabold text-ink">{n.title || 'Untitled'}</p>
-                {n.kind === 'checklist' ? (
-                  <p className="mt-1 text-xs font-semibold text-gray-400">
-                    {(n.items || []).filter((x: any) => x.done).length}/{(n.items || []).length} done
-                  </p>
-                ) : (
-                  <p className="mt-1 line-clamp-3 text-sm font-semibold text-gray-500">{n.body || ''}</p>
-                )}
-                <p className="mt-1 text-[10px] font-bold text-gray-300">
-                  {n.updatedAt ? new Date(n.updatedAt).toLocaleString() : ''}
-                </p>
-              </button>
-            ))}
         <AnimatePresence initial={false}>
-          {(showSelfMsgs || !isSelfChat) && msgs.map((m) => {
-            const mine = m.mine ?? m.from === me?.id
-            const key = m.clientKey || m.id
-            const animateIn = !animatedKeys.current.has(key)
-            if (animateIn) animatedKeys.current.add(key)
-            return (
+          {(() => {
+            const feed: { type: 'msg' | 'note'; t: number; id: string; data: any }[] = []
+            if (showSelfMsgs || !isSelfChat) {
+              for (const m of msgs) {
+                feed.push({
+                  type: 'msg',
+                  t: Date.parse(m.time || (m as any).iso || '') || 0,
+                  id: String(m.clientKey || m.id),
+                  data: m,
+                })
+              }
+            }
+            if (isSelfChat) {
+              for (const n of selfNoteItems) {
+                if (n.kind === 'note' && !showSelfNotes) continue
+                if (n.kind === 'checklist' && !showSelfChecklists) continue
+                if (n.kind === 'reminder' && !showSelfReminders) continue
+                feed.push({
+                  type: 'note',
+                  t: Date.parse(n.updatedAt || n.createdAt || '') || 0,
+                  id: String(n.id),
+                  data: n,
+                })
+              }
+            }
+            feed.sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : 1))
+            return feed.map((item) => {
+              if (item.type === 'note') {
+                const n = item.data
+                return (
+                  <button
+                    type="button"
+                    key={`note-${n.id}`}
+                    onClick={() => {
+                      setSelfActiveTab(
+                        n.kind === 'checklist' ? 'checklist' : n.kind === 'reminder' ? 'reminder' : 'note',
+                      )
+                      setSelfGameOpen(false)
+                      setSelfEditor({ ...n, _isNew: false })
+                    }}
+                    className="mx-auto block w-full max-w-[85%] rounded-2xl bg-white px-4 py-3 text-left shadow-sm ring-1 ring-black/5"
+                  >
+                    <p className="text-[10px] font-black uppercase tracking-wide text-brand-purple">
+                      {n.kind === 'checklist' ? 'Checklist' : n.kind === 'reminder' ? 'Reminder' : 'Note'}
+                    </p>
+                    <p className="mt-0.5 font-extrabold text-ink">{n.title || 'Untitled'}</p>
+                    {n.kind === 'checklist' ? (
+                      <p className="mt-1 text-xs font-semibold text-gray-400">
+                        {(n.items || []).filter((x: any) => x.done).length}/{(n.items || []).length} done
+                      </p>
+                    ) : (
+                      <p className="mt-1 line-clamp-3 text-sm font-semibold text-gray-500">{n.body || ''}</p>
+                    )}
+                    <p className="mt-1 text-[10px] font-bold text-gray-300">
+                      {n.updatedAt ? new Date(n.updatedAt).toLocaleString() : ''}
+                    </p>
+                  </button>
+                )
+              }
+              const m = item.data
+              const mine = m.mine ?? m.from === me?.id
+              const key = m.clientKey || m.id
+              const animateIn = !animatedKeys.current.has(key)
+              if (animateIn) animatedKeys.current.add(key)
+              return (
               <div
                 key={key}
                 ref={(el) => {
@@ -2042,7 +2243,8 @@ return (
                 />
               </div>
             )
-          })}
+          })
+          })()}
           {/* Classic three-dot typing bubble (default for everyone; Pro always) */}
           {typing && !(liveDraft != null && liveDraft !== '') && (
             <motion.div
@@ -2084,6 +2286,7 @@ return (
         </AnimatePresence>
         <div ref={end} className="h-2 shrink-0 pb-1" />
       </div>
+      )}
 
       {pendingImage && (
         <div className="relative border-t border-gray-100 bg-white px-4 py-2">
@@ -2306,6 +2509,7 @@ return (
         </div>
       )}
 
+      {(!isSelfChat || showSelfMsgs) && !selfGameOpen && !selfEditor && (
       <div className="shrink-0 safe-pb bg-transparent">
         <div className="bg-transparent pt-1">
         {(replyTo || statusReply) && (
@@ -2487,6 +2691,33 @@ return (
         )}
         </div>
       </div>
+      )}
+
+      {selfSwitchWarn && (
+        <div className="absolute inset-0 z-[80] flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={() => setSelfSwitchWarn(null)}>
+          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <p className="text-lg font-black text-ink">Leave this section?</p>
+            <p className="mt-2 text-sm font-semibold text-gray-500">
+              You have something open. Move to {selfSwitchWarn.next === 'game' ? 'Game' : selfSwitchWarn.next} and discard unsaved work?
+            </p>
+            <button
+              type="button"
+              className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
+              onClick={() => {
+                const next = selfSwitchWarn.next
+                setSelfEditor(null)
+                setSelfGameOpen(false)
+                applySelfTab(next)
+              }}
+            >
+              Move
+            </button>
+            <button type="button" className="mt-2 w-full py-3 text-sm font-extrabold text-gray-500" onClick={() => setSelfSwitchWarn(null)}>
+              Stay
+            </button>
+          </div>
+        </div>
+      )}
 
       {lightboxUrl && (
         <div
@@ -2556,6 +2787,33 @@ return (
                 setLockPinDraft(e.target.value.replace(/\D/g, '').slice(0, 8))
                 setLockPinError('')
               }}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return
+                try {
+                  const pin = localStorage.getItem('sc_chat_lock_pin') || ''
+                  if (!pin || lockPinDraft !== pin) {
+                    setLockPinError('Wrong PIN')
+                    return
+                  }
+                  const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+                  if (chatLocked) {
+                    delete map[contactId]
+                    setChatLocked(false)
+                    setUnlockedThisSession(true)
+                    showToast?.('Chat unlocked')
+                  } else {
+                    map[contactId] = true
+                    setChatLocked(true)
+                    setUnlockedThisSession(false)
+                    showToast?.('Chat locked')
+                  }
+                  localStorage.setItem('sc_chat_locks', JSON.stringify(map))
+                  setLockPrompt(false)
+                  setLockPinDraft('')
+                } catch {
+                  setLockPinError('Could not update lock')
+                }
+              }}
               className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
               placeholder="••••"
             />
@@ -2600,130 +2858,6 @@ return (
       )}
 
       
-      {selfGameOpen && (
-        <div className="absolute inset-0 z-[72] flex flex-col bg-white">
-          <TicTacToe
-            initialGameId={selfGameId}
-            onClose={() => {
-              setSelfGameOpen(false)
-              setSelfGameId(null)
-            }}
-          />
-        </div>
-      )}
-
-      {selfEditor && (
-        <div className="absolute inset-0 z-[70] flex flex-col bg-white">
-          <header className="flex items-center gap-2 border-b border-black/5 px-3 pb-3 pt-[max(1rem,env(safe-area-inset-top))]">
-            <button
-              type="button"
-              onClick={() => setSelfEditor(null)}
-              className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-black/5"
-            >
-              <ArrowLeft size={22} />
-            </button>
-            <p className="flex-1 text-base font-black text-ink">
-              {selfEditor.kind === 'checklist' ? 'Checklist' : selfEditor.kind === 'reminder' ? 'Reminder' : 'Note'}
-            </p>
-            <button
-              type="button"
-              className="rounded-full bg-brand-purple px-4 py-2 text-sm font-extrabold text-white"
-              onClick={() => {
-                if (!me?.id) return
-                const now = new Date().toISOString()
-                const saved = { ...selfEditor, updatedAt: now, _isNew: undefined }
-                try {
-                  const key = `sc_notes_${me.id}`
-                  const prev = JSON.parse(localStorage.getItem(key) || '[]') as any[]
-                  const idx = prev.findIndex((x) => x.id === saved.id)
-                  let next: any[]
-                  if (idx >= 0) {
-                    next = prev.map((x, i) => (i === idx ? saved : x))
-                  } else {
-                    next = [saved, ...prev]
-                  }
-                  // newest edited first for list storage; timeline sorts by updatedAt
-                  next.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0))
-                  localStorage.setItem(key, JSON.stringify(next))
-                  setSelfNoteItems(next)
-                  window.dispatchEvent(new CustomEvent('sc_notes_preview'))
-                } catch { /* */ }
-                setSelfEditor(null)
-                showToast?.('Saved')
-              }}
-            >
-              Save
-            </button>
-          </header>
-          <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-            <input
-              value={selfEditor.title || ''}
-              onChange={(e) => setSelfEditor({ ...selfEditor, title: e.target.value })}
-              placeholder="Title"
-              className="w-full border-0 bg-transparent text-xl font-black outline-none placeholder:text-gray-300"
-              autoFocus
-            />
-            {selfEditor.kind === 'note' && (
-              <textarea
-                value={selfEditor.body || ''}
-                onChange={(e) => setSelfEditor({ ...selfEditor, body: e.target.value })}
-                placeholder="Write something…"
-                rows={12}
-                className="w-full resize-none border-0 bg-transparent text-[15px] font-semibold leading-relaxed outline-none placeholder:text-gray-300"
-              />
-            )}
-            {selfEditor.kind === 'reminder' && (
-              <textarea
-                value={selfEditor.body || ''}
-                onChange={(e) => setSelfEditor({ ...selfEditor, body: e.target.value })}
-                placeholder="When or details…"
-                rows={4}
-                className="w-full resize-none border-0 bg-transparent text-[15px] font-semibold outline-none placeholder:text-gray-300"
-              />
-            )}
-            {selfEditor.kind === 'checklist' && (
-              <div className="space-y-2">
-                {(selfEditor.items || []).map((it: any, idx: number) => (
-                  <div key={it.id || idx} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={!!it.done}
-                      onChange={() => {
-                        const items = [...(selfEditor.items || [])]
-                        items[idx] = { ...items[idx], done: !items[idx].done }
-                        setSelfEditor({ ...selfEditor, items })
-                      }}
-                    />
-                    <input
-                      value={it.text || ''}
-                      onChange={(e) => {
-                        const items = [...(selfEditor.items || [])]
-                        items[idx] = { ...items[idx], text: e.target.value }
-                        setSelfEditor({ ...selfEditor, items })
-                      }}
-                      className="flex-1 border-0 bg-transparent text-sm font-semibold outline-none"
-                      placeholder="Item"
-                    />
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  className="text-sm font-extrabold text-brand-purple"
-                  onClick={() =>
-                    setSelfEditor({
-                      ...selfEditor,
-                      items: [...(selfEditor.items || []), { id: `i_${Date.now()}`, text: '', done: false }],
-                    })
-                  }
-                >
-                  Add item
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {blockOpen && (
         <div className="absolute inset-0 z-[55] flex flex-col justify-end bg-black/40" onClick={() => setBlockOpen(false)}>
           <div className="rounded-t-3xl bg-white px-5 pb-8 pt-4" onClick={(e) => e.stopPropagation()}>

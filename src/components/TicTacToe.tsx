@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Users, Bot, X } from 'lucide-react'
+import { ArrowLeft, Users, Bot, Sparkles } from 'lucide-react'
 import { api } from '../api'
 import { useStore } from '../store'
 
@@ -33,18 +33,15 @@ function emptyCells(board: string[]) {
   return board.map((v, i) => (v ? -1 : i)).filter((i) => i >= 0)
 }
 
-/** Simple AI: higher difficulty = better play */
 function aiMove(board: string[], ai: string, human: string, difficulty: number): number {
   const free = emptyCells(board)
   if (!free.length) return -1
   if (difficulty >= 2) {
-    // win if possible
     for (const i of free) {
       const t = [...board]
       t[i] = ai
       if (winnerOf(t) === ai) return i
     }
-    // block
     for (const i of free) {
       const t = [...board]
       t[i] = human
@@ -72,6 +69,8 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
   const [gameId, setGameId] = useState<string | null>(initialGameId || null)
   const [live, setLive] = useState<any>(null)
   const [busy, setBusy] = useState(false)
+  const [selectedFriend, setSelectedFriend] = useState<{ id: string; name: string } | null>(null)
+  const [inviteName, setInviteName] = useState('')
 
   const matchOver = scores.me >= 2 || scores.opp >= 2
 
@@ -90,30 +89,27 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
     setMode('solo')
   }
 
-  const applySoloResult = useCallback(
-    (w: string | null, nextBoard: string[]) => {
-      if (!w) return
-      if (w === 'draw') {
-        setSetMsg('Draw — play again')
+  const applySoloResult = useCallback((w: string | null) => {
+    if (!w) return
+    if (w === 'draw') {
+      setSetMsg('Draw — next set')
+      setStatus('set_over')
+      return
+    }
+    const iWon = w === 'X'
+    setScores((s) => {
+      const next = { me: s.me + (iWon ? 1 : 0), opp: s.opp + (iWon ? 0 : 1) }
+      if (next.me >= 2 || next.opp >= 2) {
+        setStatus('match_over')
+        setSetMsg(next.me >= 2 ? 'You won the match!' : 'AI won the match')
+      } else {
         setStatus('set_over')
-        return
+        setSetMsg(iWon ? 'You took the set' : 'AI took the set')
+        setSetNum((n) => n + 1)
       }
-      const iWon = w === 'X'
-      setScores((s) => {
-        const next = { me: s.me + (iWon ? 1 : 0), opp: s.opp + (iWon ? 0 : 1) }
-        if (next.me >= 2 || next.opp >= 2) {
-          setStatus('match_over')
-          setSetMsg(next.me >= 2 ? 'You won the match!' : 'AI won the match')
-        } else {
-          setStatus('set_over')
-          setSetMsg(iWon ? 'You took the set' : 'AI took the set')
-          setSetNum((n) => n + 1)
-        }
-        return next
-      })
-    },
-    [],
-  )
+      return next
+    })
+  }, [])
 
   const playSolo = (cell: number) => {
     if (mode !== 'solo' || status !== 'play' || soloTurn !== 'X' || board[cell]) return
@@ -122,7 +118,7 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
     setBoard(next)
     const w = winnerOf(next)
     if (w) {
-      applySoloResult(w, next)
+      applySoloResult(w)
       return
     }
     setSoloTurn('O')
@@ -133,17 +129,19 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
         const b = [...cur]
         b[ai] = 'O'
         const ww = winnerOf(b)
-        if (ww) applySoloResult(ww, b)
+        if (ww) applySoloResult(ww)
         else setSoloTurn('X')
         return b
       })
     }, 280)
   }
 
-  const inviteFriend = async (peerId: string) => {
+  const inviteFriend = async () => {
+    if (!selectedFriend) return
     setBusy(true)
+    setInviteName(selectedFriend.name)
     try {
-      const g = await api.tictactoeInvite(peerId)
+      const g = await api.tictactoeInvite(selectedFriend.id)
       setGameId(g.id)
       setLive(g)
       setMode('waiting')
@@ -164,9 +162,7 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
       const meId = me?.id
       setScores({
         me: Number(g.scores?.[meId || ''] || 0),
-        opp: Number(
-          Object.entries(g.scores || {}).find(([k]) => k !== meId)?.[1] || 0,
-        ),
+        opp: Number(Object.entries(g.scores || {}).find(([k]) => k !== meId)?.[1] || 0),
       })
       setSetNum(g.set || 1)
       if (g.status === 'finished' || g.status === 'left') setStatus('match_over')
@@ -254,8 +250,8 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
   )
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col bg-[#f7f5ff]">
-      <div className="flex items-center gap-2 border-b border-black/5 bg-white px-3 py-2">
+    <div className="flex h-full min-h-0 flex-1 flex-col bg-gradient-to-b from-[#f3eeff] via-white to-[#eef4ff]">
+      <div className="flex items-center gap-2 border-b border-black/5 bg-white/80 px-3 py-2 backdrop-blur">
         <button
           type="button"
           onClick={() => {
@@ -267,26 +263,36 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
         >
           <ArrowLeft size={20} />
         </button>
-        <p className="flex-1 text-sm font-black text-ink">Tic Tac Toe</p>
-        <button type="button" onClick={() => void leave()} className="rounded-full px-3 py-1.5 text-xs font-extrabold text-brand-red">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-black text-ink">Tic Tac Toe</p>
+          <p className="text-[11px] font-semibold text-gray-400">Best of 3</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void leave()}
+          className="rounded-full bg-brand-red/10 px-3 py-1.5 text-xs font-extrabold text-brand-red"
+        >
           Leave
         </button>
       </div>
 
       {mode === 'menu' && (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6">
-          <p className="mb-2 text-center text-sm font-semibold text-gray-500">Best of 3 sets</p>
+          <div className="mb-2 flex h-16 w-16 items-center justify-center rounded-3xl bg-gradient-to-br from-brand-purple to-[#5984F2] text-white shadow-lg shadow-brand-purple/25">
+            <Sparkles size={28} />
+          </div>
+          <p className="text-center text-sm font-semibold text-gray-500">Pick a mode to start</p>
           <button
             type="button"
             onClick={() => setMode('solo-diff')}
-            className="flex w-full max-w-xs items-center justify-center gap-2 rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
+            className="flex w-full max-w-xs items-center justify-center gap-2 rounded-2xl bg-brand-purple py-3.5 text-sm font-extrabold text-white shadow-md shadow-brand-purple/20"
           >
             <Bot size={18} /> Play alone
           </button>
           <button
             type="button"
-            onClick={() => setMode('pick-friend')}
-            className="flex w-full max-w-xs items-center justify-center gap-2 rounded-full bg-brand-purple/10 py-3.5 text-sm font-extrabold text-brand-purple"
+            onClick={() => { setSelectedFriend(null); setMode('pick-friend') }}
+            className="flex w-full max-w-xs items-center justify-center gap-2 rounded-2xl bg-white py-3.5 text-sm font-extrabold text-brand-purple shadow-sm ring-1 ring-brand-purple/20"
           >
             <Users size={18} /> Play with a friend
           </button>
@@ -294,83 +300,150 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
       )}
 
       {mode === 'solo-diff' && (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6">
-          <p className="mb-2 text-sm font-extrabold text-ink">Difficulty</p>
-          {[1, 2, 3].map((d) => (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2.5 px-6">
+          <p className="mb-1 text-sm font-extrabold text-ink">Difficulty</p>
+          {[
+            { d: 1, label: 'Easy', hint: 'Casual' },
+            { d: 2, label: 'Medium', hint: 'Blocks & attacks' },
+            { d: 3, label: 'Hard', hint: 'Strong play' },
+          ].map((row) => (
             <button
-              key={d}
+              key={row.d}
               type="button"
-              onClick={() => startSolo(d)}
-              className="w-full max-w-xs rounded-full bg-white py-3 text-sm font-extrabold text-ink shadow-sm ring-1 ring-black/5"
+              onClick={() => startSolo(row.d)}
+              className="flex w-full max-w-xs items-center justify-between rounded-2xl bg-white px-4 py-3.5 text-left shadow-sm ring-1 ring-black/5"
             >
-              Level {d}
+              <span className="text-sm font-extrabold text-ink">{row.label}</span>
+              <span className="text-xs font-bold text-gray-400">{row.hint}</span>
             </button>
           ))}
         </div>
       )}
 
       {mode === 'pick-friend' && (
-        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-          <p className="mb-2 px-2 text-xs font-bold text-gray-400">Choose a contact</p>
-          {friends.length === 0 && (
-            <p className="px-2 py-8 text-center text-sm font-semibold text-gray-400">No contacts yet</p>
-          )}
-          {friends.map((c: any) => (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <p className="shrink-0 px-4 pb-1 pt-3 text-xs font-bold text-gray-400">Choose one contact</p>
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+            {friends.length === 0 && (
+              <p className="px-2 py-8 text-center text-sm font-semibold text-gray-400">No contacts yet</p>
+            )}
+            {friends.map((c: any) => {
+              const id = String(c.peerId || c.id)
+              const name = c.savedName || c.name || 'Friend'
+              const selected = selectedFriend?.id === id
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setSelectedFriend({ id, name })}
+                  className={`mb-1.5 flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left transition ${
+                    selected
+                      ? 'bg-brand-purple/15 ring-2 ring-brand-purple/40'
+                      : 'bg-white/90 ring-1 ring-black/5'
+                  }`}
+                >
+                  <span
+                    className={`flex h-10 w-10 items-center justify-center rounded-full text-sm font-black ${
+                      selected
+                        ? 'bg-brand-purple text-white'
+                        : 'bg-gradient-to-br from-brand-purple/20 to-[#5984F2]/20 text-brand-purple'
+                    }`}
+                  >
+                    {name.slice(0, 1)}
+                  </span>
+                  <span className="min-w-0 flex-1 font-extrabold text-ink">{name}</span>
+                  {selected ? (
+                    <span className="text-[11px] font-black text-brand-purple">Selected</span>
+                  ) : null}
+                </button>
+              )
+            })}
+          </div>
+          <div className="shrink-0 border-t border-black/5 bg-white/95 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
             <button
-              key={c.id}
               type="button"
-              disabled={busy}
-              onClick={() => void inviteFriend(c.peerId || c.id)}
-              className="mb-1 flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left hover:bg-white"
+              disabled={!selectedFriend || busy}
+              onClick={() => void inviteFriend()}
+              className="w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white disabled:opacity-50"
             >
-              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-purple/15 text-sm font-black text-brand-purple">
-                {(c.savedName || c.name || '?').slice(0, 1)}
-              </span>
-              <span className="font-extrabold text-ink">{c.savedName || c.name}</span>
+              {busy && selectedFriend
+                ? `Inviting ${selectedFriend.name}…`
+                : selectedFriend
+                  ? `Invite ${selectedFriend.name}`
+                  : 'Select a friend'}
             </button>
-          ))}
+          </div>
         </div>
       )}
 
       {mode === 'waiting' && (
         <div className="flex flex-1 flex-col items-center justify-center px-6">
-          <p className="text-sm font-extrabold text-ink">Waiting for friend…</p>
+          <div className="mb-3 flex gap-1.5">
+            <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C] [animation-delay:-0.3s]" />
+            <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2] [animation-delay:-0.15s]" />
+            <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" />
+          </div>
+          <p className="text-sm font-extrabold text-ink">
+            Waiting for {inviteName || selectedFriend?.name || 'friend'}…
+          </p>
           <p className="mt-1 text-xs font-semibold text-gray-400">They will get a notification</p>
         </div>
       )}
 
       {(mode === 'solo' || mode === 'live') && (
-        <div className="flex min-h-0 flex-1 flex-col items-center px-4 py-4">
-          <div className="mb-3 flex w-full max-w-sm items-center justify-between text-xs font-extrabold">
-            <span className="text-brand-purple">You {scores.me}</span>
-            <span className="text-gray-400">Set {setNum}/3</span>
-            <span className="text-ink">{mode === 'solo' ? 'AI' : 'Friend'} {scores.opp}</span>
-          </div>
-          <div className="grid w-full max-w-sm grid-cols-3 gap-2">
+        <div className="flex min-h-0 flex-1 flex-col items-center px-4 py-5">
+          <div className="grid w-full max-w-sm grid-cols-3 gap-2.5">
             {board.map((cell, i) => (
               <button
                 key={i}
                 type="button"
                 disabled={busy || status !== 'play' || !!cell}
                 onClick={() => (mode === 'solo' ? playSolo(i) : void playLive(i))}
-                className="flex aspect-square items-center justify-center rounded-2xl bg-white text-3xl font-black text-ink shadow-sm ring-1 ring-black/5 disabled:opacity-80"
+                className="flex aspect-square items-center justify-center rounded-2xl bg-white text-3xl font-black shadow-sm ring-1 ring-black/5 transition active:scale-95 disabled:opacity-90"
               >
-                {cell === 'X' ? <span className="text-brand-purple">X</span> : cell === 'O' ? <span className="text-[#E3404C]">O</span> : ''}
+                {cell === 'X' ? (
+                  <span className="text-brand-purple">X</span>
+                ) : cell === 'O' ? (
+                  <span className="text-[#E3404C]">O</span>
+                ) : (
+                  <span className="text-transparent">·</span>
+                )}
               </button>
             ))}
           </div>
-          {mode === 'live' && live?.turn && status === 'play' && (
-            <p className="mt-3 text-xs font-bold text-gray-400">
-              {live.turn === me?.id ? 'Your turn' : "Friend's turn"}
-            </p>
-          )}
+          <div className="mt-5 w-full max-w-sm overflow-hidden rounded-3xl bg-white shadow-lg shadow-brand-purple/10 ring-1 ring-black/5">
+            <div className="flex items-stretch">
+              <div className="flex flex-1 flex-col items-center justify-center bg-gradient-to-b from-brand-purple/12 to-transparent px-3 py-4">
+                <p className="text-[10px] font-black uppercase tracking-wider text-brand-purple/70">You</p>
+                <p className="mt-1 text-3xl font-black tabular-nums text-brand-purple">{scores.me}</p>
+              </div>
+              <div className="flex w-px flex-col items-center justify-center bg-gray-100 px-2">
+                <span className="rounded-full bg-ink px-2.5 py-1 text-[10px] font-black text-white">
+                  SET {setNum}
+                </span>
+                <span className="mt-1 text-[10px] font-bold text-gray-400">of 3</span>
+              </div>
+              <div className="flex flex-1 flex-col items-center justify-center bg-gradient-to-b from-[#E3404C]/12 to-transparent px-3 py-4">
+                <p className="text-[10px] font-black uppercase tracking-wider text-[#E3404C]/80">
+                  {mode === 'solo' ? 'AI' : 'Friend'}
+                </p>
+                <p className="mt-1 text-3xl font-black tabular-nums text-[#E3404C]">{scores.opp}</p>
+              </div>
+            </div>
+            {mode === 'live' && live?.turn && status === 'play' && (
+              <p className="border-t border-gray-100 py-2 text-center text-xs font-bold text-gray-500">
+                {live.turn === me?.id ? 'Your turn' : "Friend's turn"}
+              </p>
+            )}
+          </div>
           {(status === 'set_over' || status === 'match_over') && (
-            <div className="mt-4 w-full max-w-sm space-y-2 rounded-2xl bg-white p-4 text-center shadow-sm ring-1 ring-black/5">
+            <div className="mt-5 w-full max-w-sm space-y-2 rounded-3xl bg-white p-5 text-center shadow-md ring-1 ring-black/5">
               <p className="text-sm font-extrabold text-ink">{setMsg || 'Set over'}</p>
               {status === 'set_over' && !matchOver && (
                 <button
                   type="button"
-                  className="w-full rounded-full bg-brand-purple py-2.5 text-sm font-extrabold text-white"
+                  className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
                   onClick={resetBoard}
                 >
                   Next set
@@ -380,7 +453,7 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
                 <>
                   <button
                     type="button"
-                    className="w-full rounded-full bg-brand-purple py-2.5 text-sm font-extrabold text-white"
+                    className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
                     onClick={() => {
                       setScores({ me: 0, opp: 0 })
                       setSetNum(1)
