@@ -30,6 +30,8 @@ async def list_notifications(
                 "actor_id": n.get("actor_id"),
                 "actor_name": n.get("actor_name"),
                 "actor_photo": n.get("actor_photo"),
+                "game_id": n.get("game_id") or (n.get("metadata") or {}).get("game_id"),
+                "metadata": n.get("metadata") or {},
                 "read": bool(n.get("read")),
                 "created_at": (
                     n["created_at"].isoformat()
@@ -39,6 +41,13 @@ async def list_notifications(
             }
         )
     return success_response("Notifications", out)
+
+
+@router.get("/unread-count")
+async def unread_count(user: dict = Depends(get_current_user)):
+    db = get_database()
+    n = await db.notifications.count_documents({"user_id": user["id"], "read": False})
+    return success_response("Unread", {"count": int(n)})
 
 
 @router.post("/{notif_id}/read")

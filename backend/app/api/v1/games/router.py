@@ -66,6 +66,11 @@ async def invite(body: InviteBody, user: dict = Depends(get_current_user)):
     peer = body.peer_user_id.strip()
     if peer == me:
         raise ValidationError("Cannot invite yourself")
+    # Both players must be online (live WS) to start an invite
+    if not manager.is_online(me):
+        raise ValidationError("You must be online to send a play invite")
+    if not manager.is_online(peer):
+        raise ValidationError("That friend is offline. Try again when they are online")
     now = datetime.now(timezone.utc)
     doc = {
         "game": "tictactoe",
@@ -88,12 +93,14 @@ async def invite(body: InviteBody, user: dict = Depends(get_current_user)):
     # Notification for opponent
     challenger = await db.users.find_one({"_id": ObjectId(me)} if ObjectId.is_valid(me) else {"_id": me})
     name = (challenger or {}).get("display_name") or (challenger or {}).get("username") or "Someone"
+    actor_name = name
     notif = {
         "user_id": peer,
         "type": "game_invite",
         "title": f"{name} wants to play tic-tac-toe with you",
         "body": "Play or not now",
         "actor_id": me,
+        "actor_name": name,
         "actor_photo": (challenger or {}).get("profile_photo"),
         "game_id": game_id,
         "read": False,

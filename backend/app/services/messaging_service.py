@@ -42,8 +42,33 @@ class MessagingService:
         if not other:
             raise NotFoundError("User not found")
         other_id = str(other["_id"])
+
+        # Self-chat (notes / message yourself)
         if other_id == user_id:
-            raise ValidationError("Cannot create conversation with yourself")
+            existing_self = await db.conversations.find_one(
+                {
+                    "conversation_type": ConversationType.PRIVATE.value,
+                    "is_self": True,
+                    "participant_ids": [user_id],
+                }
+            )
+            if existing_self:
+                return await MessagingService._serialize_conversation(existing_self, user_id)
+            now = datetime.now(timezone.utc)
+            doc = {
+                "conversation_type": ConversationType.PRIVATE.value,
+                "participant_ids": [user_id],
+                "is_self": True,
+                "group_id": None,
+                "created_at": now,
+                "updated_at": now,
+                "last_message_at": None,
+                "last_message_id": None,
+                "conversation_settings": {},
+            }
+            result = await db.conversations.insert_one(doc)
+            doc["_id"] = result.inserted_id
+            return await MessagingService._serialize_conversation(doc, user_id)
 
         # Check block either direction
         blocked = await db.blocked_users.find_one(
@@ -62,6 +87,7 @@ class MessagingService:
             {
                 "conversation_type": ConversationType.PRIVATE.value,
                 "participant_ids": participants,
+                "is_self": {"$ne": True},
             }
         )
         if existing:
@@ -71,6 +97,7 @@ class MessagingService:
         doc = {
             "conversation_type": ConversationType.PRIVATE.value,
             "participant_ids": participants,
+            "is_self": False,
             "group_id": None,
             "created_at": now,
             "updated_at": now,
@@ -675,6 +702,7 @@ class MessagingService:
         return {
             "id": str(conv["_id"]),
             "conversation_type": conv["conversation_type"],
+            "is_self": bool(conv.get("is_self")),
             "participant_ids": conv.get("participant_ids", []),
             "participants": participants,
             "group_id": conv.get("group_id"),
