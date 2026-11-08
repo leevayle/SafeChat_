@@ -84,13 +84,14 @@ export function Login({
       >
         <div>
           <label className="mb-1.5 block text-left text-xs font-bold text-gray-500">
-            Phone or username
+            Phone
           </label>
           <input
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
-            placeholder="+2547… or username"
-            autoComplete="username"
+            placeholder="+2547…"
+            inputMode="tel"
+            autoComplete="tel"
             className="h-12 w-full rounded-2xl bg-transparent px-4 text-[15px] font-semibold outline-none ring-1 ring-black/10 transition focus:ring-brand-purple/30"
             onKeyDown={(e) => e.key === 'Enter' && submit()}
           />

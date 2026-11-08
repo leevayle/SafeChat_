@@ -39,11 +39,26 @@ class ConnectionManager:
         logger.debug("ws disconnect user=%s", user_id)
 
     def is_online(self, user_id: str) -> bool:
-        return bool(self._by_user.get(user_id))
+        uid = str(user_id or "")
+        if not uid:
+            return False
+        if self._by_user.get(uid):
+            return True
+        # Tolerate id shape differences
+        for k in self._by_user.keys():
+            if str(k) == uid:
+                return True
+        return False
 
     async def send_user(self, user_id: str, payload: dict) -> int:
         """Fan-out to all of a user's sockets. Returns number of successful sends."""
-        sockets = list(self._by_user.get(user_id, ()))
+        uid = str(user_id or "")
+        sockets = list(self._by_user.get(uid, ()))
+        if not sockets:
+            for k, v in self._by_user.items():
+                if str(k) == uid:
+                    sockets = list(v)
+                    break
         if not sockets:
             return 0
         dead: list[WebSocket] = []

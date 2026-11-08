@@ -1112,13 +1112,24 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     end.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' })
   }
   useEffect(() => {
-    // Always land on last message instantly (no smooth scroll when opening / updating list)
+    // Always land on last message instantly (no smooth scroll)
+    const pin = () => pinToBottom(false)
+    pin()
     requestAnimationFrame(() => {
-      pinToBottom(false)
-      requestAnimationFrame(() => pinToBottom(false))
+      pin()
+      requestAnimationFrame(pin)
     })
+    // Layout can settle late (images / fonts) — a few hard pins
+    const t1 = window.setTimeout(pin, 50)
+    const t2 = window.setTimeout(pin, 150)
+    const t3 = window.setTimeout(pin, 320)
     openedOnce.current = true
-  }, [msgs.length, pendingImage, liveDraft, typing, loading, selfNoteItems.length])
+    return () => {
+      window.clearTimeout(t1)
+      window.clearTimeout(t2)
+      window.clearTimeout(t3)
+    }
+  }, [msgs.length, pendingImage, liveDraft, typing, loading, selfNoteItems.length, conversationId, contactId])
   // Always reveal typing / live bubble at the bottom
   useEffect(() => {
     if (!typing && !(liveDraft && liveDraft.length)) return

@@ -225,6 +225,7 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
       if (g.status === 'finished' || g.status === 'left') setStatus('match_over')
       else setStatus('play')
       setMode('live')
+      setLastMoveCell(null)
     } catch {
       showToast('Could not load game')
     }
@@ -256,8 +257,29 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
       if (!gameId && gid) setGameId(gid)
     }
     const onStart = (ev: Event) => {
-      const d = (ev as CustomEvent).detail
-      if (d?.game_id) void loadLive(String(d.game_id))
+      const d = (ev as CustomEvent).detail || {}
+      const gid = String(d.game_id || d.gameId || d.state?.id || '')
+      if (!gid) return
+      // If this client is waiting for this invite (or any open board), enter live
+      if (gameId && gid !== gameId && mode === 'waiting') {
+        // different game while waiting — still allow if we invited
+      }
+      setGameId(gid)
+      if (d.state) {
+        setLive(d.state)
+        setBoard(d.state.board || Array(9).fill(''))
+        const meId = me?.id
+        setScores({
+          me: Number(d.state.scores?.[meId || ''] || 0),
+          opp: Number(Object.entries(d.state.scores || {}).find(([k]) => k !== meId)?.[1] || 0),
+        })
+        setSetNum(d.state.set || 1)
+        setStatus('play')
+        setMode('live')
+        setLastMoveCell(null)
+      } else {
+        void loadLive(gid)
+      }
     }
     window.addEventListener('sc:rt-game-move', onMove)
     window.addEventListener('sc:rt-game-start', onStart)
@@ -265,7 +287,7 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
       window.removeEventListener('sc:rt-game-move', onMove)
       window.removeEventListener('sc:rt-game-start', onStart)
     }
-  }, [gameId, me?.id])
+  }, [gameId, me?.id, mode])
 
   const applyGameState = (g: any) => {
     if (!g) return
@@ -532,29 +554,54 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
               )
             })}
           </div>
-          <div className="mt-5 w-full max-w-sm overflow-hidden rounded-3xl bg-white shadow-lg shadow-brand-purple/10 ring-1 ring-black/5">
-            <div className="flex items-stretch">
-              <div className="flex flex-1 flex-col items-center justify-center bg-gradient-to-b from-brand-purple/12 to-transparent px-3 py-4">
-                <p className="text-[10px] font-black uppercase tracking-wider text-brand-purple/70">You</p>
-                <p className="mt-1 text-3xl font-black tabular-nums text-brand-purple">{scores.me}</p>
-              </div>
-              <div className="flex w-px flex-col items-center justify-center bg-gray-100 px-2">
-                <span className="rounded-full bg-ink px-2.5 py-1 text-[10px] font-black text-white">
-                  SET {setNum}
+          <div className="mt-5 w-full max-w-sm overflow-hidden rounded-[1.35rem] bg-white/90 shadow-[0_8px_30px_rgba(123,44,191,0.12)] ring-1 ring-black/5 backdrop-blur">
+            <div className="flex items-center gap-2 px-3 pt-3">
+              <div className="flex flex-1 items-center gap-2 rounded-2xl bg-brand-purple/10 px-3 py-2.5">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-purple text-[11px] font-black text-white">
+                  You
                 </span>
-                <span className="mt-1 text-[10px] font-bold text-gray-400">of 3</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-brand-purple/70">Score</p>
+                  <p className="text-xl font-black tabular-nums leading-none text-brand-purple">{scores.me}</p>
+                </div>
               </div>
-              <div className="flex flex-1 flex-col items-center justify-center bg-gradient-to-b from-[#E3404C]/12 to-transparent px-3 py-4">
-                <p className="text-[10px] font-black uppercase tracking-wider text-[#E3404C]/80">
-                  {mode === 'solo' ? 'AI' : 'Friend'}
-                </p>
-                <p className="mt-1 text-3xl font-black tabular-nums text-[#E3404C]">{scores.opp}</p>
+              <div className="flex flex-col items-center justify-center px-1">
+                <span className="rounded-full bg-gradient-to-r from-brand-purple to-[#E3404C] px-2.5 py-1 text-[10px] font-black text-white shadow-sm">
+                  SET {setNum}/3
+                </span>
+              </div>
+              <div className="flex flex-1 items-center gap-2 rounded-2xl bg-[#E3404C]/10 px-3 py-2.5">
+                <div className="min-w-0 flex-1 text-right">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-[#E3404C]/80">Score</p>
+                  <p className="text-xl font-black tabular-nums leading-none text-[#E3404C]">{scores.opp}</p>
+                </div>
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#E3404C] text-[10px] font-black text-white">
+                  {mode === 'solo' ? 'AI' : 'P2'}
+                </span>
               </div>
             </div>
             {mode === 'live' && live?.turn && status === 'play' && (
-              <p className="border-t border-gray-100 py-2 text-center text-xs font-bold text-gray-500">
-                {live.turn === me?.id ? 'Your turn' : "Friend's turn"}
+              <p
+                className={`mx-3 mb-3 mt-2 rounded-full py-1.5 text-center text-[11px] font-extrabold ${
+                  live.turn === me?.id
+                    ? 'bg-brand-purple/12 text-brand-purple'
+                    : 'bg-[#E3404C]/10 text-[#E3404C]'
+                }`}
+              >
+                {live.turn === me?.id ? 'Your turn to play' : "Opponent's turn"}
               </p>
+            )}
+            {mode === 'solo' && status === 'play' && (
+              <p className="mx-3 mb-3 mt-2 rounded-full bg-gray-50 py-1.5 text-center text-[11px] font-extrabold text-gray-500">
+                {soloTurn === 'X' ? 'Your turn' : 'AI thinking…'}
+              </p>
+            )}
+            {status === 'play' && mode === 'live' && !live?.turn && (
+              <div className="h-2" />
+            )}
+            {status === 'play' && mode === 'live' && live?.turn && null}
+            {!(mode === 'live' && live?.turn && status === 'play') && mode !== 'solo' && status === 'play' && (
+              <div className="h-2" />
             )}
           </div>
           {(status === 'set_over' || status === 'match_over') && (

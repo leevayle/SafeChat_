@@ -160,16 +160,20 @@ async def accept(game_id: str, user: dict = Depends(get_current_user)):
     )
     doc["status"] = "active"
     doc["updated_at"] = now
-    # notify challenger
+    doc["turn"] = doc.get("challenger_id")
+    # notify challenger + accepter
     try:
-        await manager.send_user(
-            doc["challenger_id"],
-            {"t": "game_start", "game": "tictactoe", "game_id": game_id},
-        )
-        await manager.send_user(
-            me,
-            {"t": "game_start", "game": "tictactoe", "game_id": game_id},
-        )
+        start_payload = {
+            "t": "game_start",
+            "game": "tictactoe",
+            "game_id": game_id,
+            "state": _serialize(doc),
+            "turn": doc.get("challenger_id"),
+            "challenger_id": doc.get("challenger_id"),
+            "opponent_id": doc.get("opponent_id"),
+        }
+        await manager.send_user(doc["challenger_id"], start_payload)
+        await manager.send_user(me, start_payload)
     except Exception:
         pass
     # mark related notifications read

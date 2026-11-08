@@ -113,8 +113,28 @@ function Shell() {
       window.setTimeout(kick, 80)
     }
     window.addEventListener('sc:open-self-tictactoe', openGame)
+    const onGameStart = (ev: Event) => {
+      const gameId = (ev as CustomEvent).detail?.game_id || (ev as CustomEvent).detail?.gameId
+      if (!gameId || !me?.id) return
+      // Both sides: open live board
+      setOverlay(null)
+      setTab('chats')
+      setChat(me.id)
+      try {
+        sessionStorage.setItem('sc_open_tictactoe', String(gameId))
+      } catch { /* */ }
+      let tries = 0
+      const kick = () => {
+        window.dispatchEvent(new CustomEvent('sc:open-tictactoe', { detail: { gameId } }))
+        tries += 1
+        if (tries < 10) window.setTimeout(kick, 100)
+      }
+      window.setTimeout(kick, 60)
+    }
+    window.addEventListener('sc:rt-game-start', onGameStart)
     return () => window.removeEventListener('sc:open-settings-security', openSec)
       window.removeEventListener('sc:open-self-tictactoe', openGame)
+      window.removeEventListener('sc:rt-game-start', onGameStart)
   }, [])
   const TAB_ORDER: Tab[] = ['chats', 'groups', 'status', 'calls']
   const swipeX = useRef<number | null>(null)

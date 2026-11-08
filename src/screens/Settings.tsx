@@ -360,15 +360,11 @@ export function Settings({
                       rel="noopener noreferrer"
                       className="block"
                     >
+                      {/* Black-text PixelDroid mark */}
                       <img
                         src="/pixeldroid-light.png"
                         alt="PixelDroid"
-                        className="h-7 w-auto object-contain dark:hidden"
-                      />
-                      <img
-                        src="/pixeldroid-dark.png"
-                        alt="PixelDroid"
-                        className="hidden h-7 w-auto object-contain dark:block"
+                        className="h-7 w-auto max-w-[120px] object-contain"
                       />
                     </a>
                   </div>

@@ -70,6 +70,25 @@ export function Notifications({
   const [incoming, setIncoming] = useState<any[]>([])
   const [serverNotifs, setServerNotifs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [gameDoneIds, setGameDoneIds] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('sc_game_invite_done')
+      return new Set(raw ? JSON.parse(raw) : [])
+    } catch {
+      return new Set()
+    }
+  })
+  const markGameDone = (id: string, gameId?: string) => {
+    setGameDoneIds((prev) => {
+      const next = new Set(prev)
+      next.add(id)
+      if (gameId) next.add(`g:${gameId}`)
+      try {
+        localStorage.setItem('sc_game_invite_done', JSON.stringify([...next]))
+      } catch { /* */ }
+      return next
+    })
+  }
   const [readIds, setReadIds] = useState<Set<string>>(() => {
     try {
       const raw = localStorage.getItem('sc_notif_read')
@@ -209,18 +228,25 @@ export function Notifications({
     for (const n of serverNotifs) {
             if (n.type === 'game_invite') {
         const id = `ginv-${n.id}`
+        const gid = String(n.game_id || n.metadata?.game_id || '')
+        const done =
+          !!n.read ||
+          readIds.has(id) ||
+          gameDoneIds.has(id) ||
+          (gid ? gameDoneIds.has(`g:${gid}`) : false)
         out.push({
           id,
           kind: 'game',
           title: n.title || 'Game invite',
-          body: n.body || 'wants to play tic-tac-toe',
+          body: done ? 'Invite closed' : n.body || 'wants to play tic-tac-toe',
           when: timeLabel(n.created_at),
           iso: n.created_at,
-          unread: !n.read && !readIds.has(id),
+          unread: !done && !n.read && !readIds.has(id),
           contactId: n.actor_id,
           photo: n.actor_photo,
           action: 'game_invite',
-          gameId: n.game_id || n.metadata?.game_id,
+          gameId: gid,
+          gameDone: done,
         } as any)
         continue
       }
@@ -301,7 +327,7 @@ export function Notifications({
       return a.kind.localeCompare(b.kind)
     })
     return out
-  }, [incoming, calls, contacts, readIds, serverNotifs])
+  }, [incoming, calls, contacts, readIds, serverNotifs, gameDoneIds])
 
   itemsRef.current = items
 
@@ -553,60 +579,68 @@ export function Notifications({
                       )}
                       {(n as any).action === 'game_invite' && (n as any).gameId && (
                         <span className="mt-2 flex gap-2">
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            onClick={async (e) => {
-                              e.stopPropagation()
-                              markRead(n.id)
-                              const gid = String((n as any).gameId || '')
-                              if (!gid) {
-                                showToast('Invite expired')
-                                return
-                              }
-                              try {
-                                // Open live board immediately, accept in parallel
-                                try {
-                                  sessionStorage.setItem('sc_open_self_chat', '1')
-                                  sessionStorage.setItem('sc_open_tictactoe', gid)
-                                  window.dispatchEvent(
-                                    new CustomEvent('sc:open-self-tictactoe', {
-                                      detail: { gameId: gid },
-                                    }),
-                                  )
-                                } catch { /* */ }
-                                await api.tictactoeAccept(gid)
-                                const realId = n.id.replace(/^(ginv-|live-)/, '')
-                                if (realId && !realId.startsWith('live')) {
-                                  try { await api.markNotificationRead(realId) } catch { /* */ }
-                                }
-                                void refreshNotifCount?.()
-                                showToast('Game on')
-                              } catch (err: any) {
-                                showToast(err?.message || 'Could not join')
-                              }
-                            }}
-                            className="rounded-full bg-brand-purple px-3 py-1 text-[11px] font-extrabold text-white"
-                          >
-                            Play
-                          </span>
-                          <span
-                            role="button"
-                            tabIndex={0}
-                            onClick={async (e) => {
-                              e.stopPropagation()
-                              markRead(n.id)
-                              try {
-                                await api.tictactoeDecline(String((n as any).gameId))
-                                showToast('Invite dismissed')
-                              } catch {
-                                /* */
-                              }
-                            }}
-                            className="rounded-full bg-gray-100 px-3 py-1 text-[11px] font-extrabold text-gray-600"
-                          >
-                            Not now
-                          </span>
+                          {(n as any).gameDone ? (
+                            <span className="rounded-full bg-gray-100 px-3 py-1 text-[11px] font-extrabold text-gray-400">
+                              Closed
+                            </span>
+                          ) : (
+                            <>
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                onClick={async (e) => {
+                                  e.stopPropagation()
+                                  const gid = String((n as any).gameId || '')
+                                  if (!gid) {
+                                    showToast('Invite expired')
+                                    return
+                                  }
+                                  markRead(n.id)
+                                  markGameDone(n.id, gid)
+                                  try {
+                                    sessionStorage.setItem('sc_open_self_chat', '1')
+                                    sessionStorage.setItem('sc_open_tictactoe', gid)
+                                    window.dispatchEvent(
+                                      new CustomEvent('sc:open-self-tictactoe', {
+                                        detail: { gameId: gid },
+                                      }),
+                                    )
+                                    await api.tictactoeAccept(gid)
+                                    const realId = n.id.replace(/^(ginv-|live-)/, '')
+                                    if (realId && !n.id.startsWith('live')) {
+                                      try { await api.markNotificationRead(realId) } catch { /* */ }
+                                    }
+                                    void refreshNotifCount?.()
+                                    showToast('Game on')
+                                  } catch (err: any) {
+                                    showToast(err?.message || 'Could not join')
+                                  }
+                                }}
+                                className="rounded-full bg-brand-purple px-3 py-1 text-[11px] font-extrabold text-white"
+                              >
+                                Play
+                              </span>
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                onClick={async (e) => {
+                                  e.stopPropagation()
+                                  markRead(n.id)
+                                  markGameDone(n.id, String((n as any).gameId || ''))
+                                  try {
+                                    await api.tictactoeDecline(String((n as any).gameId))
+                                    showToast('Invite dismissed')
+                                  } catch {
+                                    /* */
+                                  }
+                                  void refreshNotifCount?.()
+                                }}
+                                className="rounded-full bg-gray-100 px-3 py-1 text-[11px] font-extrabold text-gray-600"
+                              >
+                                Not now
+                              </span>
+                            </>
+                          )}
                         </span>
                       )}
                     </span>
