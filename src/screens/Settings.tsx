@@ -341,7 +341,7 @@ export function Settings({
                         pixeldroid
                       </a>
                     </p>
-                    <p className="mt-2 text-left text-[11px] font-extrabold text-brand-purple">
+                    <p className="mt-2 text-left text-[11px] font-normal text-gray-400">
                       Version 2.0.0
                     </p>
                   </div>
@@ -1919,7 +1919,10 @@ export function Settings({
                   hint="Open a support ticket"
                   onClick={() => onSupport?.()}
                 />
-                <Row label="App version" value="1.0.0" />
+                <div className="flex items-center justify-between px-4 py-3">
+                  <span className="text-sm font-semibold text-ink">App version</span>
+                  <span className="text-sm font-normal text-gray-400">1.0.0</span>
+                </div>
               </Card>
             </motion.div>
           )}

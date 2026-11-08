@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   Bell,
@@ -23,11 +23,11 @@ type Props = {
   onOpenStatus?: (userId: string, statusId?: string) => void
 }
 
-type Filter = 'all' | 'calls' | 'system'
+type Filter = 'all' | 'games' | 'calls' | 'system'
 
 type NotifItem = {
   id: string
-  kind: 'request' | 'missed_call' | 'message' | 'system' | 'premium'
+  kind: 'request' | 'missed_call' | 'message' | 'system' | 'premium' | 'game'
   title: string
   body: string
   when: string
@@ -65,6 +65,8 @@ export function Notifications({
   const { saveRequestPending, calls, chats, contacts, showToast, me, refreshContacts, refreshNotifCount } = useStore()
   const meIdPlaceholder = me?.id || ''
   const [filter, setFilter] = useState<Filter>('all')
+  const prevFilterRef = useRef<Filter>('all')
+  const itemsRef = useRef<NotifItem[]>([])
   const [incoming, setIncoming] = useState<any[]>([])
   const [serverNotifs, setServerNotifs] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -78,11 +80,39 @@ export function Notifications({
   })
 
   useEffect(() => {
+    const onInvite = (ev: Event) => {
+      const d = (ev as CustomEvent).detail || {}
+      const gameId = d.game_id || d.gameId
+      const optimistic = {
+        id: `live-${gameId || Date.now()}`,
+        type: 'game_invite',
+        title: d.title || `${d.from_name || 'Someone'} wants to play tic-tac-toe with you`,
+        body: d.body || 'Play or not now',
+        actor_id: d.from,
+        actor_name: d.from_name,
+        game_id: gameId,
+        metadata: { game_id: gameId, game: 'tictactoe' },
+        read: false,
+        created_at: new Date().toISOString(),
+      }
+      setServerNotifs((prev) => {
+        const next = [optimistic, ...(prev || []).filter((n: any) => n.game_id !== gameId && n.id !== optimistic.id)]
+        void saveCachedNotifications(next)
+        return next
+      })
+      void refreshNotifCount?.()
+    }
+    window.addEventListener('sc:rt-game-invite', onInvite)
+    return () => window.removeEventListener('sc:rt-game-invite', onInvite)
+  }, [refreshNotifCount])
+
+  useEffect(() => {
     let alive = true
     ;(async () => {
       try {
         const cached = await loadCachedNotifications<any>()
         if (alive && cached?.length) {
+          setServerNotifs(cached)
           setIncoming(cached)
           setLoading(false)
         }
@@ -93,21 +123,24 @@ export function Notifications({
         if (alive) setLoading(false)
         return
       }
-      try {
-        const { notifications } = await api.listNotifications()
-        if (!alive) return
-        ;(window as any).__sc_server_notifs = notifications || []
-        void saveCachedNotifications(notifications || [])
-        setServerNotifs(notifications || [])
-        void refreshNotifCount?.()
-        if ((notifications || []).some((n: any) => n.type === 'contact_accepted')) {
-          void refreshContacts()
-        }
-      } catch {
-        /* */
-      } finally {
-        if (alive) setLoading(false)
-      }
+      // Background refresh only — UI already snappy from cache
+      void api
+        .listNotifications()
+        .then(({ notifications }) => {
+          if (!alive) return
+          const list = notifications || []
+          ;(window as any).__sc_server_notifs = list
+          void saveCachedNotifications(list)
+          setServerNotifs(list)
+          void refreshNotifCount?.()
+          if (list.some((n: any) => n.type === 'contact_accepted')) {
+            void refreshContacts()
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (alive) setLoading(false)
+        })
     })()
     return () => {
       alive = false
@@ -171,28 +204,14 @@ export function Notifications({
       })
     }
 
-    for (const ch of (chats || []).filter((x) => (x.unread || 0) > 0).slice(0, 12)) {
-      const id = `msg-${ch.contactId}-${ch.iso || ''}`
-      out.push({
-        id,
-        kind: 'message',
-        title: ch.name || 'Message',
-        body: ch.last || 'New message',
-        when: ch.time || timeLabel(ch.iso),
-        iso: ch.iso,
-        unread: !readIds.has(id),
-        contactId: ch.contactId,
-        photo: ch.photo,
-        hue: ch.hue as [string, string] | undefined,
-      })
-    }
+    // Messages stay on the home chats list — not duplicated here
 
     for (const n of serverNotifs) {
             if (n.type === 'game_invite') {
         const id = `ginv-${n.id}`
         out.push({
           id,
-          kind: 'system',
+          kind: 'game',
           title: n.title || 'Game invite',
           body: n.body || 'wants to play tic-tac-toe',
           when: timeLabel(n.created_at),
@@ -282,10 +301,87 @@ export function Notifications({
       return a.kind.localeCompare(b.kind)
     })
     return out
-  }, [incoming, calls, chats, contacts, readIds, serverNotifs])
+  }, [incoming, calls, contacts, readIds, serverNotifs])
+
+  itemsRef.current = items
+
+  // When leaving a tab, mark that tab's notifications as read
+  useEffect(() => {
+    const prev = prevFilterRef.current
+    if (prev === filter) return
+    const list = itemsRef.current
+    const match = (i: NotifItem) => {
+      if (prev === 'all') return false // leaving all → don't bulk-clear unless intentional
+      if (prev === 'games') return i.kind === 'game' || (i as any).action === 'game_invite'
+      if (prev === 'calls') return i.kind === 'missed_call'
+      if (prev === 'system') return i.kind === 'system' || i.kind === 'premium'
+      return false
+    }
+    const toRead = list.filter((i) => i.unread && match(i))
+    if (toRead.length) {
+      setReadIds((prevIds) => {
+        const next = new Set(prevIds)
+        toRead.forEach((i) => next.add(i.id))
+        try {
+          localStorage.setItem('sc_notif_read', JSON.stringify([...next]))
+        } catch {
+          /* */
+        }
+        return next
+      })
+      for (const i of toRead) {
+        if (i.id.startsWith('ginv-') || i.id.startsWith('slike-') || i.id.startsWith('cacc-')) {
+          const real = i.id.replace(/^(ginv-|slike-|cacc-)/, '')
+          try {
+            void api.markNotificationRead(real)
+          } catch {
+            /* */
+          }
+        }
+      }
+      void refreshNotifCount?.()
+    }
+    prevFilterRef.current = filter
+  }, [filter, refreshNotifCount])
+
+  // Leaving the whole Notifications screen marks current tab read
+  useEffect(() => {
+    return () => {
+      const cur = prevFilterRef.current
+      const list = itemsRef.current
+      const match = (i: NotifItem) => {
+        if (cur === 'all') return !!i.unread
+        if (cur === 'games') return i.kind === 'game' || (i as any).action === 'game_invite'
+        if (cur === 'calls') return i.kind === 'missed_call'
+        if (cur === 'system') return i.kind === 'system' || i.kind === 'premium'
+        return false
+      }
+      const toRead = list.filter((i) => i.unread && match(i))
+      if (!toRead.length) return
+      try {
+        const raw = localStorage.getItem('sc_notif_read')
+        const next = new Set(raw ? JSON.parse(raw) : [])
+        toRead.forEach((i) => next.add(i.id))
+        localStorage.setItem('sc_notif_read', JSON.stringify([...next]))
+      } catch {
+        /* */
+      }
+      for (const i of toRead) {
+        if (i.id.startsWith('ginv-') || i.id.startsWith('slike-') || i.id.startsWith('cacc-')) {
+          const real = i.id.replace(/^(ginv-|slike-|cacc-)/, '')
+          try {
+            void api.markNotificationRead(real)
+          } catch {
+            /* */
+          }
+        }
+      }
+    }
+  }, [])
 
   const filtered = items.filter((i) => {
     if (filter === 'all') return true
+    if (filter === 'games') return i.kind === 'game' || (i as any).action === 'game_invite'
     if (filter === 'calls') return i.kind === 'missed_call'
     if (filter === 'system') return i.kind === 'system' || i.kind === 'premium'
     return true
@@ -295,6 +391,7 @@ export function Notifications({
 
   const iconFor = (kind: NotifItem['kind']) => {
     if (kind === 'request') return UserPlus
+    if (kind === 'game') return Sparkles
     if (kind === 'missed_call') return PhoneMissed
     if (kind === 'message') return MessageCircle
     if (kind === 'premium') return Sparkles
@@ -303,6 +400,7 @@ export function Notifications({
 
   const tintFor = (kind: NotifItem['kind']) => {
     if (kind === 'request') return 'bg-brand-purple/12 text-brand-purple'
+    if (kind === 'game') return 'bg-[#5984F2]/12 text-[#5984F2]'
     if (kind === 'missed_call') return 'bg-red-50 text-red-500'
     if (kind === 'message') return 'bg-sky-50 text-sky-600'
     if (kind === 'premium') return 'bg-brand-purple/12 text-brand-purple'
@@ -342,6 +440,7 @@ export function Notifications({
           {(
             [
               ['all', 'All'],
+              ['games', 'Games'],
               ['calls', 'Calls'],
               ['system', 'System'],
             ] as const
@@ -413,7 +512,7 @@ export function Notifications({
                         : 'bg-white/70 ring-1 ring-black/[0.04]'
                     }`}
                   >
-                    {n.kind === 'message' || n.kind === 'missed_call' || n.kind === 'request' ? (
+                    {n.kind === 'message' || n.kind === 'missed_call' || n.kind === 'request' || n.kind === 'game' ? (
                       n.photo || n.hue ? (
                         <Avatar
                           contact={{
@@ -460,20 +559,29 @@ export function Notifications({
                             onClick={async (e) => {
                               e.stopPropagation()
                               markRead(n.id)
+                              const gid = String((n as any).gameId || '')
+                              if (!gid) {
+                                showToast('Invite expired')
+                                return
+                              }
                               try {
-                                await api.tictactoeAccept(String((n as any).gameId))
-                                try { await api.markNotificationRead(n.id.replace(/^ginv-/, '')) } catch { /* */ }
-                                void refreshNotifCount?.()
-                                showToast('Game on')
+                                // Open live board immediately, accept in parallel
                                 try {
                                   sessionStorage.setItem('sc_open_self_chat', '1')
-                                  sessionStorage.setItem('sc_open_tictactoe', String((n as any).gameId))
+                                  sessionStorage.setItem('sc_open_tictactoe', gid)
                                   window.dispatchEvent(
                                     new CustomEvent('sc:open-self-tictactoe', {
-                                      detail: { gameId: (n as any).gameId },
+                                      detail: { gameId: gid },
                                     }),
                                   )
                                 } catch { /* */ }
+                                await api.tictactoeAccept(gid)
+                                const realId = n.id.replace(/^(ginv-|live-)/, '')
+                                if (realId && !realId.startsWith('live')) {
+                                  try { await api.markNotificationRead(realId) } catch { /* */ }
+                                }
+                                void refreshNotifCount?.()
+                                showToast('Game on')
                               } catch (err: any) {
                                 showToast(err?.message || 'Could not join')
                               }

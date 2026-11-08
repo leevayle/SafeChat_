@@ -70,8 +70,12 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
   const [gameId, setGameId] = useState<string | null>(initialGameId || null)
   const [live, setLive] = useState<any>(null)
   const [busy, setBusy] = useState(false)
+  const [lastMoveCell, setLastMoveCell] = useState<number | null>(null)
   const [selectedFriend, setSelectedFriend] = useState<{ id: string; name: string } | null>(null)
   const [inviteName, setInviteName] = useState('')
+  const [showRequests, setShowRequests] = useState(false)
+  const [requests, setRequests] = useState<any[]>([])
+  const [reqBusy, setReqBusy] = useState<string | null>(null)
 
   const matchOver = scores.me >= 2 || scores.opp >= 2
 
@@ -148,9 +152,61 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
       setMode('waiting')
       showToast('Invite sent')
     } catch (e: any) {
-      showToast(e?.message || 'Could not invite')
+      const msg = String(e?.message || e?.detail || 'Could not invite')
+      showToast(msg)
+      setMode('pick-friend')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const loadGameRequests = async () => {
+    try {
+      const { notifications } = await api.listNotifications()
+      const list = (notifications || []).filter((n: any) => n.type === 'game_invite' && !n.read)
+      setRequests(list)
+    } catch {
+      setRequests([])
+    }
+  }
+
+  const acceptRequest = async (n: any) => {
+    const gid = String(n.game_id || n.metadata?.game_id || '')
+    if (!gid) {
+      showToast('Invite expired')
+      return
+    }
+    setReqBusy(gid)
+    try {
+      await api.tictactoeAccept(gid)
+      try {
+        await api.markNotificationRead(String(n.id))
+      } catch { /* */ }
+      setShowRequests(false)
+      setRequests((prev) => prev.filter((x) => x.id !== n.id))
+      await loadLive(gid)
+      showToast('Game on')
+    } catch (e: any) {
+      showToast(e?.message || 'Could not join')
+    } finally {
+      setReqBusy(null)
+    }
+  }
+
+  const declineRequest = async (n: any) => {
+    const gid = String(n.game_id || n.metadata?.game_id || '')
+    setReqBusy(gid || String(n.id))
+    try {
+      if (gid) await api.tictactoeDecline(gid)
+      try {
+        await api.markNotificationRead(String(n.id))
+      } catch { /* */ }
+      setRequests((prev) => prev.filter((x) => x.id !== n.id))
+      showToast('Invite declined')
+    } catch {
+      showToast('Could not decline')
+    } finally {
+      setReqBusy(null)
     }
   }
 
@@ -181,20 +237,23 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
   useEffect(() => {
     const onMove = (ev: Event) => {
       const d = (ev as CustomEvent).detail
-      if (!d?.state || (gameId && d.game_id !== gameId && d.state?.id !== gameId)) return
+      if (!d?.state) return
       const g = d.state
-      setLive(g)
-      setBoard(g.board || Array(9).fill(''))
-      const meId = me?.id
-      setScores({
-        me: Number(g.scores?.[meId || ''] || 0),
-        opp: Number(Object.entries(g.scores || {}).find(([k]) => k !== meId)?.[1] || 0),
+      const gid = String(d.game_id || g.id || '')
+      if (gameId && gid && gid !== gameId) return
+      // Detect which cell changed for highlight
+      setBoard((prev) => {
+        const next = g.board || Array(9).fill('')
+        for (let i = 0; i < 9; i++) {
+          if ((prev[i] || '') !== (next[i] || '') && next[i]) {
+            setLastMoveCell(i)
+            break
+          }
+        }
+        return next
       })
-      setSetNum(g.set || 1)
-      if (g.status === 'finished') {
-        setStatus('match_over')
-        setSetMsg(g.winner === meId ? 'You won the match!' : 'You lost the match')
-      }
+      applyGameState(g)
+      if (!gameId && gid) setGameId(gid)
     }
     const onStart = (ev: Event) => {
       const d = (ev as CustomEvent).detail
@@ -208,26 +267,62 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
     }
   }, [gameId, me?.id])
 
+  const applyGameState = (g: any) => {
+    if (!g) return
+    setLive(g)
+    setBoard(g.board || Array(9).fill(''))
+    const meId = me?.id
+    setScores({
+      me: Number(g.scores?.[meId || ''] || 0),
+      opp: Number(Object.entries(g.scores || {}).find(([k]) => k !== meId)?.[1] || 0),
+    })
+    setSetNum(g.set || 1)
+    if (g.status === 'finished') {
+      setStatus('match_over')
+      setSetMsg(g.winner === meId ? 'You won the match!' : 'You lost the match')
+    } else if (g.set_winner) {
+      setStatus('set_over')
+      setSetMsg(g.set_winner === meId ? 'You took the set' : g.set_winner === 'draw' ? 'Draw — next set' : 'Friend took the set')
+    } else {
+      setStatus('play')
+    }
+  }
+
+  const myMark = live?.marks?.[me?.id || ''] || (live?.challenger_id === me?.id ? 'X' : 'O')
+  const myTurnLive = mode === 'live' && status === 'play' && live?.status === 'active' && live?.turn === me?.id
+
   const playLive = async (cell: number) => {
     if (!gameId || !live || live.status !== 'active') return
     if (live.turn !== me?.id) return
     if (board[cell]) return
+    const mark = myMark || 'X'
+    // Optimistic local board + turn flip so opponent sees after WS
+    const optimistic = [...board]
+    optimistic[cell] = mark
+    setBoard(optimistic)
+    setLastMoveCell(cell)
+    setLive((prev: any) =>
+      prev
+        ? {
+            ...prev,
+            board: optimistic,
+            turn: (prev.players || []).find((p: string) => p !== me?.id) || prev.turn,
+          }
+        : prev,
+    )
     setBusy(true)
     try {
       const g = await api.tictactoeMove(gameId, cell)
-      setLive(g)
-      setBoard(g.board || Array(9).fill(''))
-      const meId = me?.id
-      setScores({
-        me: Number(g.scores?.[meId || ''] || 0),
-        opp: Number(Object.entries(g.scores || {}).find(([k]) => k !== meId)?.[1] || 0),
-      })
-      setSetNum(g.set || 1)
-      if (g.status === 'finished') {
-        setStatus('match_over')
-        setSetMsg(g.winner === meId ? 'You won the match!' : 'You lost the match')
-      }
+      applyGameState(g)
+      setLastMoveCell(cell)
     } catch (e: any) {
+      // rollback
+      try {
+        const g = await api.tictactoeGet(gameId)
+        applyGameState(g)
+      } catch {
+        setBoard(board)
+      }
       showToast(e?.message || 'Move failed')
     } finally {
       setBusy(false)
@@ -251,7 +346,7 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
   )
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col bg-gradient-to-b from-[#f3eeff] via-white to-[#eef4ff]">
+    <div className="relative flex h-full min-h-0 flex-1 flex-col bg-gradient-to-b from-[#f3eeff] via-white to-[#eef4ff]">
       <div className="flex items-center gap-2 border-b border-black/5 bg-white/80 px-3 py-2 backdrop-blur">
         <button
           type="button"
@@ -270,10 +365,13 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
         </div>
         <button
           type="button"
-          onClick={() => void leave()}
-          className="rounded-full bg-brand-red/10 px-3 py-1.5 text-xs font-extrabold text-brand-red"
+          onClick={() => {
+            setShowRequests(true)
+            void loadGameRequests()
+          }}
+          className="rounded-full bg-brand-purple/10 px-3 py-1.5 text-xs font-extrabold text-brand-purple"
         >
-          Leave
+          Requests
         </button>
       </div>
 
@@ -355,7 +453,7 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
                   />
                   <span className="min-w-0 flex-1 font-extrabold text-ink">{name}</span>
                   {selected ? (
-                    <span className="text-[11px] font-black text-brand-purple">Selected</span>
+                    <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-brand-purple" aria-label="Selected" />
                   ) : null}
                 </button>
               )
@@ -394,24 +492,45 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
 
       {(mode === 'solo' || mode === 'live') && (
         <div className="flex min-h-0 flex-1 flex-col items-center px-4 py-5">
-          <div className="grid w-full max-w-sm grid-cols-3 gap-2.5">
-            {board.map((cell, i) => (
-              <button
-                key={i}
-                type="button"
-                disabled={busy || status !== 'play' || !!cell}
-                onClick={() => (mode === 'solo' ? playSolo(i) : void playLive(i))}
-                className="flex aspect-square items-center justify-center rounded-2xl bg-white text-3xl font-black shadow-sm ring-1 ring-black/5 transition active:scale-95 disabled:opacity-90"
-              >
-                {cell === 'X' ? (
-                  <span className="text-brand-purple">X</span>
-                ) : cell === 'O' ? (
-                  <span className="text-[#E3404C]">O</span>
-                ) : (
-                  <span className="text-transparent">·</span>
-                )}
-              </button>
-            ))}
+          <div
+            className={`grid w-full max-w-sm grid-cols-3 gap-2.5 rounded-3xl p-2 transition ${
+              mode === 'live' && myTurnLive ? 'ring-2 ring-brand-purple/35 bg-brand-purple/5' : ''
+            }`}
+          >
+            {board.map((cell, i) => {
+              const mine = !!cell && cell === (mode === 'solo' ? 'X' : myMark)
+              const isLast = lastMoveCell === i
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  disabled={
+                    busy ||
+                    status !== 'play' ||
+                    !!cell ||
+                    (mode === 'live' && !myTurnLive)
+                  }
+                  onClick={() => (mode === 'solo' ? playSolo(i) : void playLive(i))}
+                  className={`flex aspect-square items-center justify-center rounded-2xl bg-white text-3xl font-black shadow-sm transition active:scale-95 disabled:opacity-90 ${
+                    mode === 'live' && myTurnLive && !cell
+                      ? 'ring-2 ring-brand-purple/40'
+                      : isLast
+                        ? mine
+                          ? 'ring-2 ring-brand-purple/50'
+                          : 'ring-2 ring-[#E3404C]/50'
+                        : 'ring-1 ring-black/5'
+                  }`}
+                >
+                  {cell ? (
+                    <span className={mine || (mode === 'solo' && cell === 'X') ? 'text-brand-purple' : 'text-[#E3404C]'}>
+                      {cell}
+                    </span>
+                  ) : (
+                    <span className="text-transparent">·</span>
+                  )}
+                </button>
+              )
+            })}
           </div>
           <div className="mt-5 w-full max-w-sm overflow-hidden rounded-3xl bg-white shadow-lg shadow-brand-purple/10 ring-1 ring-black/5">
             <div className="flex items-stretch">
@@ -439,19 +558,22 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
             )}
           </div>
           {(status === 'set_over' || status === 'match_over') && (
-            <div className="mt-5 w-full max-w-sm space-y-2 rounded-3xl bg-white p-5 text-center shadow-md ring-1 ring-black/5">
-              <p className="text-sm font-extrabold text-ink">{setMsg || 'Set over'}</p>
-              {status === 'set_over' && !matchOver && (
-                <button
-                  type="button"
-                  className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
-                  onClick={resetBoard}
-                >
-                  Next set
-                </button>
-              )}
-              {status === 'match_over' && (
+            <div className="mt-5 w-full max-w-sm space-y-3 rounded-3xl bg-white p-5 text-center shadow-md ring-1 ring-black/5">
+              {status === 'match_over' ? (
                 <>
+                  <p className="text-xs font-bold uppercase tracking-wide text-gray-400">Final result</p>
+                  <p className="text-lg font-black text-ink">{setMsg || 'Match over'}</p>
+                  <div className="flex items-center justify-center gap-6 py-2">
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400">You</p>
+                      <p className="text-2xl font-black text-brand-purple">{scores.me}</p>
+                    </div>
+                    <p className="text-sm font-black text-gray-300">—</p>
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400">{mode === 'solo' ? 'AI' : 'Friend'}</p>
+                      <p className="text-2xl font-black text-[#E3404C]">{scores.opp}</p>
+                    </div>
+                  </div>
                   <button
                     type="button"
                     className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
@@ -469,9 +591,75 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
                     Close
                   </button>
                 </>
+              ) : (
+                <>
+                  <p className="text-sm font-extrabold text-ink">{setMsg || 'Set over'}</p>
+                  {!matchOver && (
+                    <button
+                      type="button"
+                      className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
+                      onClick={resetBoard}
+                    >
+                      Next set
+                    </button>
+                  )}
+                </>
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {showRequests && (
+        <div className="absolute inset-0 z-20 flex flex-col bg-white/95 backdrop-blur-sm">
+          <div className="flex items-center gap-2 border-b border-black/5 px-3 py-2">
+            <button
+              type="button"
+              onClick={() => setShowRequests(false)}
+              className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-black/5"
+            >
+              <ArrowLeft size={20} />
+            </button>
+            <p className="flex-1 text-sm font-black text-ink">Game requests</p>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+            {requests.length === 0 && (
+              <p className="px-2 py-10 text-center text-sm font-semibold text-gray-400">No pending requests</p>
+            )}
+            {requests.map((n: any) => {
+              const gid = String(n.game_id || n.metadata?.game_id || '')
+              const busy = reqBusy === gid || reqBusy === String(n.id)
+              return (
+                <div
+                  key={n.id}
+                  className="mb-2 rounded-2xl bg-white px-3 py-3 shadow-sm ring-1 ring-black/5"
+                >
+                  <p className="text-sm font-extrabold text-ink">
+                    {n.title || n.actor_name || 'Game invite'}
+                  </p>
+                  <p className="mt-0.5 text-xs font-semibold text-gray-400">{n.body || 'Tic tac toe'}</p>
+                  <div className="mt-3 flex gap-2">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void acceptRequest(n)}
+                      className="flex-1 rounded-full bg-brand-purple py-2.5 text-xs font-extrabold text-white disabled:opacity-50"
+                    >
+                      {busy ? '…' : 'Accept'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void declineRequest(n)}
+                      className="flex-1 rounded-full bg-gray-100 py-2.5 text-xs font-extrabold text-gray-600 disabled:opacity-50"
+                    >
+                      Decline
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>

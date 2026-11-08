@@ -387,8 +387,25 @@ export function connectRealtime(handlers?: RtHandlers) {
       } catch { /* */ }
       return
     }
+    if (t === 'status_like' || t === 'notif') {
+      try {
+        window.dispatchEvent(new CustomEvent('sc:rt-notif', { detail: data }))
+      } catch { /* */ }
+      return
+    }
     if (t === 'game_invite') {
       try {
+        // Only the invited user should act on this packet
+        const to = data?.to ? String(data.to) : ''
+        const my = (() => {
+          try {
+            const u = JSON.parse(localStorage.getItem('sc_user') || 'null')
+            return u?.id ? String(u.id) : ''
+          } catch {
+            return ''
+          }
+        })()
+        if (to && my && to !== my) return
         window.dispatchEvent(new CustomEvent('sc:rt-game-invite', { detail: data }))
       } catch { /* */ }
       return

@@ -1645,9 +1645,21 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       const id = (ev as CustomEvent).detail?.gameId
       if (!isSelfChat) return
       setSelfGameId(id ? String(id) : null)
+      setSelfActiveTab('game')
       setSelfGameOpen(true)
     }
     window.addEventListener('sc:open-tictactoe', open)
+    if (isSelfChat) {
+      try {
+        const pending = sessionStorage.getItem('sc_open_tictactoe')
+        if (pending) {
+          sessionStorage.removeItem('sc_open_tictactoe')
+          setSelfGameId(pending)
+          setSelfActiveTab('game')
+          setSelfGameOpen(true)
+        }
+      } catch { /* */ }
+    }
     return () => window.removeEventListener('sc:open-tictactoe', open)
   }, [isSelfChat])
 

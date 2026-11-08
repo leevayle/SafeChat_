@@ -365,6 +365,7 @@ class StatusService:
             await db.status_likes.delete_one({"_id": existing["_id"]})
             liked = False
         else:
+            newly_liked = False
             try:
                 await db.status_likes.insert_one(
                     {
@@ -374,33 +375,59 @@ class StatusService:
                     }
                 )
                 liked = True
+                newly_liked = True
             except DuplicateKeyError:
-                # Concurrent like from another request — treat as already liked
+                # Concurrent like — already liked, do not notify again
                 liked = True
-            # Persist notification only on like
-            try:
-                name = (
-                    (liker or {}).get("display_name")
-                    or (liker or {}).get("username")
-                    or "Someone"
-                )
-                await db.notifications.insert_one(
-                    {
-                        "user_id": s["owner_user_id"],
-                        "type": "status_like",
-                        "title": f"{name} liked your status",
-                        "body": "Tap to open",
-                        "status_id": status_id,
-                        "actor_id": user_id,
-                        "actor_name": name,
-                        "actor_photo": (liker or {}).get("profile_photo"),
-                        "read": False,
-                        "created_at": now,
-                    }
-                )
-            except Exception:
-                pass
-        # Live push to owner: update viewers cache (liked flag)
+                newly_liked = False
+            # One notification per (status, liker) — never spam
+            if newly_liked:
+                try:
+                    name = (
+                        (liker or {}).get("display_name")
+                        or (liker or {}).get("username")
+                        or "Someone"
+                    )
+                    already = await db.notifications.find_one(
+                        {
+                            "user_id": s["owner_user_id"],
+                            "type": "status_like",
+                            "status_id": status_id,
+                            "actor_id": user_id,
+                        }
+                    )
+                    if not already:
+                        await db.notifications.insert_one(
+                            {
+                                "user_id": s["owner_user_id"],
+                                "type": "status_like",
+                                "title": f"{name} liked your status",
+                                "body": "Tap to open",
+                                "status_id": status_id,
+                                "actor_id": user_id,
+                                "actor_name": name,
+                                "actor_photo": (liker or {}).get("profile_photo"),
+                                "read": False,
+                                "created_at": now,
+                            }
+                        )
+                        try:
+                            from app.websocket.manager import manager as _mgr
+                            await _mgr.send_user(
+                                str(s["owner_user_id"]),
+                                {
+                                    "t": "status_like",
+                                    "status_id": status_id,
+                                    "from": user_id,
+                                    "from_name": name,
+                                    "title": f"{name} liked your status",
+                                },
+                            )
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        # Live push to owner: update viewers cache (liked flag) — no notif spam
         try:
             from app.websocket.manager import manager
             view_count = await db.status_views.count_documents({"status_id": status_id})

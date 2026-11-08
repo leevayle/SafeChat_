@@ -92,7 +92,10 @@ function saveMuted(ids: string[]) {
 
 type ViewerRow = { id: string; username: string; name: string; photo: string | null; viewedAt: string | null; liked?: boolean }
 
-export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus }: Props) {
+export function StatusViewer({
+  userId, initialStatusId, onClose, onReplyToStatus }: Props) {
+  const likeInFlight = useRef(false)
+  const viewSentRef = useRef<Set<string>>(new Set())
   const { statusList, refreshStatus, showToast, patchStatusList, me } = useStore()
   // Only non-expired statuses for this user, oldest first (play order)
   // Treat naive ISO timestamps as UTC (backend sends without Z)
@@ -279,7 +282,11 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
     }
 
     // Server register only, local list already patched above (no full refresh flash)
-    api.viewStatus(current.id).catch(() => {})
+    if (viewSentRef.current.has(current.id)) return
+    viewSentRef.current.add(current.id)
+    void api.viewStatus(current.id).catch(() => {
+      viewSentRef.current.delete(current.id)
+    })
   }, [current?.id, current?.views, isOwner, me?.id, patchStatusList])
 
   // Sync video element with pause / resume
@@ -445,12 +452,19 @@ export function StatusViewer({ userId, initialStatusId, onClose, onReplyToStatus
     setLikePulse(true)
     window.setTimeout(() => setLikePulse(false), 450)
     if (!was) showToast('Sending like…')
-    void api.likeStatus(id).catch(() => {
-      const rolled = { ...likes, [id]: was }
-      setLikes(rolled)
-      saveLikes(rolled)
-      showToast('Could not update like')
-    })
+    if (likeInFlight.current) return
+    likeInFlight.current = true
+    void api
+      .likeStatus(id)
+      .catch(() => {
+        const rolled = { ...likes, [id]: was }
+        setLikes(rolled)
+        saveLikes(rolled)
+        showToast('Could not update like')
+      })
+      .finally(() => {
+        likeInFlight.current = false
+      })
   }
 
   if (!items.length || !current) {

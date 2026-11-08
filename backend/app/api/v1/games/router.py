@@ -66,11 +66,19 @@ async def invite(body: InviteBody, user: dict = Depends(get_current_user)):
     peer = body.peer_user_id.strip()
     if peer == me:
         raise ValidationError("Cannot invite yourself")
+    peer_user = None
+    if ObjectId.is_valid(peer):
+        peer_user = await db.users.find_one({"_id": ObjectId(peer)})
+    peer_label = (
+        (peer_user or {}).get("display_name")
+        or (peer_user or {}).get("username")
+        or "That friend"
+    )
     # Both players must be online (live WS) to start an invite
     if not manager.is_online(me):
         raise ValidationError("You must be online to send a play invite")
     if not manager.is_online(peer):
-        raise ValidationError("That friend is offline. Try again when they are online")
+        raise ValidationError(f"{peer_label} is not online at the moment")
     now = datetime.now(timezone.utc)
     doc = {
         "game": "tictactoe",
@@ -108,15 +116,24 @@ async def invite(body: InviteBody, user: dict = Depends(get_current_user)):
         "metadata": {"game": "tictactoe", "game_id": game_id},
     }
     await db.notifications.insert_one(notif)
+    # Targeted: only the invited peer (never broadcast)
     payload = {
         "t": "game_invite",
         "game": "tictactoe",
         "game_id": game_id,
         "from": me,
         "from_name": name,
+        "to": peer,
+        "title": f"{name} wants to play tic-tac-toe with you",
+        "body": "Play or not now",
     }
     try:
-        await manager.send_user(peer, payload)
+        sent = await manager.send_user(peer, payload)
+        if sent <= 0:
+            # Race: went offline after check
+            raise ValidationError(f"{peer_label} is not online at the moment")
+    except ValidationError:
+        raise
     except Exception:
         pass
     doc["_id"] = res.inserted_id

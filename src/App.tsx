@@ -100,12 +100,17 @@ function Shell() {
       const gameId = (ev as CustomEvent).detail?.gameId
       const myId = me?.id
       if (!myId) return
-      setChat(myId)
-      setTab('chats')
       setOverlay(null)
-      window.setTimeout(() => {
+      setTab('chats')
+      setChat(myId)
+      // Retry until ChatWindow (self) is mounted
+      let tries = 0
+      const kick = () => {
         window.dispatchEvent(new CustomEvent('sc:open-tictactoe', { detail: { gameId } }))
-      }, 200)
+        tries += 1
+        if (tries < 8) window.setTimeout(kick, 120)
+      }
+      window.setTimeout(kick, 80)
     }
     window.addEventListener('sc:open-self-tictactoe', openGame)
     return () => window.removeEventListener('sc:open-settings-security', openSec)

@@ -57,7 +57,7 @@ export function ChatsHome({
 }: Props) {
   const { chats, contacts, statusList, me, listsReady, saveRequestPending, notifUnreadCount, typingPeers, presenceMap, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, refreshNotifCount, refreshSubscription, showToast } = useStore()
   /** System-only: save requests etc. Chat unreads live on the bottom nav. */
-  const systemNotifCount = saveRequestPending
+  const systemNotifCount = (saveRequestPending || 0) + (notifUnreadCount || 0)
   const [filter, setFilter] = useState<Filter>('All chats')
   const [searching, setSearching] = useState(false)
   const [q, setQ] = useState('')

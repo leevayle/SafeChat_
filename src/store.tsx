@@ -2034,6 +2034,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setNotifUnreadCount((n) => n + 1)
     }
     window.addEventListener('sc:rt-game-invite', onGameInvite)
+    const onNotif = () => setNotifUnreadCount((n) => n + 1)
+    window.addEventListener('sc:rt-notif', onNotif)
     const onDeleteCalls = (ev: Event) => {
       const ids = new Set((((ev as CustomEvent).detail?.ids || []) as string[]).map(String))
       if (!ids.size) return
@@ -2050,6 +2052,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => {
       window.removeEventListener('sc:delete-chats', onDelete)
       window.removeEventListener('sc:rt-game-invite', onGameInvite)
+      window.removeEventListener('sc:rt-notif', onNotif)
       window.removeEventListener('sc:delete-calls', onDeleteCalls)
       window.removeEventListener('sc:delete-locked-chats', onDeleteLocked)
     }
