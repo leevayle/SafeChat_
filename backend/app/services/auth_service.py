@@ -48,9 +48,23 @@ class AuthService:
 
         phone = (data.phone_number or "").strip() or None
         if phone:
-            existing_phone = await db.users.find_one({"phone_number": phone})
+            # Normalize + match with/without leading +
+            raw = phone.replace(" ", "").replace("-", "")
+            variants = {raw}
+            if raw.startswith("+"):
+                variants.add(raw[1:])
+            else:
+                variants.add("+" + raw)
+            existing_phone = await db.users.find_one(
+                {"phone_number": {"$in": list(variants)}}
+            )
             if existing_phone:
                 raise ConflictError("Phone number already registered")
+            # Persist canonical E.164-ish form
+            if not raw.startswith("+") and raw.isdigit():
+                phone = "+" + raw
+            else:
+                phone = raw
 
         now = datetime.now(timezone.utc)
         photo = getattr(data, "profile_photo", None)
@@ -107,6 +121,11 @@ class AuthService:
             "id": user_id,
             "username": username,
             "display_name": data.display_name.strip(),
+            "phone_number": phone,
+            "email": email_norm,
+            "profile_photo": photo,
+            "bio": user_doc.get("bio"),
+            "account_status": AccountStatus.ACTIVE.value,
         }
 
     @staticmethod

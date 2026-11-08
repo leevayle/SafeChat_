@@ -29,6 +29,103 @@ async def check_username(username: str):
     return success_response("Username check", {"available": exists is None})
 
 
+def _normalize_phone(phone: str) -> str:
+    """Strip to E.164-ish digits with leading + when present."""
+    raw = (phone or "").strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if not raw:
+        return ""
+    if raw.startswith("+"):
+        return "+" + "".join(c for c in raw[1:] if c.isdigit())
+    return "".join(c for c in raw if c.isdigit())
+
+
+def _phone_lookup_variants(phone: str) -> list:
+    """Match users whether stored with or without +."""
+    p = _normalize_phone(phone)
+    if not p:
+        return []
+    variants = {p}
+    if p.startswith("+"):
+        variants.add(p[1:])
+    else:
+        variants.add("+" + p)
+    # Local leading 0 stripped forms are handled by client E.164; keep raw too
+    return [v for v in variants if v]
+
+
+@router.get("/phone/check")
+async def check_phone(phone: str):
+    """Public: whether a phone number is free to register."""
+    db = get_database()
+    variants = _phone_lookup_variants(phone)
+    if not variants or len(variants[0].lstrip("+")) < 7:
+        return success_response(
+            "Phone check",
+            {"available": False, "reason": "invalid"},
+        )
+    exists = await db.users.find_one(
+        {"phone_number": {"$in": variants}},
+        {"_id": 1},
+    )
+    return success_response(
+        "Phone check",
+        {"available": exists is None},
+    )
+
+
+@router.post("/phone/send-code")
+async def send_phone_code(body: dict):
+    """
+    Dev-friendly OTP stub. Onboarding currently skips SMS;
+    endpoint exists so the client never 404s.
+    """
+    phone = _normalize_phone(
+        str(body.get("phone_number") or body.get("phone") or "")
+    )
+    if len(phone.lstrip("+")) < 7:
+        from app.core.exceptions import ValidationError
+        raise ValidationError("Invalid phone number")
+    # No real SMS provider wired — always succeed in dev
+    return success_response(
+        "Verification code sent",
+        {
+            "phone_number": phone,
+            "sent": True,
+            "dev_code": "000000",
+            "message": "SMS provider not configured — use onboarding without OTP",
+        },
+    )
+
+
+@router.post("/phone/verify-code")
+async def verify_phone_code(body: dict):
+    """
+    Dev-friendly OTP verify stub. Accepts any 4–8 digit code (or 000000).
+    Returns a registration_token the client may ignore.
+    """
+    phone = _normalize_phone(
+        str(body.get("phone_number") or body.get("phone") or "")
+    )
+    code = str(body.get("code") or "").strip()
+    if len(phone.lstrip("+")) < 7:
+        from app.core.exceptions import ValidationError
+        raise ValidationError("Invalid phone number")
+    if not code or len(code) < 4:
+        from app.core.exceptions import ValidationError
+        raise ValidationError("Invalid verification code")
+    # Always accept in this build (no SMS backend)
+    token = f"dev-verified:{phone}"
+    return success_response(
+        "Phone verified",
+        {
+            "phone_number": phone,
+            "verified": True,
+            "registration_token": token,
+        },
+    )
+
+
+
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest):
     # Let AppException bubble to global handler so status codes are correct
