@@ -387,6 +387,30 @@ export function connectRealtime(handlers?: RtHandlers) {
       } catch { /* */ }
       return
     }
+    if (t === 'game_invite') {
+      try {
+        window.dispatchEvent(new CustomEvent('sc:rt-game-invite', { detail: data }))
+      } catch { /* */ }
+      return
+    }
+    if (t === 'game_start') {
+      try {
+        window.dispatchEvent(new CustomEvent('sc:rt-game-start', { detail: data }))
+      } catch { /* */ }
+      return
+    }
+    if (t === 'game_move') {
+      try {
+        window.dispatchEvent(new CustomEvent('sc:rt-game-move', { detail: data }))
+      } catch { /* */ }
+      return
+    }
+    if (t === 'game_leave' || t === 'game_decline') {
+      try {
+        window.dispatchEvent(new CustomEvent('sc:rt-game-end', { detail: data }))
+      } catch { /* */ }
+      return
+    }
     if (t === 'status_new' && data.status) {
       try {
         window.dispatchEvent(

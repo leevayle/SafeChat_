@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Phone,
@@ -10,6 +10,7 @@ import {
   Search,
   X,
   ContactRound,
+  Trash2,
 } from 'lucide-react'
 import { BrandMark } from '../components/AppHeaderLogo'
 import { Avatar } from '../components/Avatar'
@@ -30,6 +31,9 @@ export function CallsTab({ onCall, onOpenContacts }: Props) {
   const [q, setQ] = useState('')
   const [kind, setKind] = useState<'audio' | 'video'>('audio')
   const [filter, setFilter] = useState<CallFilter>('All')
+  const [selectedCallIds, setSelectedCallIds] = useState<string[]>([])
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const longPressMoved = useRef(false)
 
   const list = useMemo(() => {
     const qq = q.trim().toLowerCase()
@@ -68,6 +72,18 @@ export function CallsTab({ onCall, onOpenContacts }: Props) {
     onCall(id, k)
   }
 
+  const toggleSelectCall = (id: string) => {
+    setSelectedCallIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
+  const clearCallSelection = () => setSelectedCallIds([])
+  const deleteSelectedCalls = () => {
+    try {
+      window.dispatchEvent(new CustomEvent('sc:delete-calls', { detail: { ids: [...selectedCallIds] } }))
+    } catch { /* */ }
+    clearCallSelection()
+  }
+
+
   return (
     <div className="relative flex h-full flex-col bg-white">
       <header className="sticky top-0 z-10 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 px-5 pt-[max(10px,env(safe-area-inset-top))] backdrop-blur">
@@ -84,6 +100,23 @@ export function CallsTab({ onCall, onOpenContacts }: Props) {
 
       <div className="min-h-0 flex-1 overflow-y-auto pb-28">
         <h2 className="mb-2 px-5 pt-2.5 text-xl font-black">Calls</h2>
+        {selectedCallIds.length > 0 && (
+          <div className="mb-2 flex items-center gap-2 border-b border-black/5 bg-white px-3 py-2">
+            <button type="button" onClick={clearCallSelection} className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100" aria-label="Cancel">
+              <X size={18} />
+            </button>
+            <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-brand-purple px-2 text-xs font-black text-white">
+              {selectedCallIds.length}
+            </span>
+            <button
+              type="button"
+              onClick={deleteSelectedCalls}
+              className="ml-auto flex items-center gap-1.5 rounded-full bg-brand-red/10 px-3 py-2 text-xs font-extrabold text-brand-red"
+            >
+              <Trash2 size={15} /> Delete
+            </button>
+          </div>
+        )}
 
         {/* Filter chips — WhatsApp / Telegram style */}
         <div className="mb-2 flex gap-2 overflow-x-auto no-scrollbar px-4 pb-1">
@@ -128,8 +161,37 @@ export function CallsTab({ onCall, onOpenContacts }: Props) {
               >
                 <button
                   type="button"
-                  onClick={() => start(c.contactId, c.kind === 'video' ? 'video' : 'audio')}
-                  className="flex w-full items-center gap-3 px-3 py-3 text-left hover:bg-gray-50"
+                  onClick={() => {
+                    const id = String(c.id || c.call_id || `${c.contactId}-${c.time}`)
+                    if (selectedCallIds.length) {
+                      toggleSelectCall(id)
+                      return
+                    }
+                    start(c.contactId, c.kind === 'video' ? 'video' : 'audio')
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault()
+                    const id = String(c.id || c.call_id || `${c.contactId}-${c.time}`)
+                    toggleSelectCall(id)
+                  }}
+                  onPointerDown={() => {
+                    longPressMoved.current = false
+                    if (longPressTimer.current) clearTimeout(longPressTimer.current)
+                    longPressTimer.current = setTimeout(() => {
+                      if (!longPressMoved.current) {
+                        const id = String(c.id || c.call_id || `${c.contactId}-${c.time}`)
+                        toggleSelectCall(id)
+                      }
+                    }, 450)
+                  }}
+                  onPointerMove={() => { longPressMoved.current = true }}
+                  onPointerUp={() => { if (longPressTimer.current) clearTimeout(longPressTimer.current) }}
+                  onPointerCancel={() => { if (longPressTimer.current) clearTimeout(longPressTimer.current) }}
+                  className={`flex w-full items-center gap-3 px-3 py-3 text-left transition-colors duration-150 ${
+                    selectedCallIds.includes(String(c.id || c.call_id || `${c.contactId}-${c.time}`))
+                      ? 'bg-brand-purple/15 ring-1 ring-inset ring-brand-purple/30'
+                      : 'hover:bg-gray-50'
+                  }`}
                 >
                   <Avatar contact={ct} size={48} />
                   <div className="min-w-0 flex-1">

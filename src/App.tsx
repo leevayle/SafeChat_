@@ -96,7 +96,20 @@ function Shell() {
       try { sessionStorage.setItem('sc_settings_page', 'security') } catch { /* */ }
     }
     window.addEventListener('sc:open-settings-security', openSec)
+    const openGame = (ev: Event) => {
+      const gameId = (ev as CustomEvent).detail?.gameId
+      const myId = me?.id
+      if (!myId) return
+      setChat(myId)
+      setTab('chats')
+      setOverlay(null)
+      window.setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('sc:open-tictactoe', { detail: { gameId } }))
+      }, 200)
+    }
+    window.addEventListener('sc:open-self-tictactoe', openGame)
     return () => window.removeEventListener('sc:open-settings-security', openSec)
+      window.removeEventListener('sc:open-self-tictactoe', openGame)
   }, [])
   const TAB_ORDER: Tab[] = ['chats', 'groups', 'status', 'calls']
   const swipeX = useRef<number | null>(null)

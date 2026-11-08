@@ -12,7 +12,7 @@ db: Optional[AsyncIOMotorDatabase] = None
 
 async def connect_to_mongo() -> None:
     global client, db
-    logger.info("Boot · checking MongoDB connection…")
+    logger.info("checking MongoDB connection")
     client = AsyncIOMotorClient(
         settings.MONGODB_URI,
         maxPoolSize=50,
@@ -21,9 +21,9 @@ async def connect_to_mongo() -> None:
     )
     db = client[settings.MONGODB_DB_NAME]
     await client.admin.command("ping")
-    logger.info("Boot · DB check passed (%s)", settings.MONGODB_DB_NAME)
+    logger.info("DB check passed (%s)", settings.MONGODB_DB_NAME)
     await create_indexes()
-    logger.info("Boot · Mongo ready")
+    logger.info("Mongo ready")
 
 
 async def close_mongo_connection() -> None:
@@ -42,7 +42,7 @@ def get_database() -> AsyncIOMotorDatabase:
 
 
 async def create_indexes() -> None:
-    logger.info("Boot · checking indexes…")
+    logger.info("checking indexes")
     before_total = 0
     try:
         for name in await db.list_collection_names():
@@ -221,6 +221,6 @@ async def create_indexes() -> None:
         after_total = before_total
     delta = max(0, after_total - before_total)
     if delta:
-        logger.info("Boot · indexes passed — ensured set, %s new/updated", delta)
+        logger.info("indexes passed, %s new/updated", delta)
     else:
-        logger.info("Boot · indexes passed — all indexes present")
+        logger.info("indexes passed, all present")

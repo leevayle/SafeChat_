@@ -649,6 +649,28 @@ function meId(): string {
 }
 
 export const api = {
+  tictactoeInvite: async (peer_user_id: string) => {
+    const data = await req<any>('/api/v1/games/tictactoe/invite', {
+      method: 'POST',
+      body: JSON.stringify({ peer_user_id, game: 'tictactoe' }),
+    })
+    return data
+  },
+  tictactoeAccept: async (gameId: string) =>
+    req<any>(`/api/v1/games/tictactoe/${gameId}/accept`, { method: 'POST', body: '{}' }),
+  tictactoeDecline: async (gameId: string) =>
+    req<any>(`/api/v1/games/tictactoe/${gameId}/decline`, { method: 'POST', body: '{}' }),
+  tictactoeGet: async (gameId: string) =>
+    req<any>(`/api/v1/games/tictactoe/${gameId}`),
+  tictactoeMove: async (gameId: string, cell: number) =>
+    req<any>(`/api/v1/games/tictactoe/${gameId}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ cell }),
+    }),
+  tictactoeLeave: async (gameId: string) =>
+    req<any>(`/api/v1/games/tictactoe/${gameId}/leave`, { method: 'POST', body: '{}' }),
+
+
   health: () =>
     fetch(`${BASE}/health`)
       .then((r) => r.json())

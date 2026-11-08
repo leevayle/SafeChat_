@@ -15,6 +15,10 @@ import {
   Clock,
   RefreshCw,
   Lock,
+  Pin,
+  Trash2,
+  EyeOff,
+  Archive,
 } from 'lucide-react'
 import { Wordmark } from '../components/Logo'
 import { Avatar } from '../components/Avatar'
@@ -273,17 +277,42 @@ export function ChatsHome({
       </header>
 
       {selectedIds.length > 0 && (
-        <div className="z-30 flex items-center gap-1 border-b border-black/5 bg-brand-purple/10 px-2 py-2">
-          <button type="button" onClick={clearSelection} className="rounded-full px-3 py-2 text-xs font-extrabold text-gray-600">
-            Cancel
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          transition={{ duration: 0.22, ease: 'easeOut', delay: 0.12 }}
+          className="z-30 flex items-center gap-2 border-b border-black/5 bg-white/95 px-2 py-2 shadow-sm backdrop-blur"
+        >
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600"
+            aria-label="Cancel selection"
+          >
+            <X size={18} />
           </button>
-          <span className="flex-1 text-center text-xs font-extrabold text-brand-purple">{selectedIds.length} selected</span>
-          <button type="button" onClick={pinSelected} className="rounded-full px-3 py-2 text-xs font-extrabold text-brand-purple">Pin</button>
-          <button type="button" onClick={deleteSelected} className="rounded-full px-3 py-2 text-xs font-extrabold text-brand-red">Delete</button>
-          <button type="button" disabled className="rounded-full px-3 py-2 text-xs font-extrabold text-gray-300">Hide</button>
-          <button type="button" disabled className="rounded-full px-3 py-2 text-xs font-extrabold text-gray-300">Archive</button>
-          <button type="button" onClick={lockSelected} className="rounded-full px-3 py-2 text-xs font-extrabold text-brand-purple">Lock</button>
-        </div>
+          <span className="flex h-7 min-w-7 shrink-0 items-center justify-center rounded-full bg-brand-purple px-2 text-xs font-black text-white">
+            {selectedIds.length}
+          </span>
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto no-scrollbar">
+            <button type="button" onClick={pinSelected} className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3 py-2 text-xs font-extrabold text-brand-purple">
+              <Pin size={15} /> Pin
+            </button>
+            <button type="button" onClick={deleteSelected} className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-red/10 px-3 py-2 text-xs font-extrabold text-brand-red">
+              <Trash2 size={15} /> Delete
+            </button>
+            <button type="button" disabled className="flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-3 py-2 text-xs font-extrabold text-gray-300">
+              <EyeOff size={15} /> Hide
+            </button>
+            <button type="button" disabled className="flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-3 py-2 text-xs font-extrabold text-gray-300">
+              <Archive size={15} /> Archive
+            </button>
+            <button type="button" onClick={lockSelected} className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3 py-2 text-xs font-extrabold text-brand-purple">
+              <Lock size={15} /> Lock
+            </button>
+          </div>
+        </motion.div>
       )}
       {/* z-40: hamburger menu covers header + list + FAB + bottom nav */}
       <AnimatePresence>
@@ -574,8 +603,8 @@ export function ChatsHome({
                       }}
                       className={`flex w-full items-center gap-3 border-b border-gray-100/80 px-3 py-3.5 text-left last:border-0 ${
                         selectedIds.includes(c.contactId)
-                          ? 'bg-brand-purple/15 ring-1 ring-inset ring-brand-purple/30'
-                          : 'hover:bg-gray-50/80'
+                          ? 'bg-brand-purple/15 ring-1 ring-inset ring-brand-purple/30 transition-colors duration-200'
+                          : 'hover:bg-gray-50/80 transition-colors duration-150'
                       }`}
                     >
                       {meta && meta.total > 0 ? (

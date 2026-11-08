@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from app.core.config import settings
 from app.core.database import connect_to_mongo, close_mongo_connection
-from app.core.logging import setup_logging
+from app.core.logging import setup_logging, print_boot_dots
 from app.core.exceptions import AppException, error_response
 from app.api.v1.auth.router import router as auth_router
 from app.api.v1.users.router import router as users_router
@@ -16,6 +16,7 @@ from app.api.v1.groups.router import router as groups_router
 from app.api.v1.statuses.router import router as statuses_router
 from app.api.v1.calls.router import router as calls_router
 from app.api.v1.notifications.router import router as notifications_router
+from app.api.v1.games.router import router as games_router
 from app.api.v1.payments.router import router as payments_router
 from app.api.v1.admin.router import router as admin_router
 from app.websocket.router import router as ws_router
@@ -28,29 +29,19 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 
 def _print_ready_banner() -> None:
-    """CLI banner after startup (colored SafeChat wordmark)."""
-    # ANSI: purple, orange/reddish, blue
-    P = "\033[38;2;123;44;191m"
-    O = "\033[38;2;232;93;4m"
-    B = "\033[38;2;99;137;235m"
+    """CLI banner after startup (SafeChat wordmark in brand colors)."""
+    RED = "\033[38;2;227;64;76m"      # #E3404C Safe
+    PURPLE = "\033[38;2;138;43;226m"  # #8A2BE2 Chat
+    BLUE = "\033[38;2;89;132;242m"    # #5984F2 trailing dots
     R = "\033[0m"
-    # Dot-matrix style SAFECHAT
-    rows = [
-        "  ·····     ···     ·····   ·····   ·····  ·  ·     ···    ·····  ",
-        " ·          ·  ·    ·       ·       ·      ·  ·    ·  ·      ·    ",
-        "  ····      ····    ····    ····    ·      ····    ····      ·    ",
-        "     ·      ·  ·    ·       ·       ·      ·  ·    ·  ·      ·    ",
-        " ·····      ·  ·    ·····   ·····   ·····  ·  ·    ·  ·      ·    ",
-    ]
-    # Simpler big text via block letters
     art = [
-        f"{P}  ____         __      {O} ____ _           _   {B}  ",
-        f"{P} / ___|  __ _ / _| ___ {O}/ ___| |__   __ _| |_ {B} ",
-        f"{P} \\___ \\ / _` | |_ / _ \\{O}| |   | '_ \\ / _` | __|{B}",
-        f"{P}  ___) | (_| |  _|  __/{O}| |___| | | | (_| | |_ {B} ",
-        f"{P} |____/ \\__,_|_|  \\___|{O} \\____|_| |_|\\__,_|\\__|{B}",
-        f"{R}",
-        f"  {P}●{R}  {O}●{R}  {B}●{R}   server ready",
+        RED + "  ____         __      " + PURPLE + " ____ _           _  " + BLUE + "·" + R,
+        RED + " / ___|  __ _ / _| ___ " + PURPLE + "/ ___| |__   __ _| |_ " + BLUE + "·" + R,
+        RED + " \\___ \\/ _` | |_ / _ \\" + PURPLE + "| |   | '_ \\ / _` | __|" + BLUE + "·" + R,
+        RED + "  ___) | (_| |  _|  __/" + PURPLE + "| |___| | | | (_| | |_ " + BLUE + "·" + R,
+        RED + " |____/ \\__,_|_|  \\___|" + PURPLE + " \\____|_| |_|\\__,_|\\__|" + BLUE + "·" + R,
+        R,
+        f"  {RED}●{R}  {PURPLE}●{R}  {BLUE}●{R}   server ready",
         "",
     ]
     print()
@@ -59,22 +50,36 @@ def _print_ready_banner() -> None:
     print()
 
 
+_boot_done = False
+
+
 async def lifespan(app: FastAPI):
-    logger.info("Boot · starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
+    global _boot_done
+    # Three brand dots down the CLI before any work
     try:
-        await connect_to_mongo()
-    except Exception as e:
-        logger.error("Boot · MongoDB failed: %s", e)
-        raise
-    logger.info("Boot · server ready")
-    try:
-        _print_ready_banner()
+        print_boot_dots()
     except Exception:
         pass
+    if not _boot_done:
+        logger.info("starting %s (%s)", settings.APP_NAME, settings.APP_ENV)
+        try:
+            await connect_to_mongo()
+        except Exception as e:
+            logger.error("MongoDB failed: %s", e)
+            raise
+        logger.info("server ready")
+        try:
+            _print_ready_banner()
+        except Exception:
+            pass
+        _boot_done = True
+    else:
+        logger.info("reload complete")
     yield
-    logger.info("Shutdown · closing MongoDB…")
+    logger.info("closing MongoDB")
     await close_mongo_connection()
-    logger.info("Shutdown · complete")
+    logger.info("shutdown complete")
+    _boot_done = False
 
 
 app = FastAPI(
@@ -146,6 +151,7 @@ app.include_router(groups_router, prefix=settings.API_V1_PREFIX)
 app.include_router(statuses_router, prefix=settings.API_V1_PREFIX)
 app.include_router(calls_router, prefix=settings.API_V1_PREFIX)
 app.include_router(notifications_router, prefix=settings.API_V1_PREFIX)
+app.include_router(games_router, prefix=settings.API_V1_PREFIX)
 app.include_router(payments_router, prefix=settings.API_V1_PREFIX)
 app.include_router(admin_router, prefix=settings.API_V1_PREFIX)
 app.include_router(ws_router, prefix=settings.API_V1_PREFIX)

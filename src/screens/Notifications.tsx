@@ -185,7 +185,24 @@ export function Notifications({
     }
 
     for (const n of serverNotifs) {
-            if (n.type === 'contact_accepted') {
+            if (n.type === 'game_invite') {
+        const id = `ginv-${n.id}`
+        out.push({
+          id,
+          kind: 'system',
+          title: n.title || 'Game invite',
+          body: n.body || 'wants to play tic-tac-toe',
+          when: timeLabel(n.created_at),
+          iso: n.created_at,
+          unread: !n.read && !readIds.has(id),
+          contactId: n.actor_id,
+          photo: n.actor_photo,
+          action: 'game_invite',
+          gameId: n.game_id || n.metadata?.game_id,
+        } as any)
+        continue
+      }
+      if (n.type === 'contact_accepted') {
         const id = `cacc-${n.id}`
         out.push({
           id,
@@ -383,6 +400,9 @@ export function Notifications({
                         if (n.contactId && onOpenChat) onOpenChat(n.contactId)
                         else onOpenCalls?.()
                       } else if (n.kind === 'message' && n.contactId) onOpenChat?.(n.contactId)
+                      else if ((n as any).action === 'game_invite' && (n as any).gameId) {
+                        /* buttons handle accept */
+                      }
                     }}
                     className={`flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition active:scale-[0.99] ${
                       n.unread
@@ -427,6 +447,53 @@ export function Notifications({
                       {(n.kind === 'premium' || n.action === 'recharge') && (
                         <span className="mt-2 inline-flex rounded-full bg-gradient-to-r from-brand-purple to-brand-orange px-3 py-1 text-[11px] font-extrabold text-white">
                           Recharge Premium
+                        </span>
+                      )}
+                      {(n as any).action === 'game_invite' && (n as any).gameId && (
+                        <span className="mt-2 flex gap-2">
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={async (e) => {
+                              e.stopPropagation()
+                              markRead(n.id)
+                              try {
+                                await api.tictactoeAccept(String((n as any).gameId))
+                                showToast('Game on')
+                                try {
+                                  sessionStorage.setItem('sc_open_self_chat', '1')
+                                  sessionStorage.setItem('sc_open_tictactoe', String((n as any).gameId))
+                                  window.dispatchEvent(
+                                    new CustomEvent('sc:open-self-tictactoe', {
+                                      detail: { gameId: (n as any).gameId },
+                                    }),
+                                  )
+                                } catch { /* */ }
+                              } catch (err: any) {
+                                showToast(err?.message || 'Could not join')
+                              }
+                            }}
+                            className="rounded-full bg-brand-purple px-3 py-1 text-[11px] font-extrabold text-white"
+                          >
+                            Play
+                          </span>
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={async (e) => {
+                              e.stopPropagation()
+                              markRead(n.id)
+                              try {
+                                await api.tictactoeDecline(String((n as any).gameId))
+                                showToast('Invite dismissed')
+                              } catch {
+                                /* */
+                              }
+                            }}
+                            className="rounded-full bg-gray-100 px-3 py-1 text-[11px] font-extrabold text-gray-600"
+                          >
+                            Not now
+                          </span>
                         </span>
                       )}
                     </span>

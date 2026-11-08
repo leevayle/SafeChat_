@@ -4,8 +4,10 @@ import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smi
 import { Avatar } from '../components/Avatar'
 import { NotesBoard } from '../components/NotesBoard'
 import { ChatImageCropper } from '../components/ChatImageCropper'
+import { TicTacToe } from '../components/TicTacToe'
 import { fileToDataUrl } from '../lib/imageProcess'
 import { EmptyState } from '../components/EmptyState'
+import { Toggle } from '../components/ui'
 import { api, hasAccessToken, type ApiMsg } from '../api'
 import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
 import { isRealtimeOpen, wsSendMessage, wsReceipt, wsLiveTyping, wsTyping } from '../realtime'
@@ -445,7 +447,15 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [showSelfChecklists, setShowSelfChecklists] = useState(true)
   const [showSelfReminders, setShowSelfReminders] = useState(true)
   const [showSelfMsgs, setShowSelfMsgs] = useState(true)
+  const [showSelfGames, setShowSelfGames] = useState(true)
+  const [selfGameOpen, setSelfGameOpen] = useState(false)
+  const [selfGameId, setSelfGameId] = useState<string | null>(null)
   const [selfNoteItems, setSelfNoteItems] = useState<any[]>([])
+  const [selfEditor, setSelfEditor] = useState<any | null>(null)
+  const [msgAction, setMsgAction] = useState<{ id: string; clientKey?: string } | null>(null)
+  const [editDraft, setEditDraft] = useState('')
+  const longMsgTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const longMsgMoved = useRef(false)
   const [blocking, setBlocking] = useState(false)
   const [recording, setRecording] = useState(false)
   const [recordSecs, setRecordSecs] = useState(0)
@@ -1585,6 +1595,17 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     return () => window.removeEventListener('sc_notes_preview', onStorage)
   }, [isSelfChat, me?.id])
 
+  useEffect(() => {
+    const open = (ev: Event) => {
+      const id = (ev as CustomEvent).detail?.gameId
+      if (!isSelfChat) return
+      setSelfGameId(id ? String(id) : null)
+      setSelfGameOpen(true)
+    }
+    window.addEventListener('sc:open-tictactoe', open)
+    return () => window.removeEventListener('sc:open-tictactoe', open)
+  }, [isSelfChat])
+
   if (chatLocked && !unlockedThisSession && !isSelfChat) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-white px-6">
@@ -1712,24 +1733,18 @@ return (
             {selfSettingsOpen && (
               <>
                 <button type="button" className="fixed inset-0 z-40" aria-label="Close" onClick={() => setSelfSettingsOpen(false)} />
-                <div className="absolute right-0 top-11 z-50 w-52 overflow-hidden rounded-2xl bg-white py-1.5 shadow-xl ring-1 ring-black/5">
+                <div className="absolute right-0 top-11 z-50 w-56 overflow-hidden rounded-2xl bg-white py-2 shadow-xl ring-1 ring-black/5">
                   {[
                     { label: 'Notes', on: showSelfNotes, set: setShowSelfNotes },
                     { label: 'Checklists', on: showSelfChecklists, set: setShowSelfChecklists },
                     { label: 'Reminders', on: showSelfReminders, set: setShowSelfReminders },
                     { label: 'Messages', on: showSelfMsgs, set: setShowSelfMsgs },
+                    { label: 'Games', on: showSelfGames, set: setShowSelfGames },
                   ].map((row) => (
-                    <button
-                      key={row.label}
-                      type="button"
-                      className="flex w-full items-center justify-between px-4 py-2.5 text-left text-sm font-bold hover:bg-gray-50"
-                      onClick={() => row.set(!row.on)}
-                    >
-                      <span>{row.label}</span>
-                      <span className={row.on ? 'text-brand-purple text-xs font-black' : 'text-gray-300 text-xs font-black'}>
-                        {row.on ? 'On' : 'Off'}
-                      </span>
-                    </button>
+                    <div key={row.label} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                      <span className="text-sm font-extrabold text-ink">{row.label}</span>
+                      <Toggle on={row.on} onChange={(v) => row.set(v)} label={row.label} />
+                    </div>
                   ))}
                 </div>
               </>
@@ -1845,95 +1860,82 @@ return (
       </header>
 
 
-      {isSelfChat && (
-        <div className="flex shrink-0 gap-2 overflow-x-auto border-b border-black/5 bg-white/90 px-3 py-2">
-          <button
-            type="button"
-            onClick={() => {
-              const now = new Date().toISOString()
-              const id = `note_${Date.now()}`
-              const item = { id, kind: 'note', title: '', body: '', createdAt: now, updatedAt: now }
-              try {
-                const key = `sc_notes_${me?.id}`
-                const prev = JSON.parse(localStorage.getItem(key) || '[]')
-                const next = [item, ...prev]
-                localStorage.setItem(key, JSON.stringify(next))
-                setSelfNoteItems(next)
-                window.dispatchEvent(new CustomEvent('sc_notes_preview'))
-              } catch { /* */ }
-              // open simple prompt for title/body
-              const title = window.prompt('Note title') || 'Note'
-              const body = window.prompt('Note text') || ''
-              try {
-                const key = `sc_notes_${me?.id}`
-                const prev = JSON.parse(localStorage.getItem(key) || '[]')
-                const next = prev.map((n: any) => n.id === id ? { ...n, title, body, updatedAt: new Date().toISOString() } : n)
-                localStorage.setItem(key, JSON.stringify(next))
-                setSelfNoteItems(next)
-              } catch { /* */ }
-            }}
-            className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
-          >
-            Note
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const title = window.prompt('Checklist title') || 'Checklist'
-              const line = window.prompt('First item') || ''
-              const now = new Date().toISOString()
-              const id = `cl_${Date.now()}`
-              const item = {
-                id,
-                kind: 'checklist',
-                title,
-                body: '',
-                items: line ? [{ id: `i_${Date.now()}`, text: line, done: false }] : [],
-                createdAt: now,
-                updatedAt: now,
-              }
-              try {
-                const key = `sc_notes_${me?.id}`
-                const prev = JSON.parse(localStorage.getItem(key) || '[]')
-                const next = [item, ...prev]
-                localStorage.setItem(key, JSON.stringify(next))
-                setSelfNoteItems(next)
-                window.dispatchEvent(new CustomEvent('sc_notes_preview'))
-              } catch { /* */ }
-            }}
-            className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
-          >
-            Checklist
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const title = window.prompt('Reminder') || 'Reminder'
-              const when = window.prompt('When (e.g. tomorrow 9am)') || ''
-              const now = new Date().toISOString()
-              const id = `rm_${Date.now()}`
-              const item = {
-                id,
-                kind: 'reminder',
-                title,
-                body: when,
-                remindAt: now,
-                createdAt: now,
-                updatedAt: now,
-              }
-              try {
-                const key = `sc_notes_${me?.id}`
-                const prev = JSON.parse(localStorage.getItem(key) || '[]')
-                const next = [item, ...prev]
-                localStorage.setItem(key, JSON.stringify(next))
-                setSelfNoteItems(next)
-                window.dispatchEvent(new CustomEvent('sc_notes_preview'))
-              } catch { /* */ }
-            }}
-            className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
-          >
-            Reminder
-          </button>
+      {isSelfChat && (showSelfNotes || showSelfChecklists || showSelfReminders || showSelfGames) && (
+        <div className="flex shrink-0 gap-2 overflow-x-auto border-b border-black/5 bg-white/90 px-3 py-2 no-scrollbar">
+          {showSelfNotes && (
+            <button
+              type="button"
+              onClick={() => {
+                const now = new Date().toISOString()
+                setSelfEditor({
+                  id: `note_${Date.now()}`,
+                  kind: 'note',
+                  title: '',
+                  body: '',
+                  createdAt: now,
+                  updatedAt: now,
+                  _isNew: true,
+                })
+              }}
+              className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
+            >
+              Note
+            </button>
+          )}
+          {showSelfChecklists && (
+            <button
+              type="button"
+              onClick={() => {
+                const now = new Date().toISOString()
+                setSelfEditor({
+                  id: `cl_${Date.now()}`,
+                  kind: 'checklist',
+                  title: '',
+                  body: '',
+                  items: [{ id: `i_${Date.now()}`, text: '', done: false }],
+                  createdAt: now,
+                  updatedAt: now,
+                  _isNew: true,
+                })
+              }}
+              className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
+            >
+              Checklist
+            </button>
+          )}
+          {showSelfReminders && (
+            <button
+              type="button"
+              onClick={() => {
+                const now = new Date().toISOString()
+                setSelfEditor({
+                  id: `rm_${Date.now()}`,
+                  kind: 'reminder',
+                  title: '',
+                  body: '',
+                  remindAt: now,
+                  createdAt: now,
+                  updatedAt: now,
+                  _isNew: true,
+                })
+              }}
+              className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
+            >
+              Reminder
+            </button>
+          )}
+          {showSelfGames && (
+            <button
+              type="button"
+              onClick={() => {
+                setSelfGameId(null)
+                setSelfGameOpen(true)
+              }}
+              className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3.5 py-2 text-sm font-extrabold text-brand-purple"
+            >
+              Game
+            </button>
+          )}
         </div>
       )}
 
@@ -1955,17 +1957,20 @@ return (
         )}
 
         {isSelfChat &&
-          selfNoteItems
+          [...selfNoteItems]
             .filter((n) => {
               if (n.kind === 'note' && !showSelfNotes) return false
               if (n.kind === 'checklist' && !showSelfChecklists) return false
               if (n.kind === 'reminder' && !showSelfReminders) return false
               return true
             })
+            .sort((a, b) => (Date.parse(a.updatedAt) || 0) - (Date.parse(b.updatedAt) || 0))
             .map((n) => (
-              <div
+              <button
+                type="button"
                 key={n.id}
-                className="mx-auto w-full max-w-[85%] rounded-2xl bg-white px-4 py-3 shadow-sm ring-1 ring-black/5"
+                onClick={() => setSelfEditor({ ...n, _isNew: false })}
+                className="mx-auto block w-full max-w-[85%] rounded-2xl bg-white px-4 py-3 text-left shadow-sm ring-1 ring-black/5"
               >
                 <p className="text-[10px] font-black uppercase tracking-wide text-brand-purple">
                   {n.kind === 'checklist' ? 'Checklist' : n.kind === 'reminder' ? 'Reminder' : 'Note'}
@@ -1981,7 +1986,7 @@ return (
                 <p className="mt-1 text-[10px] font-bold text-gray-300">
                   {n.updatedAt ? new Date(n.updatedAt).toLocaleString() : ''}
                 </p>
-              </div>
+              </button>
             ))}
         <AnimatePresence initial={false}>
           {(showSelfMsgs || !isSelfChat) && msgs.map((m) => {
@@ -2590,6 +2595,131 @@ return (
             <button type="button" className="mt-2 w-full py-2 text-sm font-bold text-gray-500" onClick={() => setLockPrompt(false)}>
               Cancel
             </button>
+          </div>
+        </div>
+      )}
+
+      
+      {selfGameOpen && (
+        <div className="absolute inset-0 z-[72] flex flex-col bg-white">
+          <TicTacToe
+            initialGameId={selfGameId}
+            onClose={() => {
+              setSelfGameOpen(false)
+              setSelfGameId(null)
+            }}
+          />
+        </div>
+      )}
+
+      {selfEditor && (
+        <div className="absolute inset-0 z-[70] flex flex-col bg-white">
+          <header className="flex items-center gap-2 border-b border-black/5 px-3 pb-3 pt-[max(1rem,env(safe-area-inset-top))]">
+            <button
+              type="button"
+              onClick={() => setSelfEditor(null)}
+              className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-black/5"
+            >
+              <ArrowLeft size={22} />
+            </button>
+            <p className="flex-1 text-base font-black text-ink">
+              {selfEditor.kind === 'checklist' ? 'Checklist' : selfEditor.kind === 'reminder' ? 'Reminder' : 'Note'}
+            </p>
+            <button
+              type="button"
+              className="rounded-full bg-brand-purple px-4 py-2 text-sm font-extrabold text-white"
+              onClick={() => {
+                if (!me?.id) return
+                const now = new Date().toISOString()
+                const saved = { ...selfEditor, updatedAt: now, _isNew: undefined }
+                try {
+                  const key = `sc_notes_${me.id}`
+                  const prev = JSON.parse(localStorage.getItem(key) || '[]') as any[]
+                  const idx = prev.findIndex((x) => x.id === saved.id)
+                  let next: any[]
+                  if (idx >= 0) {
+                    next = prev.map((x, i) => (i === idx ? saved : x))
+                  } else {
+                    next = [saved, ...prev]
+                  }
+                  // newest edited first for list storage; timeline sorts by updatedAt
+                  next.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0))
+                  localStorage.setItem(key, JSON.stringify(next))
+                  setSelfNoteItems(next)
+                  window.dispatchEvent(new CustomEvent('sc_notes_preview'))
+                } catch { /* */ }
+                setSelfEditor(null)
+                showToast?.('Saved')
+              }}
+            >
+              Save
+            </button>
+          </header>
+          <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+            <input
+              value={selfEditor.title || ''}
+              onChange={(e) => setSelfEditor({ ...selfEditor, title: e.target.value })}
+              placeholder="Title"
+              className="w-full border-0 bg-transparent text-xl font-black outline-none placeholder:text-gray-300"
+              autoFocus
+            />
+            {selfEditor.kind === 'note' && (
+              <textarea
+                value={selfEditor.body || ''}
+                onChange={(e) => setSelfEditor({ ...selfEditor, body: e.target.value })}
+                placeholder="Write something…"
+                rows={12}
+                className="w-full resize-none border-0 bg-transparent text-[15px] font-semibold leading-relaxed outline-none placeholder:text-gray-300"
+              />
+            )}
+            {selfEditor.kind === 'reminder' && (
+              <textarea
+                value={selfEditor.body || ''}
+                onChange={(e) => setSelfEditor({ ...selfEditor, body: e.target.value })}
+                placeholder="When or details…"
+                rows={4}
+                className="w-full resize-none border-0 bg-transparent text-[15px] font-semibold outline-none placeholder:text-gray-300"
+              />
+            )}
+            {selfEditor.kind === 'checklist' && (
+              <div className="space-y-2">
+                {(selfEditor.items || []).map((it: any, idx: number) => (
+                  <div key={it.id || idx} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={!!it.done}
+                      onChange={() => {
+                        const items = [...(selfEditor.items || [])]
+                        items[idx] = { ...items[idx], done: !items[idx].done }
+                        setSelfEditor({ ...selfEditor, items })
+                      }}
+                    />
+                    <input
+                      value={it.text || ''}
+                      onChange={(e) => {
+                        const items = [...(selfEditor.items || [])]
+                        items[idx] = { ...items[idx], text: e.target.value }
+                        setSelfEditor({ ...selfEditor, items })
+                      }}
+                      className="flex-1 border-0 bg-transparent text-sm font-semibold outline-none"
+                      placeholder="Item"
+                    />
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="text-sm font-extrabold text-brand-purple"
+                  onClick={() =>
+                    setSelfEditor({
+                      ...selfEditor,
+                      items: [...(selfEditor.items || []), { id: `i_${Date.now()}`, text: '', done: false }],
+                    })
+                  }
+                >
+                  Add item
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

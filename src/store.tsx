@@ -2016,9 +2016,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     }
     window.addEventListener('sc:delete-chats', onDelete)
+    const onDeleteCalls = (ev: Event) => {
+      const ids = new Set((((ev as CustomEvent).detail?.ids || []) as string[]).map(String))
+      if (!ids.size) return
+      setCalls((prev: any[]) => {
+        const next = prev.filter((c: any) => {
+          const id = String(c.id || c.call_id || `${c.contactId}-${c.time}`)
+          return !ids.has(id)
+        })
+        return next
+      })
+    }
+    window.addEventListener('sc:delete-calls', onDeleteCalls)
     window.addEventListener('sc:delete-locked-chats', onDeleteLocked)
     return () => {
       window.removeEventListener('sc:delete-chats', onDelete)
+      window.removeEventListener('sc:delete-calls', onDeleteCalls)
       window.removeEventListener('sc:delete-locked-chats', onDeleteLocked)
     }
   }, [])
