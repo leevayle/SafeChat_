@@ -1,0 +1,789 @@
+import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import {
+  Search,
+  MoreVertical,
+  Plus,
+  X,
+  MessageSquarePlus,
+  Users,
+  ContactRound,
+  Settings2,
+  UserRoundPlus,
+  BellRing,
+  Headphones,
+  Clock,
+  RefreshCw,
+  Lock,
+  Pin,
+  Trash2,
+  EyeOff,
+  Archive,
+} from 'lucide-react'
+import { Wordmark } from '../components/Logo'
+import { Avatar } from '../components/Avatar'
+import { StatusRing } from '../components/StatusRing'
+import { ChatsHomeSkeleton } from '../components/ChatsHomeSkeleton'
+import { EmptyState } from '../components/EmptyState'
+import { PinPad } from '../components/PinPad'
+import { useStore } from '../store'
+import { api } from '../api'
+
+const FILTERS = ['All chats', 'Unread', 'Online',] as const
+type Filter = (typeof FILTERS)[number]
+
+type Props = {
+  onOpenChat: (id: string) => void
+  onNewChat: () => void
+  onNewGroup: () => void
+  onSettings: () => void
+  onContacts: () => void
+  onSaveRequests: () => void
+  onOpenStatus: (userId: string) => void
+  onNotifications: () => void
+  onSupport: () => void
+}
+
+export function ChatsHome({
+  onOpenChat,
+  onNewChat,
+  onNewGroup,
+  onSettings,
+  onContacts,
+  onSaveRequests,
+  onOpenStatus,
+  onNotifications,
+  onSupport,
+}: Props) {
+  const { chats, contacts, statusList, me, listsReady, saveRequestPending, notifUnreadCount, typingPeers, presenceMap, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, refreshNotifCount, refreshSubscription, showToast } = useStore()
+  /** System-only: save requests etc. Chat unreads live on the bottom nav. */
+  const systemNotifCount = (saveRequestPending || 0) + (notifUnreadCount || 0)
+  const [filter, setFilter] = useState<Filter>('All chats')
+  const [searching, setSearching] = useState(false)
+  const [q, setQ] = useState('')
+  const [menu, setMenu] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('sc_pinned_chats') || '[]') } catch { return [] }
+  })
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const longPressMoved = useRef(false)
+  const selectLockUntil = useRef(0)
+  const selectTargetId = useRef<string | null>(null)
+  const [chatsLocked, setChatsLocked] = useState(() => {
+    try { return localStorage.getItem('sc_chats_locked') === '1' } catch { return false }
+  })
+  const [lockUi, setLockUi] = useState<'none' | 'set' | 'confirm' | 'unlock'>('none')
+  const [pendingPin, setPendingPin] = useState('')
+
+  const pendingCount = saveRequestPending
+  const showSkeleton = !listsReady
+  /** Rows that already entered - receipt/state updates must not re-animate the whole row */
+  const seenRows = useRef<Set<string>>(new Set())
+
+  // O(1) contact lookup - avoid .find() on every row / status
+  const contactMap = useMemo(() => {
+    const m = new Map<string, (typeof contacts)[0]>()
+    for (const c of contacts) {
+      if (c.id) m.set(c.id, c)
+      if (c.peerId) m.set(c.peerId, c)
+    }
+    return m
+  }, [contacts])
+
+  const contactById = (id: string, fallback?: { name?: string; photo?: string | null; hue?: [string, string] }) => {
+    const hit = contactMap.get(id)
+    const online = !!(presenceMap?.[id] ?? hit?.online)
+    if (hit) return { ...hit, online }
+    return {
+      id,
+      name: fallback?.name || id,
+      username: '',
+      phone: '',
+      bio: '',
+      photo: fallback?.photo ?? null,
+      online,
+      hue: (fallback?.hue || ['#7B2CBF', '#6389EB']) as [string, string],
+    }
+  }
+
+  /** status counts per user: total + how many I've viewed (active only) */
+  const statusMeta = useMemo(() => {
+    const map: Record<string, { total: number; viewed: number }> = {}
+    const now = Date.now()
+    for (const s of statusList) {
+      if (s.userId === me?.id) continue
+      if (s.expiresAt) {
+        const t = Date.parse(s.expiresAt)
+        if (!Number.isNaN(t) && t <= now) continue
+      }
+      if (!map[s.userId]) map[s.userId] = { total: 0, viewed: 0 }
+      map[s.userId].total++
+      if (Array.isArray(s.views) && me && s.views.includes(me.id)) map[s.userId].viewed++
+    }
+    return map
+  }, [statusList, me])
+
+  const list = useMemo(() => {
+    // Dedupe by peer so one person never appears twice
+    const byPeer = new Map<string, (typeof chats)[0]>()
+    for (const c of chats) {
+      const key = c.contactId
+      const prev = byPeer.get(key)
+      if (!prev) {
+        byPeer.set(key, c)
+        continue
+      }
+      const prevT = prev.iso ? Date.parse(prev.iso) : 0
+      const nextT = c.iso ? Date.parse(c.iso) : 0
+      if (nextT >= prevT) byPeer.set(key, c)
+    }
+    const qLower = q ? q.toLowerCase() : ''
+    const filtered = Array.from(byPeer.values()).filter((c) => {
+      const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
+      if (
+        qLower &&
+        !ct.name.toLowerCase().includes(qLower) &&
+        !ct.username?.toLowerCase().includes(qLower)
+      )
+        return false
+      if (filter === 'Unread') return c.unread > 0
+      if (filter === 'Online') return ct.online
+      return true
+    })
+    // Pinned chats first
+    filtered.sort((a, b) => {
+      const ap = pinnedIds.includes(a.contactId) ? 1 : 0
+      const bp = pinnedIds.includes(b.contactId) ? 1 : 0
+      if (ap !== bp) return bp - ap
+      return 0
+    })
+    return filtered
+  }, [filter, q, chats, contactMap, presenceMap, pinnedIds])
+
+  const statusUsers = useMemo(() => {
+    const byUser = new Map<string, any>()
+    const now = Date.now()
+    for (const s of statusList) {
+      if (!s.userId || s.userId === me?.id) continue
+      if (s.expiresAt) {
+        const t = Date.parse(s.expiresAt)
+        if (!Number.isNaN(t) && t <= now) continue
+      }
+      if (byUser.has(s.userId)) continue
+      const contact = contactMap.get(s.userId)
+      byUser.set(s.userId, {
+        id: s.userId,
+        name: (contact as any)?.savedName || contact?.name || s.user?.name || 'Contact',
+        username: contact?.username || s.user?.username || '',
+        photo: contact?.photo ?? s.user?.photo ?? null,
+        hue: contact?.hue || s.user?.hue || (['#7B2CBF', '#6389EB'] as [string, string]),
+        online: false,
+      })
+    }
+    return Array.from(byUser.values()).slice(0, 12)
+  }, [statusList, contactMap, me])
+
+  const toggleSelectChat = (id: string) => {
+    const now = Date.now()
+    // While the selection bar is appearing, only honor the original chat id
+    if (now < selectLockUntil.current) {
+      if (selectTargetId.current && id !== selectTargetId.current) return
+    }
+    setSelectedIds((prev) => {
+      if (prev.length === 0) {
+        selectTargetId.current = id
+        selectLockUntil.current = now + 450
+        return [id]
+      }
+      if (prev.includes(id)) {
+        const next = prev.filter((x) => x !== id)
+        if (!next.length) {
+          selectTargetId.current = null
+          selectLockUntil.current = 0
+        }
+        return next
+      }
+      return [...prev, id]
+    })
+  }
+  const clearSelection = () => setSelectedIds([])
+  const persistPinned = (ids: string[]) => {
+    setPinnedIds(ids)
+    try { localStorage.setItem('sc_pinned_chats', JSON.stringify(ids)) } catch { /* */ }
+  }
+  const pinSelected = () => {
+    const allPinned = selectedIds.length > 0 && selectedIds.every((id) => pinnedIds.includes(id))
+    if (allPinned) {
+      persistPinned(pinnedIds.filter((id) => !selectedIds.includes(id)))
+      showToast(selectedIds.length > 1 ? 'Chats unpinned' : 'Chat unpinned')
+      clearSelection()
+      return
+    }
+    const room = Math.max(0, 3 - pinnedIds.length)
+    if (room <= 0) {
+      showToast('You can pin up to 3 chats')
+      return
+    }
+    const toAdd = selectedIds.filter((id) => !pinnedIds.includes(id)).slice(0, room)
+    if (!toAdd.length) {
+      clearSelection()
+      return
+    }
+    if (selectedIds.filter((id) => !pinnedIds.includes(id)).length > room) {
+      showToast('Only 3 chats can be pinned')
+    }
+    persistPinned([...pinnedIds, ...toAdd])
+    showToast(toAdd.length > 1 ? 'Chats pinned' : 'Chat pinned')
+    clearSelection()
+  }
+  const deleteSelected = () => {
+    try {
+      window.dispatchEvent(new CustomEvent('sc:delete-chats', { detail: { ids: [...selectedIds] } }))
+    } catch { /* */ }
+    showToast(selectedIds.length > 1 ? 'Chats deleted' : 'Chat deleted')
+    clearSelection()
+  }
+  const lockSelected = () => {
+    let pin = ''
+    try { pin = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+    if (!pin) {
+      showToast('Set a chat lock PIN in Settings → Security first')
+      clearSelection()
+      onSettings()
+      return
+    }
+    const entered = window.prompt('Enter chat lock PIN to lock')
+    if (entered == null) return
+    if (entered !== pin) {
+      showToast('Wrong PIN')
+      return
+    }
+    try {
+      const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+      for (const id of selectedIds) map[id] = true
+      localStorage.setItem('sc_chat_locks', JSON.stringify(map))
+      showToast(selectedIds.length > 1 ? 'Chats locked' : 'Chat locked')
+    } catch { /* */ }
+    clearSelection()
+  }
+
+
+  return (
+    <div className="relative flex h-full flex-col bg-white">
+      {/* z-10: sticky top chrome - below overlays */}
+      <header className="sticky top-0 z-10 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 pb-3 px-5 pt-[max(12px,env(safe-area-inset-top))] backdrop-blur">
+        <div className="flex w-full items-center">
+          {searching ? (
+            <div className="flex h-11 w-full items-center gap-2 rounded-full bg-gray-100 px-4">
+              <Search size={18} className="shrink-0 text-brand-purple" />
+              <input
+                autoFocus
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search chats"
+                className="w-full bg-transparent font-semibold outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setSearching(false)
+                  setQ('')
+                }}
+                aria-label="Close search"
+                className="shrink-0"
+              >
+                <X size={18} className="text-gray-500" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex w-full items-center justify-between">
+              <Wordmark className="text-2xl leading-none" />
+              <div className="flex gap-1">
+                <IconBtn label="Search" onClick={() => setSearching(true)}>
+                  <Search size={22} />
+                </IconBtn>
+                <IconBtn label="Menu" onClick={() => setMenu((m) => !m)}>
+                  <span className="relative">
+                    <MoreVertical size={22} />
+                    {systemNotifCount > 0 ? (
+                      <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-brand-red ring-2 ring-white" />
+                    ) : null}
+                  </span>
+                </IconBtn>
+              </div>
+            </div>
+          )}
+        </div>
+      </header>
+
+      {selectedIds.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          transition={{ duration: 0.22, ease: 'easeOut', delay: 0.12 }}
+          className="z-30 flex items-center gap-2 border-b border-black/5 bg-white/95 px-2 py-2 shadow-sm backdrop-blur"
+        >
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600"
+            aria-label="Cancel selection"
+          >
+            <X size={18} />
+          </button>
+          <span className="flex h-7 min-w-7 shrink-0 items-center justify-center rounded-full bg-brand-purple px-2 text-xs font-black text-white">
+            {selectedIds.length}
+          </span>
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto no-scrollbar">
+            <button type="button" onClick={pinSelected} className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3 py-2 text-xs font-extrabold text-brand-purple">
+              <Pin size={15} className="rotate-45 text-gray-600" />{' '}
+              {selectedIds.length > 0 && selectedIds.every((id) => pinnedIds.includes(id))
+                ? 'Unpin'
+                : 'Pin'}
+            </button>
+            <button type="button" onClick={deleteSelected} className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-red/10 px-3 py-2 text-xs font-extrabold text-brand-red">
+              <Trash2 size={15} /> Delete
+            </button>
+            <button type="button" disabled className="flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-3 py-2 text-xs font-extrabold text-gray-300">
+              <EyeOff size={15} /> Hide
+            </button>
+            <button type="button" disabled className="flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-3 py-2 text-xs font-extrabold text-gray-300">
+              <Archive size={15} /> Archive
+            </button>
+            <button type="button" onClick={lockSelected} className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3 py-2 text-xs font-extrabold text-brand-purple">
+              <Lock size={15} /> Lock
+            </button>
+          </div>
+        </motion.div>
+      )}
+      {/* z-40: hamburger menu covers header + list + FAB + bottom nav */}
+      <AnimatePresence>
+        {menu && (
+          <>
+            <motion.div
+              key="menu-backdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-40 bg-ink/40 backdrop-blur-sm"
+              onClick={() => setMenu(false)}
+            />
+            <motion.ul
+              key="menu-panel"
+              initial={{ opacity: 0, scale: 0.92, y: -6 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: -4 }}
+              transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+              style={{ transformOrigin: 'top right' }}
+              className="absolute right-3 top-[max(3.5rem,calc(env(safe-area-inset-top)+2.5rem))] z-50 w-[15.5rem] overflow-hidden rounded-3xl bg-white/95 p-2 shadow-2xl ring-1 ring-black/6 backdrop-blur-xl dark:bg-[#1a1f26]/95 dark:ring-white/10 dark:text-white"
+            >
+              {(
+                [
+                  { label: 'New chat', fn: onNewChat, Icon: MessageSquarePlus },
+                  { label: 'New group', fn: onNewGroup, Icon: Users },
+                  { label: 'Contacts', fn: onContacts, Icon: ContactRound },
+                  { label: 'Save requests', fn: onSaveRequests, Icon: UserRoundPlus, badge: pendingCount },
+                  { label: 'Notifications', fn: onNotifications, Icon: BellRing, badge: notifUnreadCount },
+                  {
+                    label: 'Refresh',
+                    fn: () => {
+                      showToast('Refreshing…')
+                      void (async () => {
+                        // Flush pending sends before pulling new data
+                        try {
+                          const { loadOutbox, removeOutbox } = await import('../lib/appCache')
+                          const items = await loadOutbox()
+                          for (const item of items || []) {
+                            if (!item.conversationId) continue
+                            try {
+                              await api.send(item.conversationId, item.text, item.image)
+                              await removeOutbox(item.id)
+                            } catch { /* retry later */ }
+                          }
+                        } catch { /* */ }
+                        await Promise.all([
+                          refreshChats({ lean: true }),
+                          refreshCalls(),
+                          refreshStatus(),
+                          refreshContacts(),
+                          refreshSaveRequests(),
+                          refreshNotifCount?.() ?? Promise.resolve(),
+                          refreshSubscription(),
+                        ])
+                        showToast('Up to date')
+                      })()
+                    },
+                    Icon: RefreshCw,
+                  },
+                  { label: 'Support', fn: onSupport, Icon: Headphones },
+                  { label: 'Settings', fn: onSettings, Icon: Settings2 },
+                ] as const
+              ).map(({ label, fn, Icon, ...rest }, i, arr) => {
+                const badge = 'badge' in rest ? (rest as { badge?: number }).badge : 0
+                return (
+                  <li
+                    key={label}
+                    className={undefined}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenu(false)
+                        fn()
+                      }}
+                      className="flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-left text-[13px] font-extrabold text-ink transition active:scale-[0.98] hover:bg-brand-purple/6 dark:text-white dark:hover:bg-white/10"
+                    >
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-purple/15 to-brand-orange/10 ring-1 ring-brand-purple/10">
+                        <Icon size={16} className="text-brand-purple" strokeWidth={2.4} />
+                      </span>
+                      <span className="min-w-0 flex-1">{label}</span>
+                      {badge && badge > 0 ? (
+                        <span className="min-w-5 rounded-full bg-brand-red px-1.5 text-center text-[11px] font-black text-white">
+                          {badge > 9 ? '9+' : badge}
+                        </span>
+                      ) : null}
+                    </button>
+                  </li>
+                )
+              })}
+            </motion.ul>
+          </>
+        )}
+      </AnimatePresence>
+
+
+      {lockUi !== 'none' && (
+        <div className="absolute inset-0 z-[60] bg-white ">
+          <PinPad
+            title={
+              lockUi === 'set'
+                ? 'Create PIN'
+                : lockUi === 'confirm'
+                  ? 'Confirm PIN'
+                  : 'Chats locked'
+            }
+            subtitle={
+              lockUi === 'set'
+                ? 'Choose a 4-digit PIN to lock your chat list'
+                : lockUi === 'confirm'
+                  ? 'Enter the same PIN again'
+                  : 'Enter your PIN to unlock chats'
+            }
+            mode={lockUi === 'unlock' ? 'unlock' : 'set'}
+            onCancel={() => {
+              setLockUi('none')
+              setPendingPin('')
+            }}
+            onComplete={(pin) => {
+              if (lockUi === 'set') {
+                setPendingPin(pin)
+                setLockUi('confirm')
+                return true
+              }
+              if (lockUi === 'confirm') {
+                if (pin !== pendingPin) {
+                  setPendingPin('')
+                  setLockUi('set')
+                  showToast('PINs did not match')
+                  return false
+                }
+                try {
+                  localStorage.setItem('sc_chat_lock_pin', pin)
+                  localStorage.setItem('sc_chats_locked', '1')
+                } catch { /* */ }
+                setChatsLocked(true)
+                setLockUi('none')
+                setPendingPin('')
+                showToast('Chat lock enabled')
+                return true
+              }
+              // unlock
+              let stored = ''
+              try { stored = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+              if (pin !== stored) return false
+              try { localStorage.setItem('sc_chats_locked', '0') } catch { /* */ }
+              setChatsLocked(false)
+              setLockUi('none')
+              showToast('Chats unlocked')
+              return true
+            }}
+          />
+        </div>
+      )}
+
+      {chatsLocked && lockUi === 'none' ? (
+        <div className="absolute inset-0 z-[55] bg-white ">
+          <PinPad
+            title="Chats locked"
+            subtitle="Enter your PIN to open your inbox"
+            mode="unlock"
+            onComplete={(pin) => {
+              let stored = ''
+              try { stored = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+              if (pin !== stored) return false
+              try { localStorage.setItem('sc_chats_locked', '0') } catch { /* */ }
+              setChatsLocked(false)
+              showToast('Chats unlocked')
+              return true
+            }}
+          />
+        </div>
+      ) : null}
+
+      <div className="min-h-0 flex-1 overflow-y-auto pb-24 ">
+        {showSkeleton ? (
+          <ChatsHomeSkeleton />
+        ) : (
+          <>
+            {statusUsers.length > 0 && (
+              <div data-no-tab-swipe="1" className="no-scrollbar flex gap-4 overflow-x-auto border-b border-gray-200 px-5 pb-3 pt-3">
+                {statusUsers.map((c: any, i: number) => {
+                  const meta = statusMeta[c.id] || { total: 1, viewed: 0 }
+                  return (
+                    <motion.button
+                      key={c.id}
+                      type="button"
+                      initial={{ opacity: 0, scale: 0.85 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: 0.04 * i, type: 'spring' }}
+                      whileTap={{ scale: 0.92 }}
+                      className="flex shrink-0 flex-col items-center gap-1.5 p-[2px]"
+                      onClick={() => onOpenStatus(c.id)}
+                    >
+                      <StatusRing total={meta.total} viewed={meta.viewed} size={60}>
+                        <Avatar contact={{ ...c, online: !!(presenceMap?.[c.id] ?? c.online) }} size={50} />
+                      </StatusRing>
+                      <span className="w-16 truncate text-center text-xs font-bold">{c.name.split(' ')[0]}</span>
+                    </motion.button>
+                  )
+                })}
+              </div>
+            )}
+
+            <div className="no-scrollbar flex gap-1.5 overflow-x-auto px-4 pb-2 pt-1.5">
+              {FILTERS.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setFilter(f)}
+                  className={`shrink-0 rounded-full px-2.5 py-1 font-ui text-[11px] font-extrabold leading-none transition ${
+                    filter === f
+                      ? 'bg-brand-purple text-white shadow-sm'
+                      : 'bg-brand-purple/10 text-brand-purple'
+                  }`}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+
+            <ul className="px-2">
+              {list.length === 0 && (
+                <div className="flex min-h-[calc(100vh-16rem)] flex-col items-center justify-center">
+                  <EmptyState
+                    title={
+                      filter === 'Unread'
+                        ? 'No unread chats'
+                        : filter === 'Online'
+                          ? 'No one is online'
+                          : chats.length === 0
+                            ? 'No chats yet'
+                            : 'Nothing here'
+                    }
+                    subtitle={
+                      filter === 'Unread'
+                        ? 'You’re all caught up, new messages will show under Unread.'
+                        : filter === 'Online'
+                          ? 'None of your contacts are online right now. Check back later.'
+                          : chats.length === 0
+                            ? 'When you and a friend save each other, conversations show up here. Tap + to start.'
+                            : 'Try a different filter to see more chats.'
+                    }
+                  />
+                </div>
+              )}
+              {list.map((c, i) => {
+                const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
+                const meta = statusMeta[c.contactId]
+                const rowKey = c.conversationId || c.contactId
+                const isNewRow = !seenRows.current.has(rowKey)
+                if (isNewRow) seenRows.current.add(rowKey)
+                return (
+                  <motion.li
+                    key={rowKey}
+                    initial={isNewRow ? { opacity: 0, y: 10 } : false}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={isNewRow ? { delay: Math.min(i, 8) * 0.03 } : { duration: 0 }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedIds.length) {
+                          // Ignore clicks that happen while the bar is settling (layout shift)
+                          if (Date.now() < selectLockUntil.current) return
+                          toggleSelectChat(c.contactId)
+                          return
+                        }
+                        onOpenChat(c.contactId)
+                      }}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        toggleSelectChat(c.contactId)
+                      }}
+                      onPointerDown={(e) => {
+                        longPressMoved.current = false
+                        const targetId = c.contactId
+                        if (longPressTimer.current) clearTimeout(longPressTimer.current)
+                        longPressTimer.current = setTimeout(() => {
+                          if (!longPressMoved.current) {
+                            // Capture the intended chat id at press time
+                            selectTargetId.current = targetId
+                            toggleSelectChat(targetId)
+                          }
+                        }, 480)
+                      }}
+                      onPointerMove={() => {
+                        longPressMoved.current = true
+                      }}
+                      onPointerUp={() => {
+                        if (longPressTimer.current) clearTimeout(longPressTimer.current)
+                      }}
+                      onPointerCancel={() => {
+                        if (longPressTimer.current) clearTimeout(longPressTimer.current)
+                      }}
+                      className={`flex w-full items-center gap-3 border-b border-gray-100/80 px-3 py-3.5 text-left last:border-0 ${
+                        selectedIds.includes(c.contactId)
+                          ? 'bg-brand-purple/15 ring-1 ring-inset ring-brand-purple/30 transition-colors duration-200'
+                          : 'hover:bg-gray-50/80 transition-colors duration-150'
+                      }`}
+                    >
+                      {meta && meta.total > 0 ? (
+                        <span
+                          role="button"
+                          tabIndex={0}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onOpenStatus(c.contactId)
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              onOpenStatus(c.contactId)
+                            }
+                          }}
+                          className="shrink-0 cursor-pointer"
+                          aria-label="View status"
+                        >
+                          <StatusRing total={meta.total} viewed={meta.viewed} size={56}>
+                            <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online),
+                          premium: !!(ct as any).verifiedBadge }} size={46} />
+                          </StatusRing>
+                        </span>
+                      ) : (
+                        <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online),
+                          premium: !!(ct as any).verifiedBadge }} size={52} />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="truncate font-extrabold">
+                            {pinnedIds.includes(c.contactId) ? (
+                              <Pin
+                                size={12}
+                                className="mr-1 inline -translate-y-px rotate-45 text-gray-400"
+                                aria-hidden
+                              />
+                            ) : null}
+                            {(ct as any).savedName || ct.name}
+                          </p>
+                          <div className="flex shrink-0 flex-col items-end gap-0.5">
+                            <span
+                              className={`text-xs font-bold ${
+                                c.unread > 0 && !c.mine ? 'text-brand-purple' : 'text-gray-400'
+                              }`}
+                            >
+                              {c.time}
+                            </span>
+                            {c.mine && (
+                              <span
+                                className={`inline-flex items-center text-[11px] font-black leading-none ${
+                                  c.state === 'read' ? 'text-brand-blue' : 'text-gray-400'
+                                }`}
+                                title={c.state || 'sent'}
+                              >
+                                {c.state === 'pending' ? (
+                                  <Clock size={12} strokeWidth={2.5} className="opacity-70" aria-label="Sending" />
+                                ) : c.state === 'failed' ? (
+                                  '!'
+                                ) : c.state === 'sent' || !c.state ? (
+                                  '✓'
+                                ) : (
+                                  '✓✓'
+                                )}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="truncate text-sm font-semibold text-gray-500">
+                            {c.mine ? 'You: ' : ''}
+                            {(typingPeers?.[ct.id] || typingPeers?.[c.contactId] || typingPeers?.[(ct as any).peerId]) ? (
+                              <span className="font-bold text-brand-blue">typing…</span>
+                            ) : (
+                              c.last
+                            )}
+                          </p>
+                          {c.unread > 0 && (
+                            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-purple px-1.5 text-[11px] font-black text-white">
+                              {c.unread}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  </motion.li>
+                )
+              })}
+            </ul>
+          </>
+        )}
+      </div>
+
+      <motion.button
+        type="button"
+        aria-label="New chat"
+        whileHover={{ scale: 1.06 }}
+        whileTap={{ scale: 0.94 }}
+        onClick={onNewChat}
+        className="fab-theme fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white"
+      >
+        <Plus size={26} strokeWidth={2.4} />
+      </motion.button>
+    </div>
+  )
+}
+
+export function IconBtn({
+  children,
+  onClick,
+  label,
+  className = '',
+}: {
+  children: ReactNode
+  onClick?: () => void
+  label: string
+  className?: string
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      className={`flex h-10 w-10 items-center justify-center rounded-full text-ink hover:bg-gray-100 ${className}`}
+    >
+      {children}
+    </button>
+  )
+}

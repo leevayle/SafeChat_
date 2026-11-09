@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1" />
+    <meta name="theme-color" content="#7B2CBF" />
+    <meta name="description" content="SafeChat — Chat freely. Chat safely." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>SafeChat</title>
+    <!-- FOUC guard: paint last known user's theme before React boots -->
+    <script>
+      (function () {
+        try {
+          var THEMES = {
+            purple: { p: '#7B2CBF', a: '#9C31A1' },
+            blue: { p: '#6389EB', a: '#4F73D4' },
+            orange: { p: '#FF8C00', a: '#F97316' },
+            white: { p: '#374151', a: '#6B7280' },
+          }
+          var ACCENTS = { purple: '#7B2CBF', blue: '#6389EB', orange: '#FF8C00', neutral: '#4B5563' }
+          function hexToRgb(hex) {
+            var h = String(hex || '').replace('#', '')
+            if (h.length === 3) h = h.split('').map(function (c) { return c + c }).join('')
+            var n = parseInt(h, 16)
+            if (isNaN(n)) return '123, 44, 191'
+            return ((n >> 16) & 255) + ', ' + ((n >> 8) & 255) + ', ' + (n & 255)
+          }
+          var owner = localStorage.getItem('sc_user_id')
+          var map = {}
+          try { map = JSON.parse(localStorage.getItem('sc_appearance_by_user') || '{}') || {} } catch (e) {}
+          var a = (owner && map[owner]) || null
+          if (!a) {
+            try {
+              var s = JSON.parse(localStorage.getItem('sc_settings') || 'null')
+              if (s && s.theme) a = { theme: s.theme, chatAccent: s.chatAccent, colorMode: s.colorMode, liquidGlass: s.liquidGlass }
+            } catch (e) {}
+          }
+          if (!a) return
+          var t = THEMES[a.theme] || THEMES.purple
+          var root = document.documentElement
+          root.style.setProperty('--color-brand-purple', t.p)
+          root.style.setProperty('--color-brand-magenta', t.a)
+          root.style.setProperty('--brand-shadow-rgb', hexToRgb(t.p))
+          root.dataset.theme = a.theme || 'purple'
+          var ac = ACCENTS[a.chatAccent] || ACCENTS.purple
+          root.style.setProperty('--chat-accent', ac)
+          root.style.setProperty('--chat-accent-rgb', hexToRgb(ac))
+          if (a.colorMode === 'dark') { root.dataset.mode = 'dark'; root.classList.add('dark') }
+          else { root.dataset.mode = 'light'; root.classList.remove('dark'); root.style.colorScheme = 'light' }
+          if (a.liquidGlass) root.dataset.glass = '1'
+          else delete root.dataset.glass
+          var meta = document.querySelector('meta[name="theme-color"]')
+          if (meta) meta.setAttribute('content', t.p)
+        } catch (e) {}
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

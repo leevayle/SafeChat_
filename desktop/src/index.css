@@ -1,0 +1,618 @@
+@import url("https://fonts.googleapis.com/css2?family=Poppins:wght@600;700;800&family=Nunito:wght@400;600;700;800;900&display=swap");
+@import "tailwindcss";
+
+/* Dark mode ONLY when Settings sets html.dark — never from OS preference */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-brand-purple: #7b2cbf;
+  --color-brand-magenta: #9c31a1;
+  --color-brand-blue: #6389eb;
+  --color-brand-red: #e3404c;
+  --color-brand-orange: #ff8c00;
+  --color-brand-orange-2: #f97316;
+  --color-ink: #1f2937;
+  --font-sans: "Nunito", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Poppins", "Nunito", sans-serif;
+  --font-ui: "Century Gothic", "CenturyGothic", "AppleGothic", "Nunito", sans-serif;
+}
+
+:root {
+  --brand-shadow-rgb: 123, 44, 191;
+  --chat-accent: #7b2cbf;
+  --chat-accent-rgb: 123, 44, 191;
+}
+
+/* Theme-colored floating action buttons */
+.fab-theme {
+  box-shadow: 0 10px 28px -6px rgba(var(--brand-shadow-rgb), 0.55);
+}
+
+/* Outgoing chat bubbles follow chat accent */
+.bubble-mine {
+  background-color: var(--chat-accent);
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+    min-height: 100dvh;
+  }
+  body {
+    @apply bg-[#f0f2f5] text-ink antialiased;
+    font-family: var(--font-sans);
+    -webkit-tap-highlight-color: transparent;
+    margin: 0;
+  }
+  * { box-sizing: border-box; }
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+
+@utility safe-pb {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+@utility safe-pt {
+  padding-top: max(0.5rem, env(safe-area-inset-top));
+}
+
+@utility font-display {
+  font-family: var(--font-display);
+}
+@utility font-ui {
+  font-family: var(--font-ui);
+}
+
+/* Soft diagonal shimmer used by list skeletons (Chats home wireframe) */
+@keyframes sk-shimmer-sweep {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.sk-shimmer {
+  background: linear-gradient(
+    105deg,
+    #ebecef 0%,
+    #ebecef 38%,
+    #f7f8fa 50%,
+    #ebecef 62%,
+    #ebecef 100%
+  );
+  background-size: 200% 100%;
+  animation: sk-shimmer-sweep 1.55s ease-in-out infinite;
+  border-radius: 9999px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sk-shimmer {
+    animation: none;
+    background: #ebecef;
+  }
+}
+
+
+
+
+/* —— Liquid glass (Apple-style vibrancy) —— */
+html[data-glass="1"] {
+  --glass-fill: rgba(255, 255, 255, 0.55);
+  --glass-fill-strong: rgba(255, 255, 255, 0.72);
+  --glass-stroke: rgba(255, 255, 255, 0.65);
+  --glass-highlight: rgba(255, 255, 255, 0.95);
+  --glass-shade: rgba(0, 0, 0, 0.06);
+  --glass-blur: 28px;
+}
+html[data-mode="dark"][data-glass="1"],
+html.dark[data-glass="1"] {
+  --glass-fill: rgba(28, 28, 30, 0.62);
+  --glass-fill-strong: rgba(44, 44, 46, 0.78);
+  --glass-stroke: rgba(255, 255, 255, 0.14);
+  --glass-highlight: rgba(255, 255, 255, 0.12);
+  --glass-shade: rgba(0, 0, 0, 0.45);
+  --glass-blur: 32px;
+}
+
+html[data-glass="1"] body {
+  background:
+    radial-gradient(ellipse 90% 60% at 10% -15%, color-mix(in srgb, var(--color-brand-purple) 28%, transparent), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 100% 10%, color-mix(in srgb, var(--color-brand-orange) 18%, transparent), transparent 55%),
+    linear-gradient(180deg, #f2f2f7 0%, #e5e5ea 100%);
+}
+html[data-mode="dark"][data-glass="1"] body,
+html.dark[data-glass="1"] body {
+  background:
+    radial-gradient(ellipse 90% 60% at 10% -15%, color-mix(in srgb, var(--color-brand-purple) 32%, transparent), transparent 60%),
+    radial-gradient(ellipse 70% 50% at 100% 10%, color-mix(in srgb, var(--color-brand-orange) 16%, transparent), transparent 55%),
+    linear-gradient(180deg, #000000 0%, #1c1c1e 100%) !important;
+}
+
+/* Floating cards — soft frosted material */
+html[data-glass="1"] .rounded-3xl.bg-white,
+html[data-glass="1"] .rounded-2xl.bg-white,
+html[data-glass="1"] .shadow-sm.bg-white {
+  background: var(--glass-fill) !important;
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.6);
+  border: 0.5px solid var(--glass-stroke) !important;
+  box-shadow:
+    0 8px 32px var(--glass-shade),
+    0 1px 0 var(--glass-highlight) inset !important;
+}
+
+/* Headers / sticky bars — continuous material */
+html[data-glass="1"] header,
+html[data-glass="1"] .sticky {
+  background: var(--glass-fill-strong) !important;
+  backdrop-filter: blur(40px) saturate(1.8);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8);
+  border-left: none !important;
+  border-right: none !important;
+  border-top: none !important;
+  border-bottom: 0.5px solid var(--glass-stroke) !important;
+  border-radius: 0 !important;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04) !important;
+}
+
+/* Full-bleed list surfaces */
+html[data-glass="1"] .bg-white:not(.rounded-3xl):not(.rounded-2xl):not(.rounded-full):not(.rounded-xl) {
+  background: var(--glass-fill) !important;
+  backdrop-filter: blur(24px) saturate(1.5);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Bottom nav / tab bar */
+html[data-glass="1"] nav,
+html[data-glass="1"] .tab-bar,
+html[data-glass="1"] footer {
+  background: var(--glass-fill-strong) !important;
+  backdrop-filter: blur(40px) saturate(1.8) !important;
+  -webkit-backdrop-filter: blur(40px) saturate(1.8) !important;
+  border-top: 0.5px solid var(--glass-stroke) !important;
+}
+
+html[data-glass="1"] .bubble-mine {
+  box-shadow:
+    0 8px 24px -6px rgba(var(--brand-shadow-rgb), 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+/* Inputs on glass */
+html[data-glass="1"] input,
+html[data-glass="1"] textarea {
+  background: rgba(255, 255, 255, 0.45) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+html[data-mode="dark"][data-glass="1"] input,
+html.dark[data-glass="1"] input,
+html[data-mode="dark"][data-glass="1"] textarea,
+html.dark[data-glass="1"] textarea {
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+
+/* —— Dark mode base —— */
+html.dark body,
+html[data-mode="dark"] body {
+  background: #0b0f14 !important;
+  color: #e5e7eb;
+}
+html.dark .bg-white,
+html[data-mode="dark"] .bg-white {
+  background-color: #151a22 !important;
+  color: #e5e7eb;
+}
+html.dark .bg-gray-50,
+html[data-mode="dark"] .bg-gray-50,
+html.dark .bg-gray-100,
+html[data-mode="dark"] .bg-gray-100 {
+  background-color: #0f141b !important;
+}
+html.dark .text-ink,
+html[data-mode="dark"] .text-ink {
+  color: #f3f4f6 !important;
+}
+html.dark .text-gray-400,
+html[data-mode="dark"] .text-gray-400,
+html.dark .text-gray-500,
+html[data-mode="dark"] .text-gray-500 {
+  color: #9ca3af !important;
+}
+
+/* Soft separators in dark mode (not harsh pure white) */
+html.dark .divide-gray-100 > * + *,
+html[data-mode="dark"] .divide-gray-100 > * + *,
+html.dark .divide-y > * + *,
+html[data-mode="dark"] .divide-y > * + * {
+  border-color: rgba(148, 163, 184, 0.12) !important;
+}
+html.dark .border-gray-100,
+html[data-mode="dark"] .border-gray-100,
+html.dark .border-gray-200,
+html[data-mode="dark"] .border-gray-200 {
+  border-color: rgba(148, 163, 184, 0.14) !important;
+}
+html.dark .ring-gray-100,
+html[data-mode="dark"] .ring-gray-100,
+html.dark .ring-black\/5,
+html[data-mode="dark"] .ring-black\/5,
+html.dark .ring-black\/6,
+html[data-mode="dark"] .ring-black\/6,
+html.dark .ring-black\/8,
+html[data-mode="dark"] .ring-black\/8,
+html.dark .ring-1,
+html[data-mode="dark"] .ring-1 {
+  --tw-ring-color: rgba(148, 163, 184, 0.14) !important;
+}
+html.dark .border-black\/5,
+html[data-mode="dark"] .border-black\/5,
+html.dark .border-black\/\[0\.04\],
+html[data-mode="dark"] .border-black\/\[0\.04\],
+html.dark .border-t,
+html[data-mode="dark"] .border-t,
+html.dark .border-b,
+html[data-mode="dark"] .border-b {
+  border-color: rgba(148, 163, 184, 0.12) !important;
+}
+html.dark .shadow-sm,
+html[data-mode="dark"] .shadow-sm {
+  --tw-shadow-color: rgba(0, 0, 0, 0.35) !important;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.35) !important;
+}
+html.dark .bg-\[\#f7f8fa\],
+html[data-mode="dark"] .bg-\[\#f7f8fa\],
+html.dark .bg-gray-50,
+html[data-mode="dark"] .bg-gray-50 {
+  background-color: #0b0f14 !important;
+}
+html.dark header,
+html[data-mode="dark"] header,
+html.dark .sticky,
+html[data-mode="dark"] .sticky {
+  background-color: rgba(15, 20, 28, 0.94) !important;
+  border-color: rgba(148, 163, 184, 0.12) !important;
+}
+/* Settings cards / rows — blend edges with dark surface */
+html.dark .rounded-3xl.bg-white,
+html[data-mode="dark"] .rounded-3xl.bg-white,
+html.dark .rounded-2xl.bg-white,
+html[data-mode="dark"] .rounded-2xl.bg-white {
+  background-color: #151a22 !important;
+  box-shadow: none !important;
+}
+
+
+/* Dark mode — soft dividers & nav surfaces */
+html.dark .divide-y > * + *,
+html[data-mode="dark"] .divide-y > * + *,
+html.dark .border-b,
+html[data-mode="dark"] .border-b,
+html.dark .border-t,
+html[data-mode="dark"] .border-t,
+html.dark .border-gray-100,
+html[data-mode="dark"] .border-gray-100,
+html.dark .border-gray-200,
+html[data-mode="dark"] .border-gray-200 {
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+html.dark nav,
+html[data-mode="dark"] nav,
+html.dark [data-bottom-nav],
+html[data-mode="dark"] [data-bottom-nav] {
+  background-color: rgba(15, 20, 28, 0.96) !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
+  color: #e5e7eb;
+}
+html.dark header,
+html[data-mode="dark"] header {
+  background-color: rgba(15, 20, 28, 0.96) !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+/* Settings rows — soft separators */
+html.dark .ring-gray-100,
+html[data-mode="dark"] .ring-gray-100 {
+  --tw-ring-color: rgba(148, 163, 184, 0.12) !important;
+}
+html.dark .bg-gray-100,
+html[data-mode="dark"] .bg-gray-100,
+html.dark .bg-gray-50,
+html[data-mode="dark"] .bg-gray-50 {
+  background-color: #121821 !important;
+}
+html.dark .hover\:bg-gray-50:hover,
+html[data-mode="dark"] .hover\:bg-gray-50:hover,
+html.dark .hover\:bg-gray-100:hover,
+html[data-mode="dark"] .hover\:bg-gray-100:hover {
+  background-color: rgba(148, 163, 184, 0.08) !important;
+}
+/* Show correct PixelDroid mark in dark */
+html.dark .dark\:hidden,
+html[data-mode="dark"] .dark\:hidden {
+  display: none !important;
+}
+html.dark .dark\:block,
+html[data-mode="dark"] .dark\:block {
+  display: block !important;
+}
+
+/* Live typing caret — hard blink */
+@keyframes sc-caret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* Transparent media — never fill with solid bg */
+img.sc-media-transparent,
+.sc-msg-image img {
+  background: transparent !important;
+  object-fit: contain;
+}
+
+
+@keyframes sc-marquee {
+  0% { transform: translateX(0); }
+  30% { transform: translateX(0); }
+  70% { transform: translateX(calc(-50% - 0.5rem)); }
+  100% { transform: translateX(calc(-50% - 0.5rem)); }
+}
+
+/* ─── Desktop shell (WhatsApp-style) ───────────────────────── */
+@media (min-width: 768px) {
+  .desktop-shell {
+    font-size: 14px;
+  }
+
+  .desktop-sidebar .sticky,
+  .desktop-chat-list header.sticky {
+    padding-top: 0.75rem !important;
+    padding-bottom: 0.5rem !important;
+    min-height: 3.25rem;
+  }
+
+  /* Denser conversation rows */
+  .desktop-chat-list .min-h-0.flex-1 {
+    padding-bottom: 0.5rem;
+  }
+
+  .desktop-chat-list button.flex.w-full.items-center.gap-3 {
+    padding-top: 0.65rem;
+    padding-bottom: 0.65rem;
+    padding-left: 0.85rem;
+    padding-right: 0.85rem;
+  }
+
+  .desktop-chat-list button.flex.w-full.items-center.gap-3:hover {
+    background-color: rgba(123, 44, 191, 0.05);
+  }
+
+  /* Hide mobile FAB inside desktop sidebar — actions live in header */
+  .desktop-chat-list .fab-theme {
+    display: none !important;
+  }
+
+  /* Conversation pane: tighten header safe-area for desktop */
+  .conversation-pane header {
+    padding-top: 0.65rem !important;
+    padding-bottom: 0.55rem !important;
+  }
+
+  .conversation-pane {
+    border-left: 1px solid rgba(0, 0, 0, 0.04);
+    border-right: 1px solid rgba(0, 0, 0, 0.04);
+  }
+
+  /* Message column max width for readability on ultrawide */
+  .conversation-pane .flex-1.overflow-y-auto {
+    /* keep natural scroll; bubbles constrained via bubble wrappers if present */
+  }
+
+  /* Native-feeling scrollbars on desktop */
+  .desktop-shell * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+  }
+  .desktop-shell *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .desktop-shell *::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.18);
+    border-radius: 8px;
+  }
+  .desktop-shell *::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.28);
+  }
+
+  .auth-shell {
+    background:
+      radial-gradient(ellipse 80% 60% at 20% 10%, rgba(123, 44, 191, 0.12), transparent 50%),
+      radial-gradient(ellipse 70% 50% at 80% 90%, rgba(255, 140, 0, 0.1), transparent 45%),
+      #f0f2f5;
+  }
+}
+
+/* Info drawer base (always available) */
+.info-drawer {
+  will-change: transform;
+}
+
+@media (min-width: 768px) {
+  .desktop-chat-list .pb-24 {
+    padding-bottom: 0.75rem !important;
+  }
+  /* BottomNav is not used on desktop */
+  .desktop-shell [data-bottom-nav] {
+    display: none !important;
+  }
+}
+
+
+/* full-bleed desktop */
+@media (min-width: 768px) {
+  html, body, #root {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+  }
+  .desktop-shell {
+    width: 100vw;
+    max-width: none;
+    height: 100dvh;
+  }
+  /* Full-bleed pane; message bubbles stay readable on ultrawide */
+  .conversation-pane {
+    width: 100%;
+    max-width: none;
+  }
+  .conversation-pane [data-msg-list] {
+    /* keep horizontal padding; don't shrink the scrollport */
+  }
+  .conversation-pane header,
+  .conversation-pane footer,
+  .conversation-pane .composer,
+  .conversation-pane form {
+    width: 100%;
+  }
+}
+
+
+/* Auth: full-viewport gradient; content centered, no phone chrome */
+.auth-shell {
+  background:
+    radial-gradient(ellipse 90% 70% at 15% 10%, rgba(123, 44, 191, 0.18), transparent 55%),
+    radial-gradient(ellipse 80% 60% at 85% 90%, rgba(255, 140, 0, 0.14), transparent 50%),
+    radial-gradient(ellipse 60% 40% at 50% 50%, rgba(156, 49, 161, 0.08), transparent 60%),
+    #f5f0fa !important;
+  width: 100%;
+  min-height: 100dvh;
+}
+.auth-card {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+}
+
+
+
+
+/* ── Desktop theme: LIGHT by default; DARK only when Settings sets data-mode=dark ── */
+.desktop-shell,
+.sc-shell-bg {
+  background: #dfe3e8 !important;
+}
+.sc-surface,
+.nav-rail,
+.desktop-sidebar,
+.desktop-right,
+.conversation-pane {
+  background: #ffffff !important;
+  color: #1f2937;
+  border-color: rgba(0, 0, 0, 0.08);
+}
+.sc-center-bg {
+  background: #f0f2f5 !important;
+}
+.sc-empty {
+  background: #f0f2f5 !important;
+}
+.sc-empty-sub {
+  color: #6b7280 !important;
+}
+
+/* Chats list / groups / status panels inside sidebar stay light unless dark mode */
+.desktop-sidebar,
+.desktop-sidebar .bg-white,
+.desktop-chat-list,
+.desktop-chat-list .bg-white {
+  background-color: #ffffff !important;
+}
+
+html[data-mode="dark"] .desktop-shell,
+html[data-mode="dark"] .sc-shell-bg,
+html.dark .desktop-shell,
+html.dark .sc-shell-bg {
+  background: #121821 !important;
+}
+html[data-mode="dark"] .sc-surface,
+html[data-mode="dark"] .nav-rail,
+html[data-mode="dark"] .desktop-sidebar,
+html[data-mode="dark"] .desktop-right,
+html[data-mode="dark"] .conversation-pane,
+html[data-mode="dark"] .desktop-sidebar .bg-white,
+html[data-mode="dark"] .desktop-chat-list,
+html[data-mode="dark"] .desktop-chat-list .bg-white,
+html[data-mode="dark"] .desktop-sidebar header,
+html.dark .sc-surface,
+html.dark .nav-rail,
+html.dark .desktop-sidebar,
+html.dark .desktop-right,
+html.dark .conversation-pane,
+html.dark .desktop-sidebar .bg-white,
+html.dark .desktop-chat-list,
+html.dark .desktop-chat-list .bg-white,
+html.dark .desktop-sidebar header {
+  background: #121821 !important;
+  background-color: #121821 !important;
+  color: #e5e7eb !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+html[data-mode="dark"] .sc-center-bg,
+html[data-mode="dark"] .sc-empty,
+html.dark .sc-center-bg,
+html.dark .sc-empty {
+  background: #121821 !important;
+}
+html[data-mode="dark"] .sc-empty-sub,
+html.dark .sc-empty-sub {
+  color: #9ca3af !important;
+}
+html[data-mode="dark"] .desktop-sidebar .text-ink,
+html.dark .desktop-sidebar .text-ink {
+  color: #e5e7eb !important;
+}
+html[data-mode="dark"] .desktop-sidebar .border-gray-200,
+html[data-mode="dark"] .desktop-sidebar .border-gray-100,
+html.dark .desktop-sidebar .border-gray-200,
+html.dark .desktop-sidebar .border-gray-100 {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+html[data-mode="dark"] .desktop-sidebar .bg-gray-100,
+html.dark .desktop-sidebar .bg-gray-100 {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+.sc-menu-panel {
+  background: #ffffff !important;
+  color: #1f2937 !important;
+}
+html[data-mode="dark"] .sc-menu-panel,
+html.dark .sc-menu-panel {
+  background: #1a222d !important;
+  color: #e5e7eb !important;
+  ring-color: rgba(255,255,255,0.1);
+}
+html[data-mode="dark"] .sc-menu-panel .text-ink,
+html.dark .sc-menu-panel .text-ink {
+  color: #e5e7eb !important;
+}
+
+/* empty-center-dark-fix */
+html[data-mode="dark"] .conversation-pane,
+html.dark .conversation-pane,
+html[data-mode="dark"] .sc-center-bg,
+html.dark .sc-center-bg {
+  background: #121821 !important;
+  background-color: #121821 !important;
+}
