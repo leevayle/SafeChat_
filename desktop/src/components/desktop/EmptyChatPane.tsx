@@ -26,7 +26,7 @@ export function EmptyChatPane({
       <div className="flex flex-col items-center">
         <LogoIcon size={120} animate={false} outlined />
         <div className="mt-4">
-          <Wordmark className="text-[2.5rem] leading-none" />
+          <Wordmark light className="text-[2.5rem] leading-none font-medium" />
         </div>
         <p
           className={`mt-5 max-w-sm text-[15px] font-semibold ${

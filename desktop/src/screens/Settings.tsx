@@ -62,7 +62,7 @@ function Row({
     <Tag
       onClick={onClick}
       className={`flex w-full items-center gap-3 px-5 py-3.5 text-left ${
-        onClick ? 'transition-colors hover:bg-gray-50 active:bg-gray-100' : ''
+        onClick ? 'transition-colors hover:bg-gray-50 active:bg-gray-100 dark:hover:bg-white/[0.04] dark:active:bg-white/[0.06]' : ''
       }`}
     >
       <div className="min-w-0 flex-1">
@@ -70,14 +70,16 @@ function Row({
         {hint && <p className="text-xs font-semibold text-gray-400">{hint}</p>}
       </div>
       {value && <span className="max-w-[45%] truncate text-sm font-bold text-gray-400">{value}</span>}
-      {right ?? (onClick && !danger && <ChevronRight size={18} className="text-gray-300" />)}
+      {right ?? (onClick && !danger && <ChevronRight size={18} className="text-gray-300 dark:text-white/25" />)}
     </Tag>
   )
 }
 
 function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div className={`divide-y divide-gray-100 overflow-hidden rounded-3xl bg-white shadow-sm ${className}`}>
+    <div
+      className={`sc-settings-card divide-y divide-black/[0.06] overflow-hidden rounded-3xl bg-white shadow-sm dark:divide-white/[0.06] dark:bg-[#1a222d] dark:shadow-none dark:ring-1 dark:ring-white/[0.04] ${className}`}
+    >
       {children}
     </div>
   )
@@ -823,7 +825,7 @@ export function Settings({
                   setToast('Defaults restored')
                   void api.updateMe({ theme: 'purple' })
                 }}
-                className="w-full rounded-2xl bg-white py-3.5 text-sm font-extrabold text-brand-purple shadow-sm ring-1 ring-gray-100"
+                className="w-full rounded-2xl bg-white py-3.5 text-sm font-extrabold text-brand-purple shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]"
               >
                 Restore defaults
               </button>
@@ -1581,7 +1583,7 @@ export function Settings({
                 })}
               </div>
 
-              <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
+              <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]">
                 <button
                   type="button"
                   disabled={mpesaPaying || mpesaPaid}
@@ -1607,7 +1609,7 @@ export function Settings({
               <button
                 type="button"
                 onClick={() => setPage('sponsor')}
-                className="flex w-full items-center gap-3 rounded-3xl bg-white px-4 py-4 text-left shadow-sm ring-1 ring-gray-100 active:scale-[0.99]"
+                className="flex w-full items-center gap-3 rounded-3xl bg-white px-4 py-4 text-left shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06] active:scale-[0.99]"
               >
                 <span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-orange/15 text-brand-orange">
                   <User size={20} />
@@ -1707,7 +1709,7 @@ export function Settings({
 
           {page === 'sponsor' && (
             <motion.div key="sponsor" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
-              <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
+              <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]">
                 <p className="text-sm font-extrabold text-ink">Find a friend</p>
                 <p className="mt-0.5 text-[11px] font-semibold text-gray-400">
                   Search by username, then pay their Premium with M-Pesa.
@@ -1774,7 +1776,7 @@ export function Settings({
                 })}
               </div>
               {sponsorPick && (
-                <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
+                <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]">
                   <p className="text-sm font-extrabold text-ink">
                     Sponsoring @{sponsorPick.username} · <span className="capitalize">{mpesaPlan}</span>
                   </p>
@@ -1838,7 +1840,7 @@ export function Settings({
 
           {page === 'account' && (
             <motion.div key="account" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
-              <div className="overflow-hidden rounded-3xl bg-white p-5 shadow-sm ring-1 ring-gray-100">
+              <div className="overflow-hidden rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]">
                 <div className="flex items-center gap-4">
                   <Avatar
                     contact={{

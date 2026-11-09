@@ -510,17 +510,14 @@ function Shell() {
           </div>
         )}
         {loggingOut && (
-          <div
-            className="fixed inset-0 z-[210] flex flex-col items-center justify-center"
-            style={{ background: 'linear-gradient(to bottom, #F8F1FF, #ffffff, #EEF2FF)' }}
-          >
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
             <div className="flex flex-col items-center gap-4">
               <div className="flex gap-2">
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
               </div>
-              <p className="text-sm font-extrabold text-gray-600">Logging you out…</p>
+              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
             </div>
           </div>
         )}
@@ -1082,14 +1079,14 @@ function Shell() {
           </div>
         )}
         {loggingOut && (
-          <div className="fixed inset-0 z-[210] flex flex-col items-center justify-center" style={{ background: 'linear-gradient(to bottom, #F8F1FF, #ffffff, #EEF2FF)' }}>
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
             <div className="flex flex-col items-center gap-4">
               <div className="flex gap-2">
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
               </div>
-              <p className="text-sm font-extrabold text-gray-600">Logging you out…</p>
+              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
             </div>
           </div>
         )}
@@ -1176,14 +1173,14 @@ function Shell() {
           </div>
         )}
         {loggingOut && (
-          <div className="fixed inset-0 z-[210] flex flex-col items-center justify-center" style={{ background: 'linear-gradient(to bottom, #F8F1FF, #ffffff, #EEF2FF)' }}>
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
             <div className="flex flex-col items-center gap-4">
               <div className="flex gap-2">
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
               </div>
-              <p className="text-sm font-extrabold text-gray-600">Logging you out…</p>
+              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
             </div>
           </div>
         )}

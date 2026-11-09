@@ -97,6 +97,34 @@
   }
 }
 
+html[data-mode="dark"] .sk-shimmer,
+html.dark .sk-shimmer {
+  background: linear-gradient(
+    105deg,
+    #1a222d 0%,
+    #1a222d 38%,
+    #2a3444 50%,
+    #1a222d 62%,
+    #1a222d 100%
+  );
+  background-size: 200% 100%;
+}
+html[data-mode="dark"] .sk-shimmer,
+html.dark .sk-shimmer {
+  animation: sk-shimmer-sweep 1.55s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-mode="dark"] .sk-shimmer,
+  html.dark .sk-shimmer {
+    animation: none;
+    background: #1a222d;
+  }
+}
+html[data-mode="dark"] .animate-pulse.bg-white,
+html.dark .animate-pulse.bg-white {
+  background-color: #1a222d !important;
+}
+
 
 
 
@@ -672,4 +700,55 @@ html[data-mode="dark"] .sc-notif-filter-active,
 html.dark .sc-notif-filter-active {
   background: var(--color-brand-purple, #7b2cbf) !important;
   color: #fff !important;
+}
+
+
+/* Auth + logout screens — light/dark */
+.auth-shell,
+.sc-auth-gradient {
+  background: linear-gradient(to bottom, #F8F1FF, #ffffff, #EEF2FF) !important;
+}
+html[data-mode="dark"] .auth-shell,
+html.dark .auth-shell,
+html[data-mode="dark"] .sc-auth-gradient,
+html.dark .sc-auth-gradient {
+  background: linear-gradient(to bottom, #0d1218, #121821, #1a222d) !important;
+}
+
+/* Nav rail: transparent in dark, no item boxes */
+html[data-mode="dark"] .nav-rail,
+html.dark .nav-rail {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Settings: soft uniform dividers in dark */
+html[data-mode="dark"] .sc-settings-card,
+html.dark .sc-settings-card {
+  background: #1a222d !important;
+  box-shadow: none !important;
+}
+html[data-mode="dark"] .sc-settings-card.divide-y > * + *,
+html.dark .sc-settings-card.divide-y > * + *,
+html[data-mode="dark"] .divide-gray-100 > * + *,
+html.dark .divide-gray-100 > * + * {
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+html[data-mode="dark"] .border-gray-100,
+html[data-mode="dark"] .border-gray-200,
+html.dark .border-gray-100,
+html.dark .border-gray-200 {
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+html[data-mode="dark"] .ring-gray-100,
+html.dark .ring-gray-100 {
+  --tw-ring-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+/* Selection ribbon dark */
+html[data-mode="dark"] .desktop-sidebar .z-30.bg-white\/95,
+html.dark .desktop-sidebar .z-30 {
+  background-color: rgba(18, 24, 33, 0.95) !important;
 }

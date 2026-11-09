@@ -80,12 +80,19 @@ export function LogoIcon({
 }
 
 /** Brand wordmark — absolute hex colors (never follow theme). */
-export function Wordmark({ className = 'text-4xl' }: { className?: string }) {
+export function Wordmark({
+  className = 'text-4xl',
+  light = false,
+}: {
+  className?: string
+  /** Lighter weight for empty states; dot stays bold */
+  light?: boolean
+}) {
   return (
     <p className={`font-display tracking-tight ${className}`}>
-      <span style={{ color: '#E3404C' }}>Safe</span>
-      <span style={{ color: '#7B2CBF' }}>Chat</span>
-      <span style={{ color: '#6389EB' }}>.</span>
+      <span style={{ color: '#E3404C', fontWeight: light ? 500 : undefined }}>Safe</span>
+      <span style={{ color: '#7B2CBF', fontWeight: light ? 500 : undefined }}>Chat</span>
+      <span style={{ color: '#6389EB', fontWeight: 800 }}>.</span>
     </p>
   )
 }
