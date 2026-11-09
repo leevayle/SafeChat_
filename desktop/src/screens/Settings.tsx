@@ -651,6 +651,17 @@ export function Settings({
                   }
                 />
                 <Row
+                  label="New chat button"
+                  hint="Floating + on chats, groups, and calls"
+                  right={
+                    <Toggle
+                      on={s.showFab !== false}
+                      onChange={(v) => setSetting('showFab', v as never)}
+                      label="FAB"
+                    />
+                  }
+                />
+                <Row
                   label="Typing indicator"
                   right={
                     <Toggle

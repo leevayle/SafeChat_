@@ -172,6 +172,7 @@ type Settings = {
   sound: string
   fontSize: string
   enterIsSend: boolean
+  showFab: boolean
   wallpaper: string
   theme: string
   chatAccent: string
@@ -476,6 +477,7 @@ const defaultSettings: Settings = {
   sound: 'Chime',
   fontSize: 'Medium',
   enterIsSend: true,
+  showFab: true,
   wallpaper: 'Cloud',
   theme: 'purple',
   email: '',

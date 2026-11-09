@@ -771,3 +771,12 @@ html[data-mode="dark"],
 html.dark {
   --sc-status-viewed: #4b5563;
 }
+
+/* Foldable: FAB stays on the home (left) half, not the second screen */
+[data-sc-foldable="1"] .fab-theme {
+  position: absolute !important;
+  bottom: 1.25rem !important;
+  right: 1.25rem !important;
+  left: auto !important;
+  z-index: 30 !important;
+}

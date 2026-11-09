@@ -1212,7 +1212,7 @@ function Shell() {
     }
 
     return (
-      <div className="relative flex h-dvh w-full min-w-0 overflow-hidden bg-[#f0f2f5] dark:bg-[#0d1218]">
+      <div data-sc-foldable="1" className="relative flex h-dvh w-full min-w-0 overflow-hidden bg-[#f0f2f5] dark:bg-[#0d1218]">
         {/* Left: mobile home + docked bottom nav */}
         <div className="relative flex h-full min-w-0 w-1/2 flex-col overflow-hidden border-r border-black/[0.06] bg-white dark:border-white/10 dark:bg-[#121821]">
           <div className="relative min-h-0 flex-1 overflow-hidden">

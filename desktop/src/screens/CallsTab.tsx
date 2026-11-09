@@ -28,7 +28,7 @@ const FILTERS = ['All', 'Missed', 'Video', 'Audio'] as const
 type CallFilter = (typeof FILTERS)[number]
 
 export function CallsTab({ onCall, onOpenContacts, onOpenNewCallPanel }: Props) {
-  const { calls, contacts } = useStore()
+  const { settings, calls, contacts } = useStore()
   const [picker, setPicker] = useState(false)
   const [q, setQ] = useState('')
   const [kind, setKind] = useState<'audio' | 'video'>('audio')
@@ -223,6 +223,7 @@ export function CallsTab({ onCall, onOpenContacts, onOpenNewCallPanel }: Props) 
         </ul>
       </div>
 
+      {settings.showFab !== false && (
       <motion.button
         type="button"
         aria-label="New call"
@@ -236,6 +237,7 @@ export function CallsTab({ onCall, onOpenContacts, onOpenNewCallPanel }: Props) 
       >
         <Plus size={26} strokeWidth={2.4} />
       </motion.button>
+      )}
 
       <AnimatePresence>
         {picker && (

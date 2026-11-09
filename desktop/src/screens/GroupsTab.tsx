@@ -8,7 +8,7 @@ import { useStore } from '../store'
 import { IconBtn } from './ChatsHome'
 
 export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; onCreate: () => void }) {
-  const { groups, joinGroup, contacts } = useStore()
+  const { settings, groups, joinGroup, contacts } = useStore()
   const whoById = (id: string) => contacts.find(c => c.id === id) || { name: id }
   const [q, setQ] = useState('')
   const [join, setJoin] = useState(false)
@@ -80,6 +80,7 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
         {list.length === 0 && <p className="flex flex-col items-center gap-2 py-14 font-bold text-gray-400"><Users /> No groups found</p>}
       </div>
 
+      {settings.showFab !== false && (
       <motion.button
         initial={{ scale: 0 }}
         animate={{ scale: 1 }}
@@ -92,6 +93,7 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
       >
         <Plus size={26} strokeWidth={2.4} />
       </motion.button>
+      )}
 
       <Sheet open={join} onClose={() => setJoin(false)} title="Join with invite link">
         <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="safechat.app/join/abc123" className="mb-4 h-13 w-full rounded-full bg-gray-100 px-5 py-3 font-bold outline-none focus:ring-4 focus:ring-brand-purple/25" />

@@ -55,7 +55,7 @@ export function ChatsHome({
   onNotifications,
   onSupport,
 }: Props) {
-  const { chats, contacts, statusList, me, listsReady, saveRequestPending, notifUnreadCount, typingPeers, presenceMap, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, refreshNotifCount, refreshSubscription, showToast } = useStore()
+  const { settings, chats, contacts, statusList, me, listsReady, saveRequestPending, notifUnreadCount, typingPeers, presenceMap, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, refreshNotifCount, refreshSubscription, showToast } = useStore()
   /** System-only: save requests etc. Chat unreads live on the bottom nav. */
   const systemNotifCount = (saveRequestPending || 0) + (notifUnreadCount || 0)
   const [filter, setFilter] = useState<Filter>('All chats')
@@ -767,6 +767,7 @@ export function ChatsHome({
         )}
       </div>
 
+      {settings.showFab !== false && (
       <motion.button
         type="button"
         aria-label="New chat"
@@ -777,6 +778,7 @@ export function ChatsHome({
       >
         <Plus size={26} strokeWidth={2.4} />
       </motion.button>
+      )}
 
       {deleteConfirm && (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
