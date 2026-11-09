@@ -1957,7 +1957,7 @@ return (
 
 
       {isSelfChat && (showSelfNotes || showSelfChecklists || showSelfReminders || showSelfGames) && (
-        <div className="flex shrink-0 gap-2 overflow-x-auto border-b border-black/5 bg-white/90 px-3 py-2 no-scrollbar">
+        <div className="flex shrink-0 gap-2 overflow-x-auto border-b border-black/5 bg-white/90 px-3 py-2 no-scrollbar dark:border-white/10 dark:bg-[#121821]/95">
           {showSelfNotes && (
             <button
               type="button"
@@ -1965,7 +1965,7 @@ return (
               className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-extrabold ${
                 selfActiveTab === 'note' || (selfEditor && selfEditor.kind === 'note')
                   ? 'bg-brand-purple text-white'
-                  : 'bg-brand-purple/10 text-brand-purple'
+                  : 'bg-brand-purple/10 text-brand-purple dark:bg-brand-purple/20 dark:text-brand-purple'
               }`}
             >
               Note
@@ -1978,7 +1978,7 @@ return (
               className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-extrabold ${
                 selfActiveTab === 'checklist' || (selfEditor && selfEditor.kind === 'checklist')
                   ? 'bg-brand-purple text-white'
-                  : 'bg-brand-purple/10 text-brand-purple'
+                  : 'bg-brand-purple/10 text-brand-purple dark:bg-brand-purple/20 dark:text-brand-purple'
               }`}
             >
               Checklist
@@ -1991,7 +1991,7 @@ return (
               className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-extrabold ${
                 selfActiveTab === 'reminder' || (selfEditor && selfEditor.kind === 'reminder')
                   ? 'bg-brand-purple text-white'
-                  : 'bg-brand-purple/10 text-brand-purple'
+                  : 'bg-brand-purple/10 text-brand-purple dark:bg-brand-purple/20 dark:text-brand-purple'
               }`}
             >
               Reminder
@@ -2004,7 +2004,7 @@ return (
               className={`flex shrink-0 items-center gap-1.5 rounded-full px-3.5 py-2 text-sm font-extrabold ${
                 selfActiveTab === 'game' || selfGameOpen
                   ? 'bg-brand-purple text-white'
-                  : 'bg-brand-purple/10 text-brand-purple'
+                  : 'bg-brand-purple/10 text-brand-purple dark:bg-brand-purple/20 dark:text-brand-purple'
               }`}
             >
               Game
@@ -2014,7 +2014,7 @@ return (
       )}
 
       {selfGameOpen ? (
-        <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
+        <div className="min-h-0 flex flex-1 flex-col overflow-hidden bg-white dark:bg-[#121821]">
           <TicTacToe
             initialGameId={selfGameId}
             onClose={() => {

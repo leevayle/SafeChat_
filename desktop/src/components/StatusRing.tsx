@@ -39,7 +39,7 @@ export function StatusRing({
         cy={mid}
         r={r}
         fill="none"
-        stroke={isViewed ? '#d1d5db' : (accent || 'var(--color-brand-purple, #7b2cbf)')}
+        stroke={isViewed ? 'var(--sc-status-viewed, #d1d5db)' : (accent || 'var(--color-brand-purple, #7b2cbf)')}
         strokeWidth={stroke}
         strokeLinecap="round"
         strokeDasharray={`${segLen} ${c - segLen}`}

@@ -27,6 +27,8 @@ type Props = {
   overlays?: ReactNode
   onLogout?: () => void
   loading?: boolean
+  /** Foldable / mid-width: nav+list | inbox each ~half screen; no third column */
+  compact?: boolean
 }
 
 export function DesktopShell({
@@ -43,6 +45,7 @@ export function DesktopShell({
   overlays,
   onLogout,
   loading,
+  compact = false,
 }: Props) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
@@ -68,12 +71,13 @@ export function DesktopShell({
   const startW = useRef(0)
 
   useEffect(() => {
+    if (compact) return
     try {
       localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth))
     } catch {
       /* */
     }
-  }, [sidebarWidth])
+  }, [sidebarWidth, compact])
 
   useEffect(() => {
     try {
@@ -85,6 +89,7 @@ export function DesktopShell({
 
   const onResizeStart = useCallback(
     (which: 'left' | 'right') => (e: React.MouseEvent) => {
+      if (compact) return
       e.preventDefault()
       dragSide.current = which
       startX.current = e.clientX
@@ -92,10 +97,11 @@ export function DesktopShell({
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
     },
-    [sidebarWidth, rightWidth],
+    [sidebarWidth, rightWidth, compact],
   )
 
   useEffect(() => {
+    if (compact) return
     const onMove = (e: MouseEvent) => {
       if (!dragSide.current) return
       if (dragSide.current === 'left') {
@@ -118,9 +124,35 @@ export function DesktopShell({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [])
+  }, [compact])
 
-  const hasRight = rightPanel != null
+  const hasRight = !compact && rightPanel != null
+
+  const mainPane = showEmpty ? (
+    <EmptyChatPane title={emptyTitle} subtitle={emptySubtitle} />
+  ) : (
+    <div className="conversation-pane sc-surface sc-center-bg flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden">
+      {main}
+    </div>
+  )
+
+  /* Foldable / dual: [nav + chats] 50% | inbox 50% */
+  if (compact) {
+    return (
+      <div className="desktop-shell flex h-dvh w-full min-w-0 overflow-hidden sc-shell-bg bg-[#dfe3e8]">
+        <div className="flex h-full min-w-0 w-1/2 shrink-0 border-r border-black/[0.06] dark:border-white/10">
+          <NavRail active={railActive} badges={badges} onSelect={onRailSelect} onLogout={onLogout} loading={loading} />
+          <div className="desktop-sidebar sc-surface flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white dark:bg-[#121821]">
+            {sidebar}
+          </div>
+        </div>
+        <div className="relative flex h-full min-w-0 w-1/2 flex-1 flex-col overflow-hidden sc-center-bg">
+          {mainPane}
+        </div>
+        {overlays}
+      </div>
+    )
+  }
 
   return (
     <div className="desktop-shell flex h-dvh w-full min-w-0 overflow-hidden sc-shell-bg bg-[#dfe3e8]">
@@ -141,13 +173,7 @@ export function DesktopShell({
       </div>
 
       <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden sc-center-bg">
-        {showEmpty ? (
-          <EmptyChatPane title={emptyTitle} subtitle={emptySubtitle} />
-        ) : (
-          <div className="conversation-pane sc-surface sc-center-bg flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden">
-            {main}
-          </div>
-        )}
+        {mainPane}
       </div>
 
       {hasRight && (

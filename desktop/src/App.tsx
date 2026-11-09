@@ -31,7 +31,7 @@ import { BottomNav, type Tab } from './components/BottomNav'
 import { DesktopShell } from './components/desktop/DesktopShell'
 import { ContactInfoPanel } from './components/desktop/ContactInfoPanel'
 import type { RailItem } from './components/desktop/NavRail'
-import { useMediaQuery, DESKTOP_BREAKPOINT } from './hooks/useMediaQuery'
+import { useMediaQuery, DESKTOP_BREAKPOINT, WIDE_DESKTOP_BREAKPOINT, useFoldableDualPane } from './hooks/useMediaQuery'
 
 type Stage = 'splash' | 'welcome' | 'signup' | 'verify' | 'login' | 'loading' | 'profile' | 'done' | 'app'
 type Call = { id: string; kind: 'audio' | 'video'; ringId?: string; remoteOfferSdp?: string; peerName?: string; peerUsername?: string }
@@ -50,6 +50,12 @@ function Shell() {
   const [logoutConfirm, setLogoutConfirm] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT)
+  const isFoldableDual = useFoldableDualPane()
+  const isWideDesktop = useMediaQuery(WIDE_DESKTOP_BREAKPOINT)
+  /** Dual-pane shell: classic desktop OR foldable / mid-width */
+  const useDesktopShell = isDesktop || isFoldableDual
+  /** Foldables & mid-width: only two panes — third-column screens use the second pane */
+  const foldableTwoPane = isFoldableDual && !isWideDesktop
 
   // Must be declared before any use — avoids TDZ "Cannot access before initialization"
   const [seenMissed, setSeenMissed] = useState<Set<string>>(() => {
@@ -788,8 +794,8 @@ function Shell() {
     </>
   )
 
-  // Desktop: list | conversation | right context panel
-  if (isDesktop) {
+  // Desktop + foldables: list | conversation [| right on wide desktop only]
+  if (useDesktopShell) {
     const sidebar =
       tab === 'groups' ? (
         <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
@@ -1046,8 +1052,12 @@ function Shell() {
           badges={railBadges}
           onRailSelect={onRailSelect}
           sidebar={sidebar}
-          main={mainContent}
-          showEmpty={showEmpty}
+          main={
+            foldableTwoPane && rightPanel
+              ? rightPanel
+              : mainContent
+          }
+          showEmpty={foldableTwoPane && rightPanel ? false : showEmpty}
           emptyTitle={tab === 'groups' ? 'Groups' : tab === 'status' ? 'Status' : tab === 'calls' ? 'Calls' : 'SafeChat'}
           emptySubtitle={
             tab === 'groups'
@@ -1058,10 +1068,11 @@ function Shell() {
                   ? 'Call history appears in the sidebar.'
                   : 'Select a chat to start messaging.'
           }
-          rightPanel={rightPanel}
+          rightPanel={foldableTwoPane ? null : rightPanel}
           overlays={desktopOverlays}
           loading={!listsReady}
           onLogout={requestLogout}
+          compact={foldableTwoPane}
         />
 
         {logoutConfirm && (

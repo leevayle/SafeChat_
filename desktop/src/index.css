@@ -720,7 +720,10 @@ html[data-mode="dark"] .nav-rail,
 html.dark .nav-rail {
   background: transparent !important;
   background-color: transparent !important;
-  border: none !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-top: none !important;
+  border-bottom: none !important;
+  border-left: none !important;
   box-shadow: none !important;
 }
 
@@ -751,4 +754,20 @@ html.dark .ring-gray-100 {
 html[data-mode="dark"] .desktop-sidebar .z-30.bg-white\/95,
 html.dark .desktop-sidebar .z-30 {
   background-color: rgba(18, 24, 33, 0.95) !important;
+}
+
+/* Light: faint nav | chats divider */
+.nav-rail {
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+}
+html[data-mode="dark"] .nav-rail,
+html.dark .nav-rail {
+  border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+  background: transparent !important;
+}
+
+:root { --sc-status-viewed: #d1d5db; }
+html[data-mode="dark"],
+html.dark {
+  --sc-status-viewed: #4b5563;
 }

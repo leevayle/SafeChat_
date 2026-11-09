@@ -31,7 +31,7 @@ const ITEMS: { id: RailItem; label: string; Icon: typeof MessageCircle }[] = [
 
 function itemClass(isActive: boolean) {
   if (isActive) {
-    return 'bg-brand-purple/10 text-brand-purple'
+    return 'bg-brand-purple/15 text-brand-purple ring-1 ring-brand-purple/25'
   }
   return 'bg-transparent text-gray-500 hover:text-brand-purple dark:text-gray-400 dark:hover:text-brand-purple'
 }
@@ -39,7 +39,7 @@ function itemClass(isActive: boolean) {
 export function NavRail({ active, badges = {}, onSelect, onLogout, loading }: Props) {
   return (
     <aside
-      className="nav-rail flex h-full w-[4.5rem] shrink-0 flex-col items-center border-0 bg-transparent py-3"
+      className="nav-rail flex h-full w-[4.5rem] shrink-0 flex-col items-center border-r border-black/[0.06] bg-transparent py-3 dark:border-white/10"
       aria-label="Main navigation"
     >
       <button

@@ -1450,76 +1450,103 @@ export function Settings({
                   }
                 />
                 {!!(s as any).busyEnabled && (
-                  <div className="space-y-3 px-1 pb-3">
-                    <label className="block text-[11px] font-extrabold text-gray-400">Who sees busy</label>
-                    <Select
-                      value={(s as any).busyScope || 'everyone'}
-                      onChange={(v) => setSetting('busyScope' as any, v as never)}
-                      options={[
-                        { value: 'everyone', label: 'Everyone' },
-                        { value: 'contacts', label: 'My contacts' },
-                      ]}
-                    />
-                    <label className="block text-[11px] font-extrabold text-gray-400">Custom message</label>
-                    <input
-                      value={(s as any).busyMessage || ''}
-                      maxLength={28}
-                      onChange={(e) => setSetting('busyMessage' as any, e.target.value.slice(0, 28) as never)}
-                      placeholder="e.g. in a meeting"
-                      className="w-full rounded-2xl bg-gray-50 px-3 py-2.5 text-sm font-bold outline-none ring-1 ring-black/5 focus:ring-brand-purple/30"
-                    />
-                    <label className="block text-[11px] font-extrabold text-gray-400">Duration (max 1 hour)</label>
-                    <div className="flex gap-2">
-                      {[
-                        { m: 15, label: '15 min' },
-                        { m: 30, label: '30 min' },
-                        { m: 60, label: '1 hour' },
-                      ].map((d) => {
-                        const active = Number((s as any).busyDurationMin || 30) === d.m
-                        return (
-                          <button
-                            key={d.m}
-                            type="button"
-                            onClick={() => setSetting('busyDurationMin' as any, d.m as never)}
-                            className={`flex-1 rounded-2xl py-2.5 text-xs font-extrabold transition ${
-                              active
-                                ? 'bg-brand-purple text-white shadow-md'
-                                : 'bg-gray-50 text-ink ring-1 ring-black/5'
-                            }`}
-                          >
-                            {d.label}
-                          </button>
-                        )
-                      })}
+                  <div className="border-t border-black/[0.06] px-5 py-4 dark:border-white/[0.06]">
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Who sees busy</p>
+                        <div className="mt-2 flex gap-2">
+                          {[
+                            { value: 'everyone', label: 'Everyone' },
+                            { value: 'contacts', label: 'My contacts' },
+                          ].map((o) => {
+                            const on = ((s as any).busyScope || 'everyone') === o.value
+                            return (
+                              <button
+                                key={o.value}
+                                type="button"
+                                onClick={() => setSetting('busyScope' as any, o.value as never)}
+                                className={`flex-1 rounded-2xl py-2.5 text-xs font-extrabold transition ${
+                                  on
+                                    ? 'bg-brand-purple/12 text-brand-purple ring-1 ring-brand-purple/25'
+                                    : 'bg-gray-50 text-gray-500 ring-1 ring-black/[0.04] dark:bg-white/[0.04] dark:text-gray-400 dark:ring-white/[0.06]'
+                                }`}
+                              >
+                                {o.label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <p className="text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Custom message</p>
+                          <span className="text-[10px] font-bold text-gray-300">
+                            {String((s as any).busyMessage || '').length}/28
+                          </span>
+                        </div>
+                        <input
+                          value={(s as any).busyMessage || ''}
+                          maxLength={28}
+                          onChange={(e) => setSetting('busyMessage' as any, e.target.value.slice(0, 28) as never)}
+                          placeholder="e.g. in a meeting"
+                          className="mt-2 w-full rounded-2xl bg-gray-50 px-3.5 py-2.5 text-sm font-bold text-ink outline-none ring-1 ring-black/[0.05] focus:ring-brand-purple/25 dark:bg-white/[0.05] dark:text-gray-100 dark:ring-white/[0.08]"
+                        />
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Duration</p>
+                        <div className="mt-2 flex gap-2">
+                          {[
+                            { m: 15, label: '15 min' },
+                            { m: 30, label: '30 min' },
+                            { m: 60, label: '1 hour' },
+                          ].map((d) => {
+                            const active = Number((s as any).busyDurationMin || 30) === d.m
+                            return (
+                              <button
+                                key={d.m}
+                                type="button"
+                                onClick={() => setSetting('busyDurationMin' as any, d.m as never)}
+                                className={`flex-1 rounded-2xl py-2.5 text-xs font-extrabold transition ${
+                                  active
+                                    ? 'bg-brand-purple/12 text-brand-purple ring-1 ring-brand-purple/25'
+                                    : 'bg-gray-50 text-gray-500 ring-1 ring-black/[0.04] dark:bg-white/[0.04] dark:text-gray-400 dark:ring-white/[0.06]'
+                                }`}
+                              >
+                                {d.label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={busyUpdating}
+                        className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white shadow-sm transition active:scale-[0.98] disabled:opacity-60 disabled:active:scale-100"
+                        onClick={() => {
+                          if (busyUpdating) return
+                          const mins = Number((s as any).busyDurationMin || 30)
+                          const until = new Date(Date.now() + mins * 60 * 1000).toISOString()
+                          setSetting('busyUntil' as any, until as never)
+                          setSetting('busyEnabled' as any, true as never)
+                          setBusyUpdating(true)
+                          void api
+                            .updatePreferences({
+                              busy_enabled: true,
+                              busy_message: (s as any).busyMessage || '',
+                              busy_until: until,
+                              busy_scope: (s as any).busyScope || 'everyone',
+                            })
+                            .then(() => setToast('Busy status updated, contacts see your message'))
+                            .catch(() => setToast('Could not update busy status'))
+                            .finally(() => setBusyUpdating(false))
+                        }}
+                      >
+                        {busyUpdating ? 'Updating…' : 'Update busy status'}
+                      </button>
+                      <p className="text-[11px] font-semibold leading-relaxed text-gray-400">
+                        Overrides Online for contacts. Typing still shows. Expires after the duration.
+                      </p>
                     </div>
-                    <button
-                      type="button"
-                      disabled={busyUpdating}
-                      className="w-full rounded-full bg-gradient-to-r from-brand-purple to-brand-orange py-3 text-sm font-extrabold text-white shadow-md active:scale-[0.98] disabled:opacity-60 disabled:active:scale-100"
-                      onClick={() => {
-                        if (busyUpdating) return
-                        const mins = Number((s as any).busyDurationMin || 30)
-                        const until = new Date(Date.now() + mins * 60 * 1000).toISOString()
-                        setSetting('busyUntil' as any, until as never)
-                        setSetting('busyEnabled' as any, true as never)
-                        setBusyUpdating(true)
-                        void api
-                          .updatePreferences({
-                            busy_enabled: true,
-                            busy_message: (s as any).busyMessage || '',
-                            busy_until: until,
-                            busy_scope: (s as any).busyScope || 'everyone',
-                          })
-                          .then(() => setToast('Busy status updated, contacts see your message'))
-                          .catch(() => setToast('Could not update busy status'))
-                          .finally(() => setBusyUpdating(false))
-                      }}
-                    >
-                      {busyUpdating ? 'Updating…' : 'Update busy status'}
-                    </button>
-                    <p className="text-[11px] font-semibold text-gray-400">
-                      Overrides Online for contacts. Typing still shows. Expires after the duration.
-                    </p>
                   </div>
                 )}
               </Card>
