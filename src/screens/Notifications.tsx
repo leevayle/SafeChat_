@@ -104,26 +104,43 @@ export function Notifications({
   useEffect(() => {
     const onStatusLike = (ev: Event) => {
       const d = (ev as CustomEvent).detail || {}
-      const optimistic = {
-        id: `live-slike-${d.status_id || Date.now()}`,
-        type: 'status_like',
-        title: d.title || `${d.from_name || 'Someone'} liked your status`,
-        body: 'Tap to open',
-        actor_id: d.from,
-        actor_name: d.from_name,
-        status_id: d.status_id,
-        read: false,
-        created_at: new Date().toISOString(),
-      }
+      const isNew = d.t === 'status_new' || d.type === 'status_new'
+      const optimistic = isNew
+        ? {
+            id: `live-snew-${d.status_id || d.status?.id || Date.now()}`,
+            type: 'status_new',
+            title: d.title || `${d.from_name || d.status?.owner?.display_name || 'Someone'} posted a status`,
+            body: d.body || 'Tap to view',
+            actor_id: d.from || d.status?.owner_user_id,
+            actor_name: d.from_name,
+            status_id: d.status_id || d.status?.id,
+            read: false,
+            created_at: new Date().toISOString(),
+          }
+        : {
+            id: `live-slike-${d.status_id || Date.now()}`,
+            type: 'status_like',
+            title: d.title || `${d.from_name || 'Someone'} liked your status`,
+            body: 'Tap to open',
+            actor_id: d.from,
+            actor_name: d.from_name,
+            status_id: d.status_id,
+            read: false,
+            created_at: new Date().toISOString(),
+          }
       setServerNotifs((prev) => {
-        const next = [optimistic, ...(prev || []).filter((n: any) => !(n.type === 'status_like' && n.status_id === d.status_id && n.actor_id === d.from))]
+        const next = [optimistic, ...(prev || []).filter((n: any) => n.id !== optimistic.id)]
         void saveCachedNotifications(next)
         return next
       })
       void refreshNotifCount?.()
     }
     window.addEventListener('sc:rt-notif', onStatusLike)
-    return () => window.removeEventListener('sc:rt-notif', onStatusLike)
+    window.addEventListener('sc:rt-status-new', onStatusLike)
+    return () => {
+      window.removeEventListener('sc:rt-notif', onStatusLike)
+      window.removeEventListener('sc:rt-status-new', onStatusLike)
+    }
   }, [refreshNotifCount])
 
   useEffect(() => {
@@ -205,6 +222,34 @@ export function Notifications({
       }
       return next
     })
+    setServerNotifs((prev) => {
+      const real = id.replace(/^(ginv-|slike-|snew-|cacc-|live-slike-|live-snew-|live-ginv-|live-)/, '')
+      const next = (prev || []).map((n: any) => {
+        const nid = String(n.id || '')
+        if (
+          id === nid ||
+          id === `ginv-${nid}` ||
+          id === `slike-${nid}` ||
+          id === `snew-${nid}` ||
+          id === `cacc-${nid}` ||
+          real === nid
+        ) {
+          return { ...n, read: true }
+        }
+        return n
+      })
+      void saveCachedNotifications(next)
+      return next
+    })
+    const real = id.replace(/^(ginv-|slike-|snew-|cacc-|live-slike-|live-snew-|live-ginv-|live-)/, '')
+    if (real && !real.startsWith('sys-') && !real.startsWith('call-') && !real.startsWith('msg-')) {
+      try {
+        void api.markNotificationRead(real)
+      } catch {
+        /* */
+      }
+    }
+    void refreshNotifCount?.()
   }
 
   const markAllRead = () => {
@@ -309,6 +354,22 @@ export function Notifications({
         } as any)
         continue
       }
+      if (n.type === 'status_new' || n.type === 'status_update') {
+        const id = `snew-${n.id}`
+        out.push({
+          id,
+          kind: 'status' as const,
+          title: n.title || 'New status',
+          body: n.body || 'posted a status',
+          when: timeLabel(n.created_at),
+          iso: n.created_at,
+          unread: !n.read && !readIds.has(id),
+          contactId: n.actor_id,
+          photo: n.actor_photo,
+          statusId: n.status_id,
+        } as any)
+        continue
+      }
     }
     // Premium lifecycle (local, once per event)
     try {
@@ -394,9 +455,47 @@ export function Notifications({
     prevFilterRef.current = filter
   }, [filter, refreshNotifCount])
 
-  // Leaving screen does not auto-mark (unread until click / mark all)
+  // Leaving Notifications → mark everything read
   useEffect(() => {
     return () => {
+      const list = itemsRef.current || []
+      const unread = list.filter((i) => i.unread)
+      if (unread.length) {
+        try {
+          const raw = localStorage.getItem('sc_notif_read')
+          const next = new Set(raw ? JSON.parse(raw) : [])
+          unread.forEach((i) => next.add(i.id))
+          localStorage.setItem('sc_notif_read', JSON.stringify([...next]))
+        } catch {
+          /* */
+        }
+        for (const i of unread) {
+          const real = i.id.replace(/^(ginv-|slike-|snew-|cacc-|live-slike-|live-snew-|live-ginv-|live-)/, '')
+          if (real && !real.startsWith('sys-') && !real.startsWith('call-') && !real.startsWith('msg-')) {
+            try {
+              void api.markNotificationRead(real)
+            } catch {
+              /* */
+            }
+          }
+        }
+        try {
+          void api.markAllNotificationsRead()
+        } catch {
+          /* */
+        }
+      }
+      try {
+        void useStore.getState?.()
+      } catch {
+        /* */
+      }
+      // Badge will refresh on next open; force zero via event
+      try {
+        window.dispatchEvent(new CustomEvent('sc:notifs-cleared'))
+      } catch {
+        /* */
+      }
       return
       const cur = prevFilterRef.current
       const list = itemsRef.current
@@ -560,7 +659,7 @@ export function Notifications({
                     }}
                     className={`flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition active:scale-[0.99] ${
                       n.unread
-                        ? 'bg-brand-purple/[0.07] shadow-sm ring-1 ring-brand-purple/20'
+                        ? 'bg-brand-purple/15 shadow-sm ring-1 ring-brand-purple/30'
                         : 'bg-white/70 ring-1 ring-black/[0.04]'
                     }`}
                   >

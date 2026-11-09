@@ -435,6 +435,21 @@ export function connectRealtime(handlers?: RtHandlers) {
             detail: { status: data.status },
           }),
         )
+        const st = data.status
+        window.dispatchEvent(
+          new CustomEvent('sc:rt-notif', {
+            detail: {
+              t: 'status_new',
+              type: 'status_new',
+              status: st,
+              status_id: st.id || st._id,
+              from: st.owner_user_id,
+              from_name: st.owner?.display_name || st.owner?.username,
+              title: `${st.owner?.display_name || st.owner?.username || 'Someone'} posted a status`,
+              body: 'Tap to view',
+            },
+          }),
+        )
       } catch { /* */ }
       return
     }

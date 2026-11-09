@@ -30,8 +30,10 @@ export function statusBgCss(id?: string | null): string {
 
 export function themeDefaultStatusBg(themeId?: string): string {
   const t = (themeId || 'purple').toLowerCase()
+  // Mono theme id is "white" in settings — default status template is black
+  if (t === 'white' || t.includes('mono') || t.includes('black') || t.includes('dark') || t.includes('neutral'))
+    return 'black'
   if (t.includes('orange')) return 'orange'
   if (t.includes('blue')) return 'blue'
-  if (t.includes('black') || t.includes('dark')) return 'black'
   return 'purple'
 }

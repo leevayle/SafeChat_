@@ -2055,6 +2055,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })()
     }
     window.addEventListener('sc:rt-game-invite', onGameInvite)
+    const onNotifsCleared = () => setNotifUnreadCount(0)
+    window.addEventListener('sc:notifs-cleared', onNotifsCleared)
     const onNotif = (ev: Event) => {
       setNotifUnreadCount((n) => n + 1)
       const d = (ev as CustomEvent).detail || {}
@@ -2096,6 +2098,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => {
       window.removeEventListener('sc:delete-chats', onDelete)
       window.removeEventListener('sc:rt-game-invite', onGameInvite)
+      window.removeEventListener('sc:notifs-cleared', onNotifsCleared)
       window.removeEventListener('sc:rt-notif', onNotif)
       window.removeEventListener('sc:delete-calls', onDeleteCalls)
       window.removeEventListener('sc:delete-locked-chats', onDeleteLocked)
@@ -2199,6 +2202,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const onNew = (ev: Event) => {
       const d = (ev as CustomEvent).detail as { status?: any }
       if (!d?.status) return
+      // Notify + cache for Notifications tab
+      try {
+        const st = d.status
+        const name =
+          st.owner?.display_name ||
+          st.owner?.username ||
+          st.user?.name ||
+          'Someone'
+        setNotifUnreadCount((n) => n + 1)
+        void (async () => {
+          try {
+            const { loadCachedNotifications, saveCachedNotifications } = await import('./lib/appCache')
+            const prev = (await loadCachedNotifications<any>()) || []
+            const row = {
+              id: `live-snew-${st.id || Date.now()}`,
+              type: 'status_new',
+              title: `${name} posted a status`,
+              body: 'Tap to view',
+              actor_id: st.owner_user_id || st.userId,
+              status_id: st.id,
+              read: false,
+              created_at: new Date().toISOString(),
+            }
+            await saveCachedNotifications([row, ...prev.filter((x: any) => x.id !== row.id)].slice(0, 100))
+          } catch { /* */ }
+        })()
+        try {
+          showToast(`${name} posted a status`)
+        } catch { /* */ }
+      } catch { /* */ }
       const mapped = mapIncoming(d.status)
       if (!mapped?.id) return
       patchStatusList((list) => {
