@@ -498,16 +498,17 @@ export function StatusViewer({
         time = new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
       }
     } catch { /* */ }
+    const payload = {
+      peerId: userId,
+      preview,
+      time,
+      statusId: current?.id || undefined,
+    }
     try {
-      sessionStorage.setItem(
-        'sc_status_reply',
-        JSON.stringify({
-          peerId: userId,
-          preview,
-          time,
-          statusId: current?.id || undefined,
-        }),
-      )
+      sessionStorage.setItem('sc_status_reply', JSON.stringify(payload))
+    } catch { /* */ }
+    try {
+      window.dispatchEvent(new CustomEvent('sc:status-reply', { detail: payload }))
     } catch { /* */ }
     onClose()
     onReplyToStatus?.(userId)
@@ -720,12 +721,20 @@ export function StatusViewer({
 
       {!isOwner && (
         <div
-          className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+          className="absolute inset-x-0 bottom-0 z-30 flex justify-center pb-[max(0.75rem,env(safe-area-inset-bottom))]"
           style={{ opacity: 0.55 + swipeDy / 120, transform: `translateY(${-swipeDy * 0.25}px)` }}
         >
-          <div className="rounded-full bg-black/35 px-4 py-1.5 text-xs font-bold text-white/95 backdrop-blur-md">
+          <button
+            type="button"
+            data-status-action
+            onClick={(e) => {
+              e.stopPropagation()
+              commitStatusReply()
+            }}
+            className="pointer-events-auto rounded-full bg-black/35 px-4 py-1.5 text-xs font-bold text-white/95 backdrop-blur-md transition hover:bg-black/50 active:scale-95"
+          >
             Swipe up to reply
-          </div>
+          </button>
         </div>
       )}
 

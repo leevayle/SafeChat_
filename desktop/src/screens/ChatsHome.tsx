@@ -710,7 +710,9 @@ export function ChatsHome({
                                 aria-hidden
                               />
                             ) : null}
-                            {(ct as any).savedName || ct.name}
+                            {me?.id && c.contactId === me.id
+                              ? `me(${me.username ? `@${String(me.username).replace(/^@/, '')}` : 'you'})`
+                              : ((ct as any).savedName || ct.name)}
                           </p>
                           <div className="flex shrink-0 flex-col items-end gap-0.5">
                             <span

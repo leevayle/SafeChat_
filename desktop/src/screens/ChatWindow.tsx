@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download, Gamepad2 } from 'lucide-react'
+import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download, Gamepad2, Reply, Trash2 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { NotesBoard } from '../components/NotesBoard'
 import { ChatImageCropper } from '../components/ChatImageCropper'
@@ -133,6 +133,8 @@ type BubbleProps = {
   onOpenAction?: () => void
   onOpenStatusReply?: (sr: { preview: string; time?: string; statusId?: string }) => void
   onOpenImage?: (url: string) => void
+  onReactEmoji?: (m: ApiMsg, emoji: string) => void
+  onDeleteMsg?: (m: ApiMsg) => void
 }
 
 /** One mount animation only; later receipt updates re-render ticks in place */
@@ -149,10 +151,13 @@ const MessageBubble = memo(function MessageBubble({
   onOpenAction,
   onOpenStatusReply,
   onOpenImage,
+  onReactEmoji,
+  onDeleteMsg,
 }: BubbleProps) {
   const startX = useRef(0)
   const startY = useRef(0)
   const [dx, setDx] = useState(0)
+  const [hoverReact, setHoverReact] = useState(false)
 
   if (m.callLog) {
     const missed = m.callLog.status === 'missed' || m.callLog.direction === 'missed'
@@ -214,8 +219,84 @@ const MessageBubble = memo(function MessageBubble({
         if (dx > 28) onReply?.(m)
         setDx(0)
       }}
-      className={`relative flex ${mine ? 'justify-end' : 'justify-start'} ${highlight ? 'z-10' : ''}`}
+      className={`group/bubble relative flex ${mine ? 'justify-end' : 'justify-start'} ${highlight ? 'z-10' : ''}`}
     >
+      {/* Desktop: hover actions */}
+      {!m.deleted && (
+        <div
+          className={`pointer-events-none absolute z-20 hidden items-center gap-0.5 rounded-full border border-black/5 bg-white px-0.5 py-0.5 shadow-md dark:border-white/10 dark:bg-[#1a222d] md:pointer-events-auto md:group-hover/bubble:flex ${
+            mine ? '-left-1 -top-1' : '-right-1 -top-1'
+          }`}
+          onMouseLeave={() => setHoverReact(false)}
+        >
+          <button
+            type="button"
+            title="Reply"
+            className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
+            onClick={(e) => {
+              e.stopPropagation()
+              onReply?.(m)
+            }}
+          >
+            <Reply size={16} strokeWidth={2.2} />
+          </button>
+          <div className="relative">
+            <button
+              type="button"
+              title="React"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
+              onClick={(e) => {
+                e.stopPropagation()
+                setHoverReact((v) => !v)
+              }}
+            >
+              <Smile size={16} strokeWidth={2.2} />
+            </button>
+            {hoverReact && (
+              <div className="absolute bottom-full left-1/2 z-30 mb-1 flex -translate-x-1/2 gap-0.5 rounded-full border border-black/5 bg-white p-1 shadow-lg dark:border-white/10 dark:bg-[#1a222d]">
+                {REACT_EMOJIS.map((em) => (
+                  <button
+                    key={em}
+                    type="button"
+                    className="flex h-8 w-8 items-center justify-center rounded-full text-base hover:bg-gray-100 dark:hover:bg-white/10"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setHoverReact(false)
+                      onReactEmoji?.(m, em)
+                    }}
+                  >
+                    {em}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {mine && (
+            <button
+              type="button"
+              title="Delete"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-brand-red hover:bg-red-50 dark:hover:bg-red-500/10"
+              onClick={(e) => {
+                e.stopPropagation()
+                onDeleteMsg?.(m)
+              }}
+            >
+              <Trash2 size={15} strokeWidth={2.2} />
+            </button>
+          )}
+          <button
+            type="button"
+            title="More"
+            className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpenAction?.()
+            }}
+          >
+            <MoreVertical size={15} strokeWidth={2.2} />
+          </button>
+        </div>
+      )}
       <div
         role={mine && m.state === 'failed' ? 'button' : undefined}
         tabIndex={mine && m.state === 'failed' ? 0 : undefined}
@@ -228,7 +309,7 @@ const MessageBubble = memo(function MessageBubble({
             : 'rounded-2xl rounded-bl-sm bg-white text-ink shadow-[0_4px_16px_-8px_rgba(15,23,42,0.18)] ring-1 ring-black/[0.04]'
         } ${mine && m.state === 'failed' ? 'ring-2 ring-red-300/80' : ''} ${
           highlight ? 'ring-2 ring-brand-purple shadow-[0_0_0_6px_rgba(var(--brand-shadow-rgb),0.22)] transition-shadow duration-700' : 'transition-shadow duration-700'
-        }`}
+        } ${m.reactions && m.reactions.length ? 'mb-2' : ''}`}
       >
         {m.statusReply && (
           <button
@@ -237,14 +318,18 @@ const MessageBubble = memo(function MessageBubble({
               e.stopPropagation()
               onOpenStatusReply?.(m.statusReply!)
             }}
-            className={`mx-2.5 mt-2 w-[calc(100%-1.25rem)] border-l-[3px] px-2.5 py-1.5 text-left text-[12px] font-semibold ${
-              mine ? 'border-white/70 bg-white/12 text-white/90' : 'border-brand-purple/80 bg-gray-50 text-gray-600'
+            className={`mx-2 mt-2 w-[calc(100%-1rem)] overflow-hidden rounded-lg border-l-4 px-2.5 py-1.5 text-left text-[12px] font-semibold ${
+              mine
+                ? 'border-white/80 bg-white/15 text-white/95'
+                : 'border-brand-purple bg-brand-purple/8 text-gray-700'
             }`}
           >
-            <span className="block text-[10px] font-black uppercase tracking-wide opacity-70">Status reply</span>
+            <span className={`block text-[10px] font-black uppercase tracking-wide ${mine ? 'text-white/80' : 'text-brand-purple'}`}>
+              Status
+            </span>
             <span className="line-clamp-2">{m.statusReply.preview}</span>
             {m.statusReply.time ? (
-              <span className="mt-0.5 block text-[10px] opacity-60">{m.statusReply.time}</span>
+              <span className={`mt-0.5 block text-[10px] ${mine ? 'text-white/55' : 'text-gray-400'}`}>{m.statusReply.time}</span>
             ) : null}
           </button>
         )}
@@ -327,30 +412,34 @@ const MessageBubble = memo(function MessageBubble({
           {m.timeLabel || formatLocalTime(m.time)}
           <ReceiptTicks state={m.state} readReceipts={readReceipts} mine={mine} />
         </p>
-        {/* Reactions at the very bottom of the bubble border - no overlap on text */}
-        {!!(m.reactions && m.reactions.length) && (
-          <div className="flex flex-wrap gap-0.5 px-2.5 pb-1.5 pt-0.5">
-            {Object.entries(
-              (m.reactions || []).reduce((acc: Record<string, number>, r: any) => {
-                const e = typeof r === 'string' ? r : r.emoji
-                if (!e) return acc
-                acc[e] = (acc[e] || 0) + 1
-                return acc
-              }, {} as Record<string, number>),
-            ).map(([emoji, count]) => (
-              <span
-                key={emoji}
-                className="flex h-5 min-w-5 items-center justify-center rounded-full bg-black/5 px-1 text-[11px] ring-1 ring-black/6"
-              >
-                {emoji}
-                {(count as number) > 1 ? (
-                  <span className="ml-0.5 text-[9px] font-black text-gray-500">{count as number}</span>
-                ) : null}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
+      {/* Reactions: half on bubble, half outside (WhatsApp-style) */}
+      {!!(m.reactions && m.reactions.length) && (
+        <div
+          className={`absolute z-[5] flex flex-wrap gap-0.5 ${
+            mine ? 'bottom-0 left-1 translate-y-1/2' : 'bottom-0 right-1 translate-y-1/2'
+          }`}
+        >
+          {Object.entries(
+            (m.reactions || []).reduce((acc: Record<string, number>, r: any) => {
+              const e = typeof r === 'string' ? r : r.emoji
+              if (!e) return acc
+              acc[e] = (acc[e] || 0) + 1
+              return acc
+            }, {} as Record<string, number>),
+          ).map(([emoji, count]) => (
+            <span
+              key={emoji}
+              className="flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[11px] shadow-sm ring-1 ring-black/10 dark:bg-[#1a222d] dark:ring-white/15"
+            >
+              {emoji}
+              {(count as number) > 1 ? (
+                <span className="ml-0.5 text-[9px] font-black text-gray-500">{count as number}</span>
+              ) : null}
+            </span>
+          ))}
+        </div>
+      )}
     </motion.div>
   )
 })
@@ -1541,29 +1630,38 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     setActionMsg(null)
   }
 
-  // Status swipe-up reply hands off via sessionStorage
+  // Status reply handoff (sessionStorage + live event) — desktop / foldable / mobile
   useEffect(() => {
+    const apply = (data: { peerId?: string; preview?: string; time?: string; statusId?: string }) => {
+      if (!data?.peerId) return
+      if (data.peerId !== contactId && data.peerId !== peerId) return
+      setStatusReply({
+        preview: data.preview || 'Status',
+        time: data.time,
+        statusId: data.statusId,
+      })
+      requestAnimationFrame(() => inputRef.current?.focus())
+    }
     try {
       const raw = sessionStorage.getItem('sc_status_reply')
-      if (!raw) return
-      const data = JSON.parse(raw) as {
-        peerId?: string
-        preview?: string
-        time?: string
-        statusId?: string
-      }
-      sessionStorage.removeItem('sc_status_reply')
-      if (data.peerId && data.peerId === contactId) {
-        setStatusReply({
-          preview: data.preview || 'Status',
-          time: data.time,
-          statusId: data.statusId,
-        })
+      if (raw) {
+        const data = JSON.parse(raw)
+        sessionStorage.removeItem('sc_status_reply')
+        apply(data)
       }
     } catch {
       /* */
     }
-  }, [contactId])
+    const onEv = (ev: Event) => {
+      try {
+        apply((ev as CustomEvent).detail || {})
+      } catch {
+        /* */
+      }
+    }
+    window.addEventListener('sc:status-reply', onEv)
+    return () => window.removeEventListener('sc:status-reply', onEv)
+  }, [contactId, peerId])
 
   // Merge call history for this peer into the timeline
   useEffect(() => {
@@ -2233,6 +2331,38 @@ return (
                   readReceipts={settings.readReceipts !== false}
                   animateIn={animateIn}
                   onRetry={retryFailed}
+                  onReactEmoji={(msg, emoji) => {
+                    setActionMsg(msg)
+                    // apply after state — use direct call path
+                    void (async () => {
+                      const id = msg.id
+                      const meId = me?.id
+                      setMsgs((list) =>
+                        list.map((x) => {
+                          if (x.id !== id) return x
+                          const others = (x.reactions || []).filter((r: any) => r.user_id && meId && r.user_id !== meId)
+                          const minePrev = (x.reactions || []).find((r: any) => !r.user_id || (meId && r.user_id === meId))
+                          const same = minePrev && minePrev.emoji === emoji
+                          const reactions = same ? others : [...others, { emoji, user_id: meId }]
+                          return { ...x, reactions }
+                        }),
+                      )
+                      try {
+                        await api.reactMessage(id, emoji)
+                      } catch {
+                        /* */
+                      }
+                    })()
+                  }}
+                  onDeleteMsg={(msg) => {
+                    setActionMsg(msg)
+                    setMsgs((list) =>
+                      list.map((x) =>
+                        x.id === msg.id ? { ...x, deleted: true, text: '', image: null } : x,
+                      ),
+                    )
+                    void api.deleteMessage(msg.id).catch(() => showToast('Could not delete'))
+                  }}
                   onReply={(msg) => {
                     setReplyTo(msg)
                     requestAnimationFrame(() => inputRef.current?.focus())
@@ -2563,12 +2693,12 @@ return (
       <div className="shrink-0 safe-pb bg-transparent">
         <div className="bg-transparent pt-1">
         {(replyTo || statusReply) && (
-          <div className="mx-2 mb-1 flex items-start gap-2 rounded-2xl bg-white/90 px-3 py-2.5 shadow-sm backdrop-blur-md">
+          <div className="mx-2 mb-1 flex items-start gap-2 rounded-2xl bg-white px-3 py-2.5 shadow-sm ring-1 ring-black/5 dark:bg-[#1a222d] dark:ring-white/10">
             <div className="min-w-0 flex-1 border-l-4 border-brand-purple pl-2.5">
               <p className="text-[11px] font-black uppercase tracking-wide text-brand-purple">
-                {statusReply ? 'Status reply' : 'Replying'}
+                {statusReply ? 'Replying to status' : 'Replying'}
               </p>
-              <p className="line-clamp-2 text-xs font-semibold text-gray-600">
+              <p className="line-clamp-2 text-xs font-semibold text-gray-700 dark:text-gray-300">
                 {statusReply?.preview || replyTo?.text || (replyTo?.image ? '📷 Photo' : '')}
               </p>
               {statusReply?.time ? (
