@@ -1270,7 +1270,9 @@ export const api = {
   },
 
   likeStatus: async (id: string) => {
-    return req<any>(`/api/v1/statuses/${id}/like`, { method: 'POST' })
+    const res = await req<any>(`/api/v1/statuses/${encodeURIComponent(id)}/like`, { method: 'POST' })
+    // Backend may wrap as { data: { liked } } or return payload directly
+    return res?.data ?? res
   },
 
   notifUnreadCount: async () => {

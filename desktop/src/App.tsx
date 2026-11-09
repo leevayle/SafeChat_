@@ -1,5 +1,6 @@
 import { Toast } from './components/ui'
 import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { DeactivatedGate } from './screens/DeactivatedGate'
 import { Splash } from './screens/Splash'
 import { Welcome } from './screens/Welcome'
@@ -1249,21 +1250,35 @@ function Shell() {
           {second}
         </div>
 
-        {/* Status viewer + composer need full foldable width */}
-        {statusUser && (
-          <div className="fixed inset-0 z-[100] bg-black">
-            <StatusViewer
-              userId={statusUser.userId}
-              initialStatusId={statusUser.statusId}
-              onClose={() => setStatusUser(null)}
-              onReplyToStatus={(peerId) => {
-                setStatusUser(null)
-                setChat(peerId)
-                setTab('chats')
+        {/* Status viewer: portal to body so foldable dual-screen hit-testing works */}
+        {statusUser &&
+          createPortal(
+            <div
+              className="sc-foldable-status-overlay fixed inset-0 z-[9999] bg-black"
+              style={{
+                width: '100vw',
+                height: '100dvh',
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+                pointerEvents: 'auto',
+                touchAction: 'manipulation',
               }}
-            />
-          </div>
-        )}
+            >
+              <StatusViewer
+                userId={statusUser.userId}
+                initialStatusId={statusUser.statusId}
+                onClose={() => setStatusUser(null)}
+                onReplyToStatus={(peerId) => {
+                  setStatusUser(null)
+                  setChat(peerId)
+                  setTab('chats')
+                }}
+              />
+            </div>,
+            document.body,
+          )}
 
         {call && (
           <div className="fixed inset-0 z-[95]">

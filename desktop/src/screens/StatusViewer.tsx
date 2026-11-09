@@ -441,25 +441,42 @@ export function StatusViewer({
   }
 
   const toggleLike = (e: MouseEvent) => {
+    e.preventDefault()
     e.stopPropagation()
-    if (!current) return
-    if (isOwner) return
-    const id = current.id
-    const was = !!likes[id]
-    const next = { ...likes, [id]: !was }
-    setLikes(next)
-    saveLikes(next)
-    setLikePulse(true)
-    window.setTimeout(() => setLikePulse(false), 450)
-    if (!was) showToast('Sending like…')
+    if (!current || isOwner) return
+    const id = String(current.id || '')
+    if (!id) return
     if (likeInFlight.current) return
     likeInFlight.current = true
+    const was = !!likes[id]
+    const nextVal = !was
+    setLikes((prev) => {
+      const next = { ...prev, [id]: nextVal }
+      saveLikes(next)
+      return next
+    })
+    setLikePulse(true)
+    window.setTimeout(() => setLikePulse(false), 450)
+    if (nextVal) showToast('Sending like…')
     void api
       .likeStatus(id)
+      .then((res) => {
+        // Prefer server liked flag when present
+        const serverLiked = res?.liked ?? res?.data?.liked
+        if (typeof serverLiked === 'boolean') {
+          setLikes((prev) => {
+            const next = { ...prev, [id]: serverLiked }
+            saveLikes(next)
+            return next
+          })
+        }
+      })
       .catch(() => {
-        const rolled = { ...likes, [id]: was }
-        setLikes(rolled)
-        saveLikes(rolled)
+        setLikes((prev) => {
+          const next = { ...prev, [id]: was }
+          saveLikes(next)
+          return next
+        })
         showToast('Could not update like')
       })
       .finally(() => {
@@ -573,8 +590,8 @@ export function StatusViewer({
         </button>
       </div>
 
-      {/* Left / mid / right zones */}
-      <div className="absolute inset-0 z-10 flex">
+      {/* Left / mid / right zones — leave bottom clear for like/reply actions */}
+      <div className="absolute inset-x-0 top-0 bottom-28 z-10 flex">
         <div className="h-full w-[30%]" onPointerDown={onPressStart('left')} />
         <div className="h-full flex-1" onPointerDown={onPressStart('mid')} />
         <div className="h-full w-[30%]" onPointerDown={onPressStart('right')} />
@@ -626,7 +643,7 @@ export function StatusViewer({
         </AnimatePresence>
       </div>
 
-      <div className="relative z-20 flex items-end justify-between px-5 pb-8 safe-pb" data-status-action>
+      <div className="relative z-30 flex items-end justify-between px-5 pb-8 safe-pb pointer-events-auto" data-status-action>
         {isOwner ? (
           <>
             <button
@@ -706,6 +723,9 @@ export function StatusViewer({
               <button
                 type="button"
                 data-status-action
+                onPointerDown={(e) => {
+                  e.stopPropagation()
+                }}
                 onClick={toggleLike}
                 className={`flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-sm transition-transform duration-200 ${
                   liked ? 'bg-brand-red/90 text-white' : 'bg-white/10 text-white'
