@@ -20,12 +20,12 @@ export function LogoIcon({
       fill="none"
       initial={animate ? { opacity: 0, scale: 0.92 } : false}
       animate={
-        animate
+        animate && !outlined
           ? { opacity: 1, scale: 1, y: [0, -4, 0] }
           : { opacity: 1, scale: 1 }
       }
       transition={
-        animate
+        animate && !outlined
           ? {
               opacity: { duration: 0.55, ease: 'easeOut' },
               scale: { duration: 0.55, ease: 'easeOut' },
@@ -45,7 +45,7 @@ export function LogoIcon({
         d="M56 8C29.5 8 8 27.2 8 51c0 12.6 6 23.9 15.6 31.8L18 102l22-9.6c5 1.1 10.3 1.6 16 1.6 26.5 0 48-19.2 48-43S82.5 8 56 8Z"
         fill={outlined ? 'none' : `url(#${gradId})`}
         stroke={outlined ? `url(#${gradId})` : undefined}
-        strokeWidth={outlined ? 4.5 : undefined}
+        strokeWidth={outlined ? 2.25 : undefined}
         strokeLinejoin="round"
       />
       {[36, 56, 76].map((cx, i) => (
@@ -53,22 +53,26 @@ export function LogoIcon({
           key={cx}
           cx={cx}
           cy={51}
-          r={outlined ? 5 : 5.5}
+          r={outlined ? 4.5 : 5.5}
           fill={outlined ? 'none' : '#fff'}
           stroke={outlined ? `url(#${gradId})` : undefined}
-          strokeWidth={outlined ? 2.5 : undefined}
-          initial={{ opacity: 0.35, cy: 51 }}
+          strokeWidth={outlined ? 1.25 : undefined}
+          initial={{ opacity: 1, cy: 51 }}
           animate={
-            animate
+            animate && !outlined
               ? { opacity: [0.35, 1, 0.35], cy: [51, 46, 51] }
               : { opacity: 1, cy: 51 }
           }
-          transition={{
-            duration: 1.4,
-            repeat: Infinity,
-            delay: i * 0.22,
-            ease: 'easeInOut',
-          }}
+          transition={
+            animate && !outlined
+              ? {
+                  duration: 1.4,
+                  repeat: Infinity,
+                  delay: i * 0.22,
+                  ease: 'easeInOut',
+                }
+              : undefined
+          }
         />
       ))}
     </motion.svg>

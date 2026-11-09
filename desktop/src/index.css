@@ -393,9 +393,11 @@ img.sc-media-transparent,
     background-color: rgba(123, 44, 191, 0.05);
   }
 
-  /* Hide mobile FAB inside desktop sidebar — actions live in header */
+  /* FAB stays inside the sidebar list pane (absolute, not viewport-fixed) */
   .desktop-chat-list .fab-theme {
-    display: none !important;
+    position: absolute !important;
+    bottom: 1.25rem !important;
+    right: 1.25rem !important;
   }
 
   /* Conversation pane: tighten header safe-area for desktop */
@@ -488,11 +490,8 @@ img.sc-media-transparent,
 
 /* Auth: full-viewport gradient; content centered, no phone chrome */
 .auth-shell {
-  background:
-    radial-gradient(ellipse 90% 70% at 15% 10%, rgba(123, 44, 191, 0.18), transparent 55%),
-    radial-gradient(ellipse 80% 60% at 85% 90%, rgba(255, 140, 0, 0.14), transparent 50%),
-    radial-gradient(ellipse 60% 40% at 50% 50%, rgba(156, 49, 161, 0.08), transparent 60%),
-    #f5f0fa !important;
+  /* Same as mobile login/onboarding */
+  background: linear-gradient(to bottom, #F8F1FF, #ffffff, #EEF2FF) !important;
   width: 100%;
   min-height: 100dvh;
 }
@@ -502,10 +501,6 @@ img.sc-media-transparent,
   border: none !important;
   border-radius: 0 !important;
 }
-}
-
-
-
 
 /* ── Desktop theme: LIGHT by default; DARK only when Settings sets data-mode=dark ── */
 .desktop-shell,
@@ -522,10 +517,10 @@ img.sc-media-transparent,
   border-color: rgba(0, 0, 0, 0.08);
 }
 .sc-center-bg {
-  background: #f0f2f5 !important;
+  background: #ffffff !important;
 }
 .sc-empty {
-  background: #f0f2f5 !important;
+  background: #ffffff !important;
 }
 .sc-empty-sub {
   color: #6b7280 !important;
@@ -615,4 +610,66 @@ html[data-mode="dark"] .sc-center-bg,
 html.dark .sc-center-bg {
   background: #121821 !important;
   background-color: #121821 !important;
+}
+
+
+/* Unified dark shell — same surface as mobile */
+html[data-mode="dark"] .nav-rail,
+html.dark .nav-rail,
+html[data-mode="dark"] .desktop-sidebar,
+html.dark .desktop-sidebar,
+html[data-mode="dark"] .desktop-right,
+html.dark .desktop-right,
+html[data-mode="dark"] .sc-center-bg,
+html.dark .sc-center-bg,
+html[data-mode="dark"] .sc-empty,
+html.dark .sc-empty,
+html[data-mode="dark"] .conversation-pane,
+html.dark .conversation-pane {
+  background: #121821 !important;
+  background-color: #121821 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+html[data-mode="dark"] .nav-rail,
+html.dark .nav-rail {
+  border-right: none !important;
+}
+html[data-mode="dark"] .desktop-shell,
+html.dark .desktop-shell,
+html[data-mode="dark"] .sc-shell-bg,
+html.dark .sc-shell-bg {
+  background: #0d1218 !important;
+}
+
+/* Notifications — full page + cards follow dark */
+html[data-mode="dark"] .sc-notif-page,
+html.dark .sc-notif-page {
+  background: #121821 !important;
+}
+html[data-mode="dark"] .sc-notif-page header,
+html.dark .sc-notif-page header {
+  background: rgba(18, 24, 33, 0.92) !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
+}
+html[data-mode="dark"] .sc-notif-card,
+html.dark .sc-notif-card {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #e5e7eb !important;
+  box-shadow: none !important;
+  ring-color: rgba(255, 255, 255, 0.08) !important;
+}
+html[data-mode="dark"] .sc-notif-card .text-ink,
+html.dark .sc-notif-card .text-ink {
+  color: #e5e7eb !important;
+}
+html[data-mode="dark"] .sc-notif-filter,
+html.dark .sc-notif-filter {
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #9ca3af !important;
+}
+html[data-mode="dark"] .sc-notif-filter-active,
+html.dark .sc-notif-filter-active {
+  background: var(--color-brand-purple, #7b2cbf) !important;
+  color: #fff !important;
 }

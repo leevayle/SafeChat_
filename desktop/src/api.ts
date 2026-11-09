@@ -633,11 +633,14 @@ function friendlyError(raw: string, status?: number, path?: string): string {
     return 'Session expired — log in again'
   }
   if (status === 403 || t.includes('forbidden')) return 'You don’t have permission for that'
-  if (status === 404 || t.includes('not found')) return 'Not found'
+  if (status === 404 || t.includes('not found')) {
+    if (isAuthForm) return 'Cannot reach server — start the backend on port 8000, then try again'
+    return 'Not found'
+  }
   if (status === 409 || t.includes('conflict') || t.includes('already')) return raw.length < 80 ? raw : 'That action isn’t available right now'
   if (status === 429 || t.includes('rate limit') || t.includes('too many')) return 'Slow down a moment and try again'
   if (status && status >= 500) return 'Something went wrong — try again'
-  if (t.includes('network') || t.includes('failed to fetch')) return 'Check your connection and try again'
+  if (t.includes('network') || t.includes('failed to fetch') || t.includes('econnrefused') || t.includes('proxy')) return 'Cannot reach server — is the backend running on port 8000?'
   if (t.includes('incorrect password') || t.includes('wrong password')) return 'Incorrect password'
   // Keep short human messages; trim long technical dumps
   if (raw && raw.length <= 90 && !t.includes('exception') && !t.includes('traceback')) return raw

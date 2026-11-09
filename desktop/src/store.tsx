@@ -2317,7 +2317,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       calls,
       saveRequestPending,
       notifUnreadCount,
-      refreshNotifCount,
       refreshChats,
       syncSubscription,
       refreshContacts,

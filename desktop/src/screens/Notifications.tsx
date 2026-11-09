@@ -489,8 +489,8 @@ export function Notifications({
   }
 
   return (
-    <div className="flex h-full flex-col bg-gradient-to-b from-[#f3eeff]/80 via-white to-[#eef4ff]/50">
-      <header className="z-10 shrink-0 border-b border-black/5 bg-white/90 px-3 pb-3 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur-md">
+    <div className="sc-notif-page flex h-full flex-col bg-gradient-to-b from-[#f3eeff]/80 via-white to-[#eef4ff]/50 dark:from-[#121821] dark:via-[#121821] dark:to-[#121821] dark:bg-[#121821]">
+      <header className="z-10 shrink-0 border-b border-black/5 bg-white/90 px-3 pb-3 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur-md dark:border-white/10 dark:bg-[#121821]/95">
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -533,8 +533,8 @@ export function Notifications({
               onClick={() => setFilter(id)}
               className={`mt-[2px] shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-extrabold transition ${
                 filter === id
-                  ? 'bg-brand-purple text-white'
-                  : 'bg-white text-gray-500 ring-1 ring-brand-purple/15'
+                  ? 'sc-notif-filter-active bg-brand-purple text-white'
+                  : 'sc-notif-filter bg-white text-gray-500 ring-1 ring-brand-purple/15 dark:bg-white/10 dark:text-gray-300 dark:ring-white/10'
               }`}
             >
               {label}
@@ -588,10 +588,10 @@ export function Notifications({
                         /* buttons handle accept */
                       }
                     }}
-                    className={`flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition active:scale-[0.99] ${
+                    className={`sc-notif-card flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition active:scale-[0.99] ${
                       n.unread
-                        ? 'bg-brand-purple/15 shadow-sm ring-1 ring-brand-purple/30'
-                        : 'bg-white/70 ring-1 ring-black/[0.04]'
+                        ? 'bg-brand-purple/15 shadow-sm ring-1 ring-brand-purple/30 dark:bg-brand-purple/20 dark:ring-brand-purple/40'
+                        : 'bg-white/70 ring-1 ring-black/[0.04] dark:bg-white/[0.06] dark:ring-white/10'
                     }`}
                   >
                     <span
@@ -639,13 +639,13 @@ export function Notifications({
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
-                        <span className="truncate text-[14px] font-extrabold text-ink">{n.title}</span>
+                        <span className="truncate text-[14px] font-extrabold text-ink dark:text-gray-100">{n.title}</span>
                         {n.unread ? (
                           <span className="h-2 w-2 shrink-0 rounded-full bg-brand-orange" />
                         ) : null}
                         <span className="ml-auto shrink-0 text-[11px] font-bold text-gray-400">{n.when}</span>
                       </span>
-                      <span className="mt-0.5 line-clamp-2 text-[13px] font-semibold text-gray-500">
+                      <span className="mt-0.5 line-clamp-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400">
                         {n.body}
                       </span>
                       {(n.kind === 'premium' || n.action === 'recharge') && (

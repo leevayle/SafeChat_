@@ -270,7 +270,7 @@ export function ChatsHome({
 
 
   return (
-    <div className="relative flex h-full flex-col bg-white">
+    <div className="relative flex h-full flex-col overflow-hidden bg-white dark:bg-[#121821]">
       {/* z-10: sticky top chrome - below overlays */}
       <header className="sticky top-0 z-10 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 pb-3 px-5 pt-[max(12px,env(safe-area-inset-top))] backdrop-blur">
         <div className="flex w-full items-center">
@@ -757,7 +757,7 @@ export function ChatsHome({
         whileHover={{ scale: 1.06 }}
         whileTap={{ scale: 0.94 }}
         onClick={onNewChat}
-        className="fab-theme fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white"
+        className="fab-theme absolute bottom-5 right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white md:bottom-6"
       >
         <Plus size={26} strokeWidth={2.4} />
       </motion.button>

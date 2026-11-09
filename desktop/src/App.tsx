@@ -47,6 +47,8 @@ export default function App() {
 
 function Shell() {
   const { ready, listsReady, me, logout, contacts, toast, clearToast, settings, chats, groups, calls } = useStore()
+  const [logoutConfirm, setLogoutConfirm] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT)
 
   // Must be declared before any use — avoids TDZ "Cannot access before initialization"
@@ -85,6 +87,27 @@ function Shell() {
   }
 
   const groupUnread = (groups || []).reduce((n, g: any) => n + (g.unread > 0 ? 1 : 0), 0)
+
+  const requestLogout = () => setLogoutConfirm(true)
+  const confirmLogout = async () => {
+    setLogoutConfirm(false)
+    setLoggingOut(true)
+    try {
+      setChat(null)
+      setGroup(null)
+      setCall(null)
+      setTab('chats')
+      restored.current = false
+      setOverlay(null)
+      await logout()
+      setStage('login')
+    } catch {
+      setStage('login')
+    } finally {
+      setLoggingOut(false)
+    }
+  }
+
   const [stage, setStage] = useState<Stage>('splash')
   const [submitting, setSubmitting] = useState(false)
   const [username, setUsername] = useState('')
@@ -459,7 +482,50 @@ function Shell() {
               }}
             />
           )}
-          {toast && <Toast msg={toast} clear={clearToast} />}
+          
+        {logoutConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
+              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                You will need to sign in again to use SafeChat on this device.
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200"
+                  onClick={() => setLogoutConfirm(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white"
+                  onClick={() => void confirmLogout()}
+                >
+                  Log out
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {loggingOut && (
+          <div
+            className="fixed inset-0 z-[210] flex flex-col items-center justify-center"
+            style={{ background: 'linear-gradient(to bottom, #F8F1FF, #ffffff, #EEF2FF)' }}
+          >
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex gap-2">
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
+              </div>
+              <p className="text-sm font-extrabold text-gray-600">Logging you out…</p>
+            </div>
+          </div>
+        )}
+
+        {toast && <Toast msg={toast} clear={clearToast} />}
         </main>
       </div>
     )
@@ -475,10 +541,7 @@ function Shell() {
               /* session refreshed via reload */
               window.location.reload()
             }}
-            onLogout={() => {
-              void (logout as any)?.()
-              window.location.reload()
-            }}
+            onLogout={requestLogout}
           />
         </main>
       </div>
@@ -509,6 +572,8 @@ function Shell() {
     groups: groupUnread,
     calls: missedCallBadge,
   }
+
+
 
   const onRailSelect = (item: RailItem) => {
     if (item === 'contacts') {
@@ -583,16 +648,7 @@ function Shell() {
             <Settings
               onBack={() => setOverlay(null)}
               onSupport={() => setOverlay('support')}
-              onLogout={async () => {
-                setChat(null)
-                setGroup(null)
-                setCall(null)
-                setTab('chats')
-                restored.current = false
-                await logout()
-                setOverlay(null)
-                setStage('login')
-              }}
+              onLogout={requestLogout}
             />
           </div>
         </div>
@@ -603,16 +659,7 @@ function Shell() {
             <Settings
               onBack={() => setOverlay(null)}
               onSupport={() => setOverlay('support')}
-              onLogout={async () => {
-                setChat(null)
-                setGroup(null)
-                setCall(null)
-                setTab('chats')
-                restored.current = false
-                await logout()
-                setOverlay(null)
-                setStage('login')
-              }}
+              onLogout={requestLogout}
             />
           </div>
         </div>
@@ -832,16 +879,7 @@ function Shell() {
         <Settings
           onBack={() => setOverlay(null)}
           onSupport={() => setOverlay('support')}
-          onLogout={async () => {
-            setChat(null)
-            setGroup(null)
-            setCall(null)
-            setTab('chats')
-            restored.current = false
-            await logout()
-            setOverlay(null)
-            setStage('login')
-          }}
+          onLogout={requestLogout}
         />
       )
     } else if (overlay === 'notifications') {
@@ -1026,17 +1064,36 @@ function Shell() {
           rightPanel={rightPanel}
           overlays={desktopOverlays}
           loading={!listsReady}
-          onLogout={async () => {
-            setChat(null)
-            setGroup(null)
-            setCall(null)
-            setTab('chats')
-            restored.current = false
-            await logout()
-            setOverlay(null)
-            setStage('login')
-          }}
+          onLogout={requestLogout}
         />
+
+        {logoutConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
+              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                You will need to sign in again to use SafeChat on this device.
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button type="button" className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Cancel</button>
+                <button type="button" className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {loggingOut && (
+          <div className="fixed inset-0 z-[210] flex flex-col items-center justify-center" style={{ background: 'linear-gradient(to bottom, #F8F1FF, #ffffff, #EEF2FF)' }}>
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex gap-2">
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
+              </div>
+              <p className="text-sm font-extrabold text-gray-600">Logging you out…</p>
+            </div>
+          </div>
+        )}
+
       </div>
     )
   }
@@ -1103,6 +1160,34 @@ function Shell() {
         )}
 
         {renderOverlays(true)}
+        
+        {logoutConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
+              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                You will need to sign in again to use SafeChat on this device.
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button type="button" className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Cancel</button>
+                <button type="button" className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {loggingOut && (
+          <div className="fixed inset-0 z-[210] flex flex-col items-center justify-center" style={{ background: 'linear-gradient(to bottom, #F8F1FF, #ffffff, #EEF2FF)' }}>
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex gap-2">
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
+              </div>
+              <p className="text-sm font-extrabold text-gray-600">Logging you out…</p>
+            </div>
+          </div>
+        )}
+
       </main>
     </div>
   )

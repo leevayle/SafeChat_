@@ -40,7 +40,7 @@ function itemClass(isActive: boolean) {
 export function NavRail({ active, badges = {}, onSelect, onLogout, loading }: Props) {
   return (
     <aside
-      className="nav-rail sc-surface flex h-full w-[4.5rem] shrink-0 flex-col items-center border-r border-black/8 bg-white py-3"
+      className="nav-rail sc-surface flex h-full w-[4.5rem] shrink-0 flex-col items-center border-r border-transparent py-3"
       aria-label="Main navigation"
     >
       <button

@@ -140,11 +140,11 @@ export function DesktopShell({
         />
       </div>
 
-      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden sc-center-bg bg-[#f0f2f5]">
+      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden sc-center-bg">
         {showEmpty ? (
           <EmptyChatPane title={emptyTitle} subtitle={emptySubtitle} />
         ) : (
-          <div className="conversation-pane sc-surface sc-center-bg flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden bg-[#f0f2f5]">
+          <div className="conversation-pane sc-surface sc-center-bg flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden">
             {main}
           </div>
         )}
