@@ -29,6 +29,7 @@ import { StoreProvider, useStore } from './store'
 import { IncomingCall } from './components/IncomingCall'
 import { BottomNav, type Tab } from './components/BottomNav'
 import { DesktopShell } from './components/desktop/DesktopShell'
+import { EmptyChatPane } from './components/desktop/EmptyChatPane'
 import { ContactInfoPanel } from './components/desktop/ContactInfoPanel'
 import type { RailItem } from './components/desktop/NavRail'
 import { useMediaQuery, DESKTOP_BREAKPOINT, WIDE_DESKTOP_BREAKPOINT, useFoldableDualPane } from './hooks/useMediaQuery'
@@ -53,9 +54,10 @@ function Shell() {
   const isFoldableDual = useFoldableDualPane()
   const isWideDesktop = useMediaQuery(WIDE_DESKTOP_BREAKPOINT)
   /** Dual-pane shell: classic desktop OR foldable / mid-width */
-  const useDesktopShell = isDesktop || isFoldableDual
-  /** Foldables & mid-width: only two panes — third-column screens use the second pane */
+  /** True foldable / dual mid-width — mobile home + second screen */
   const foldableTwoPane = isFoldableDual && !isWideDesktop
+  /** Classic desktop only (not foldable dual-pane) */
+  const useDesktopShell = (isWideDesktop || isDesktop) && !foldableTwoPane
 
   // Must be declared before any use — avoids TDZ "Cannot access before initialization"
   const [seenMissed, setSeenMissed] = useState<Set<string>>(() => {
@@ -1052,12 +1054,8 @@ function Shell() {
           badges={railBadges}
           onRailSelect={onRailSelect}
           sidebar={sidebar}
-          main={
-            foldableTwoPane && rightPanel
-              ? rightPanel
-              : mainContent
-          }
-          showEmpty={foldableTwoPane && rightPanel ? false : showEmpty}
+          main={mainContent}
+          showEmpty={showEmpty}
           emptyTitle={tab === 'groups' ? 'Groups' : tab === 'status' ? 'Status' : tab === 'calls' ? 'Calls' : 'SafeChat'}
           emptySubtitle={
             tab === 'groups'
@@ -1068,11 +1066,10 @@ function Shell() {
                   ? 'Call history appears in the sidebar.'
                   : 'Select a chat to start messaging.'
           }
-          rightPanel={foldableTwoPane ? null : rightPanel}
+          rightPanel={rightPanel}
           overlays={desktopOverlays}
           loading={!listsReady}
           onLogout={requestLogout}
-          compact={foldableTwoPane}
         />
 
         {logoutConfirm && (
@@ -1102,6 +1099,225 @@ function Shell() {
           </div>
         )}
 
+      </div>
+    )
+  }
+
+
+  // Foldables: mobile home left | second screen right; status fullscreen
+  if (foldableTwoPane && stage === 'app') {
+    const foldBadges = {
+      chats: chatUnread,
+      groups: groupUnread,
+      calls: missedCallBadge,
+    }
+
+    // Second screen priority: overlays (settings etc.) → chat → group → empty
+    let second: ReactNode = <EmptyChatPane subtitle="Select a chat to start messaging." />
+    if (overlay === 'contacts') {
+      second = (
+        <Contacts
+          onClose={() => setOverlay(null)}
+          onChat={(id) => {
+            setOverlay(null)
+            setTab('chats')
+            setChat(id)
+          }}
+          onCall={(id, kind) => {
+            setOverlay(null)
+            placeCall(id, kind)
+          }}
+        />
+      )
+    } else if (overlay === 'settings' || overlay === 'profile') {
+      second = (
+        <Settings
+          onBack={() => setOverlay(null)}
+          onSupport={() => setOverlay('support')}
+          onLogout={requestLogout}
+        />
+      )
+    } else if (overlay === 'notifications') {
+      second = (
+        <Notifications
+          onBack={() => setOverlay(null)}
+          onOpenChat={(id) => {
+            setOverlay(null)
+            setChat(id)
+          }}
+          onOpenStatus={(userId, statusId) => {
+            setStatusUser({ userId, statusId })
+          }}
+        />
+      )
+    } else if (overlay === 'saveRequests') {
+      second = (
+        <SaveRequests
+          onClose={() => setOverlay(null)}
+          onChat={(id) => {
+            setOverlay(null)
+            setChat(id)
+          }}
+        />
+      )
+    } else if (overlay === 'support') {
+      second = <Support onClose={() => setOverlay(null)} />
+    } else if (overlay === 'newChat') {
+      second = (
+        <NewChat
+          onClose={() => setOverlay(null)}
+          onPick={(id) => {
+            setOverlay(null)
+            setChat(id)
+          }}
+        />
+      )
+    } else if (overlay === 'newGroup') {
+      second = (
+        <CreateGroup
+          onClose={() => setOverlay(null)}
+          onCreated={(id) => {
+            setOverlay(null)
+            setGroup(id)
+          }}
+        />
+      )
+    } else if (overlay === 'newCall') {
+      second = (
+        <NewCallPanel
+          onClose={() => setOverlay(null)}
+          onCall={(id, kind) => {
+            setOverlay(null)
+            placeCall(id, kind)
+          }}
+        />
+      )
+    } else if (chat) {
+      second = (
+        <ChatWindow
+          contactId={chat}
+          onBack={() => setChat(null)}
+          onCall={(kind) => placeCall(chat, kind)}
+          onOpenCalls={() => {
+            setChat(null)
+            setTab('calls')
+          }}
+          onOpenStatus={(userId, statusId) => setStatusUser({ userId, statusId })}
+        />
+      )
+    } else if (group) {
+      second = (
+        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} />
+      )
+    }
+
+    return (
+      <div className="relative flex h-dvh w-full min-w-0 overflow-hidden bg-[#f0f2f5] dark:bg-[#0d1218]">
+        {/* Left: mobile home + docked bottom nav */}
+        <div className="relative flex h-full min-w-0 w-1/2 flex-col overflow-hidden border-r border-black/[0.06] bg-white dark:border-white/10 dark:bg-[#121821]">
+          <div className="relative min-h-0 flex-1 overflow-hidden">
+            <div className={tab === 'chats' ? 'h-full' : 'hidden'}>
+              <ChatsHome {...chatsHomeProps} />
+            </div>
+            <div className={tab === 'groups' ? 'h-full' : 'hidden'}>
+              <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
+            </div>
+            <div className={tab === 'status' ? 'h-full' : 'hidden'}>
+              <StatusTab onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
+            </div>
+            <div className={tab === 'calls' ? 'h-full' : 'hidden'}>
+              <CallsTab
+                onCall={placeCall}
+                onOpenContacts={() => setOverlay('contacts')}
+                onOpenNewCallPanel={() => setOverlay('newCall')}
+              />
+            </div>
+          </div>
+          <BottomNav
+            docked
+            tab={tab}
+            onChange={(t) => {
+              if (t === 'calls') markMissedSeen()
+              setTab(t)
+            }}
+            badges={foldBadges}
+          />
+        </div>
+
+        {/* Right: second screen — chat OR settings / contacts / etc. */}
+        <div className="relative flex h-full min-w-0 w-1/2 flex-col overflow-hidden bg-white dark:bg-[#121821]">
+          {second}
+        </div>
+
+        {/* Status viewer + composer need full foldable width */}
+        {statusUser && (
+          <div className="fixed inset-0 z-[100] bg-black">
+            <StatusViewer
+              userId={statusUser.userId}
+              initialStatusId={statusUser.statusId}
+              onClose={() => setStatusUser(null)}
+              onReplyToStatus={(peerId) => {
+                setStatusUser(null)
+                setChat(peerId)
+                setTab('chats')
+              }}
+            />
+          </div>
+        )}
+
+        {call && (
+          <div className="fixed inset-0 z-[95]">
+            <CallScreen
+              contactId={call.id}
+              kind={call.kind}
+              ringId={call.ringId}
+              remoteOfferSdp={call.remoteOfferSdp}
+              peerName={call.peerName}
+              peerUsername={call.peerUsername}
+              onEnd={() => setCall(null)}
+            />
+          </div>
+        )}
+
+        {incoming && (
+          <IncomingCall
+            contactId={incoming.id}
+            kind={incoming.kind}
+            onAccept={() => {
+              setCall({ id: incoming.id, kind: incoming.kind })
+              setIncoming(null)
+            }}
+            onDecline={() => setIncoming(null)}
+          />
+        )}
+
+        {logoutConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
+              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                You will need to sign in again to use SafeChat on this device.
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button type="button" className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Cancel</button>
+                <button type="button" className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {loggingOut && (
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex gap-2">
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
+              </div>
+              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
+            </div>
+          </div>
+        )}
+        {toast && <Toast msg={toast} clear={clearToast} />}
       </div>
     )
   }

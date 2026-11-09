@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { NavRail, type RailItem } from './NavRail'
 import { EmptyChatPane } from './EmptyChatPane'
-import type { Tab } from '../BottomNav'
+import { BottomNav, type Tab } from '../BottomNav'
 
 const SIDEBAR_KEY = 'sc_sidebar_width'
 const RIGHT_KEY = 'sc_right_width_v2'
@@ -27,8 +27,13 @@ type Props = {
   overlays?: ReactNode
   onLogout?: () => void
   loading?: boolean
-  /** Foldable / mid-width: nav+list | inbox each ~half screen; no third column */
+  /**
+   * Foldable dual-pane:
+   * left = home feed + mobile bottom nav (no side rail)
+   * right = inbox
+   */
   compact?: boolean
+  onTabChange?: (t: Tab) => void
 }
 
 export function DesktopShell({
@@ -46,6 +51,7 @@ export function DesktopShell({
   onLogout,
   loading,
   compact = false,
+  onTabChange,
 }: Props) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
@@ -136,14 +142,30 @@ export function DesktopShell({
     </div>
   )
 
-  /* Foldable / dual: [nav + chats] 50% | inbox 50% */
+  const tabBadges: Partial<Record<Tab, number>> = {
+    chats: badges.chats || 0,
+    groups: badges.groups || 0,
+    status: badges.status || 0,
+    calls: badges.calls || 0,
+  }
+
+  /* Foldable: [home feed + bottom nav] 50% | inbox 50% — no side rail */
   if (compact) {
     return (
       <div className="desktop-shell flex h-dvh w-full min-w-0 overflow-hidden sc-shell-bg bg-[#dfe3e8]">
-        <div className="flex h-full min-w-0 w-1/2 shrink-0 border-r border-black/[0.06] dark:border-white/10">
-          <NavRail active={railActive} badges={badges} onSelect={onRailSelect} onLogout={onLogout} loading={loading} />
-          <div className="desktop-sidebar sc-surface flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white dark:bg-[#121821]">
+        <div className="relative flex h-full min-w-0 w-1/2 shrink-0 flex-col border-r border-black/[0.06] dark:border-white/10">
+          <div className="desktop-sidebar sc-surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white dark:bg-[#121821]">
             {sidebar}
+          </div>
+          <div className="relative h-[5.25rem] shrink-0">
+            <BottomNav
+              tab={tab}
+              onChange={(t) => {
+                onTabChange?.(t)
+                onRailSelect(t)
+              }}
+              badges={tabBadges}
+            />
           </div>
         </div>
         <div className="relative flex h-full min-w-0 w-1/2 flex-1 flex-col overflow-hidden sc-center-bg">
