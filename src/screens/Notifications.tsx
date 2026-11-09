@@ -415,45 +415,7 @@ export function Notifications({
     prevFilterRef.current = filter
   }, [filter])
 
-  useEffect(() => {
-    return // disabled: was marking on leave
-    const prev = prevFilterRef.current
-    if (prev === filter) return
-    const list = itemsRef.current
-    const match = (i: NotifItem) => {
-      if (prev === 'all') return false // leaving all → don't bulk-clear unless intentional
-      if (prev === 'calls') return i.kind === 'missed_call'
-      if (prev === 'status') return i.kind === 'status'
-      if (prev === 'games') return i.kind === 'game' || (i as any).action === 'game_invite'
-      if (prev === 'system') return i.kind === 'system' || i.kind === 'premium'
-      return false
-    }
-    const toRead = list.filter((i) => i.unread && match(i))
-    if (toRead.length) {
-      setReadIds((prevIds) => {
-        const next = new Set(prevIds)
-        toRead.forEach((i) => next.add(i.id))
-        try {
-          localStorage.setItem('sc_notif_read', JSON.stringify([...next]))
-        } catch {
-          /* */
-        }
-        return next
-      })
-      for (const i of toRead) {
-        if (i.id.startsWith('ginv-') || i.id.startsWith('slike-') || i.id.startsWith('cacc-')) {
-          const real = i.id.replace(/^(ginv-|slike-|cacc-)/, '')
-          try {
-            void api.markNotificationRead(real)
-          } catch {
-            /* */
-          }
-        }
-      }
-      void refreshNotifCount?.()
-    }
-    prevFilterRef.current = filter
-  }, [filter, refreshNotifCount])
+  // Auto-mark on filter leave is disabled — only mark on click / Mark all as read / leave screen
 
   // Leaving Notifications → mark everything read
   useEffect(() => {
@@ -495,37 +457,6 @@ export function Notifications({
         window.dispatchEvent(new CustomEvent('sc:notifs-cleared'))
       } catch {
         /* */
-      }
-      return
-      const cur = prevFilterRef.current
-      const list = itemsRef.current
-      const match = (i: NotifItem) => {
-        if (cur === 'all') return !!i.unread
-        if (cur === 'calls') return i.kind === 'missed_call'
-        if (cur === 'status') return i.kind === 'status'
-        if (cur === 'games') return i.kind === 'game' || (i as any).action === 'game_invite'
-        if (cur === 'system') return i.kind === 'system' || i.kind === 'premium'
-        return false
-      }
-      const toRead = list.filter((i) => i.unread && match(i))
-      if (!toRead.length) return
-      try {
-        const raw = localStorage.getItem('sc_notif_read')
-        const next = new Set(raw ? JSON.parse(raw) : [])
-        toRead.forEach((i) => next.add(i.id))
-        localStorage.setItem('sc_notif_read', JSON.stringify([...next]))
-      } catch {
-        /* */
-      }
-      for (const i of toRead) {
-        if (i.id.startsWith('ginv-') || i.id.startsWith('slike-') || i.id.startsWith('cacc-')) {
-          const real = i.id.replace(/^(ginv-|slike-|cacc-)/, '')
-          try {
-            void api.markNotificationRead(real)
-          } catch {
-            /* */
-          }
-        }
       }
     }
   }, [])
