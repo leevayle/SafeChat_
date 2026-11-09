@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download } from 'lucide-react'
+import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download, Gamepad2 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { NotesBoard } from '../components/NotesBoard'
 import { ChatImageCropper } from '../components/ChatImageCropper'
@@ -1893,6 +1893,7 @@ return (
                   disabled
                   className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold text-gray-300"
                 >
+                  <Gamepad2 size={18} className="text-gray-300" />
                   Play tic tac toe
                 </button>
                 <button

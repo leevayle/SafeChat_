@@ -2030,11 +2030,55 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     }
     window.addEventListener('sc:delete-chats', onDelete)
-    const onGameInvite = () => {
+    const onGameInvite = (ev: Event) => {
       setNotifUnreadCount((n) => n + 1)
+      const d = (ev as CustomEvent).detail || {}
+      void (async () => {
+        try {
+          const { loadCachedNotifications, saveCachedNotifications } = await import('./lib/appCache')
+          const prev = (await loadCachedNotifications<any>()) || []
+          const row = {
+            id: `live-ginv-${d.game_id || Date.now()}`,
+            type: 'game_invite',
+            title: d.title || `${d.from_name || 'Someone'} wants to play`,
+            body: d.body || 'Play or not now',
+            actor_id: d.from,
+            actor_name: d.from_name,
+            game_id: d.game_id,
+            metadata: { game_id: d.game_id },
+            read: false,
+            created_at: new Date().toISOString(),
+          }
+          const next = [row, ...prev.filter((x: any) => x.game_id !== row.game_id)].slice(0, 100)
+          await saveCachedNotifications(next)
+        } catch { /* */ }
+      })()
     }
     window.addEventListener('sc:rt-game-invite', onGameInvite)
-    const onNotif = () => setNotifUnreadCount((n) => n + 1)
+    const onNotif = (ev: Event) => {
+      setNotifUnreadCount((n) => n + 1)
+      const d = (ev as CustomEvent).detail || {}
+      void (async () => {
+        try {
+          const { loadCachedNotifications, saveCachedNotifications } = await import('./lib/appCache')
+          const prev = (await loadCachedNotifications<any>()) || []
+          const row = {
+            id: `live-${d.status_id || d.game_id || Date.now()}`,
+            type: d.t === 'status_like' ? 'status_like' : d.type || 'system',
+            title: d.title || 'Notification',
+            body: d.body || '',
+            actor_id: d.from,
+            actor_name: d.from_name,
+            status_id: d.status_id,
+            game_id: d.game_id,
+            read: false,
+            created_at: new Date().toISOString(),
+          }
+          const next = [row, ...prev.filter((x: any) => x.id !== row.id)].slice(0, 100)
+          await saveCachedNotifications(next)
+        } catch { /* */ }
+      })()
+    }
     window.addEventListener('sc:rt-notif', onNotif)
     const onDeleteCalls = (ev: Event) => {
       const ids = new Set((((ev as CustomEvent).detail?.ids || []) as string[]).map(String))

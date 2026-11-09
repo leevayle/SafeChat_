@@ -68,6 +68,8 @@ export function ChatsHome({
   })
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressMoved = useRef(false)
+  const selectLockUntil = useRef(0)
+  const selectTargetId = useRef<string | null>(null)
   const [chatsLocked, setChatsLocked] = useState(() => {
     try { return localStorage.getItem('sc_chats_locked') === '1' } catch { return false }
   })
@@ -183,7 +185,27 @@ export function ChatsHome({
   }, [statusList, contactMap, me])
 
   const toggleSelectChat = (id: string) => {
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+    const now = Date.now()
+    // While the selection bar is appearing, only honor the original chat id
+    if (now < selectLockUntil.current) {
+      if (selectTargetId.current && id !== selectTargetId.current) return
+    }
+    setSelectedIds((prev) => {
+      if (prev.length === 0) {
+        selectTargetId.current = id
+        selectLockUntil.current = now + 450
+        return [id]
+      }
+      if (prev.includes(id)) {
+        const next = prev.filter((x) => x !== id)
+        if (!next.length) {
+          selectTargetId.current = null
+          selectLockUntil.current = 0
+        }
+        return next
+      }
+      return [...prev, id]
+    })
   }
   const clearSelection = () => setSelectedIds([])
   const persistPinned = (ids: string[]) => {
@@ -599,6 +621,8 @@ export function ChatsHome({
                       type="button"
                       onClick={() => {
                         if (selectedIds.length) {
+                          // Ignore clicks that happen while the bar is settling (layout shift)
+                          if (Date.now() < selectLockUntil.current) return
                           toggleSelectChat(c.contactId)
                           return
                         }
@@ -608,12 +632,17 @@ export function ChatsHome({
                         e.preventDefault()
                         toggleSelectChat(c.contactId)
                       }}
-                      onPointerDown={() => {
+                      onPointerDown={(e) => {
                         longPressMoved.current = false
+                        const targetId = c.contactId
                         if (longPressTimer.current) clearTimeout(longPressTimer.current)
                         longPressTimer.current = setTimeout(() => {
-                          if (!longPressMoved.current) toggleSelectChat(c.contactId)
-                        }, 450)
+                          if (!longPressMoved.current) {
+                            // Capture the intended chat id at press time
+                            selectTargetId.current = targetId
+                            toggleSelectChat(targetId)
+                          }
+                        }, 480)
                       }}
                       onPointerMove={() => {
                         longPressMoved.current = true

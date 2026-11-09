@@ -470,7 +470,10 @@ export function StatusViewer({
   if (!items.length || !current) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-ink text-white">
-        <p className="font-bold">No status available</p>
+        <p className="font-bold">Status is no longer visible</p>
+        <p className="mt-2 max-w-[260px] text-center text-sm font-semibold text-white/70">
+          It may have expired or been deleted.
+        </p>
         <button type="button" onClick={onClose} className="mt-4 font-bold text-brand-orange">
           Close
         </button>

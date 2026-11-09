@@ -7,8 +7,11 @@ import {
   MessageCircle,
   Info,
   CheckCheck,
-  Sparkles,
+  Gamepad2,
+  Circle,
+  Heart,
 } from 'lucide-react'
+import { LogoIcon } from '../components/Logo'
 import { useStore } from '../store'
 import { Avatar } from '../components/Avatar'
 import { api, hasAccessToken } from '../api'
@@ -23,11 +26,11 @@ type Props = {
   onOpenStatus?: (userId: string, statusId?: string) => void
 }
 
-type Filter = 'all' | 'games' | 'calls' | 'system'
+type Filter = 'all' | 'calls' | 'status' | 'games' | 'system'
 
 type NotifItem = {
   id: string
-  kind: 'request' | 'missed_call' | 'message' | 'system' | 'premium' | 'game'
+  kind: 'request' | 'missed_call' | 'message' | 'system' | 'premium' | 'game' | 'status'
   title: string
   body: string
   when: string
@@ -97,6 +100,31 @@ export function Notifications({
       return new Set()
     }
   })
+
+  useEffect(() => {
+    const onStatusLike = (ev: Event) => {
+      const d = (ev as CustomEvent).detail || {}
+      const optimistic = {
+        id: `live-slike-${d.status_id || Date.now()}`,
+        type: 'status_like',
+        title: d.title || `${d.from_name || 'Someone'} liked your status`,
+        body: 'Tap to open',
+        actor_id: d.from,
+        actor_name: d.from_name,
+        status_id: d.status_id,
+        read: false,
+        created_at: new Date().toISOString(),
+      }
+      setServerNotifs((prev) => {
+        const next = [optimistic, ...(prev || []).filter((n: any) => !(n.type === 'status_like' && n.status_id === d.status_id && n.actor_id === d.from))]
+        void saveCachedNotifications(next)
+        return next
+      })
+      void refreshNotifCount?.()
+    }
+    window.addEventListener('sc:rt-notif', onStatusLike)
+    return () => window.removeEventListener('sc:rt-notif', onStatusLike)
+  }, [refreshNotifCount])
 
   useEffect(() => {
     const onInvite = (ev: Event) => {
@@ -266,11 +294,10 @@ export function Notifications({
         continue
       }
       if (n.type === 'status_like') {
-
         const id = `slike-${n.id}`
         out.push({
           id,
-          kind: 'system',
+          kind: 'status' as const,
           title: n.title || 'Status like',
           body: n.body || 'liked your status',
           when: timeLabel(n.created_at),
@@ -280,6 +307,7 @@ export function Notifications({
           photo: n.actor_photo,
           statusId: n.status_id,
         } as any)
+        continue
       }
     }
     // Premium lifecycle (local, once per event)
@@ -301,24 +329,14 @@ export function Notifications({
       }
     } catch { /* */ }
     // Lightweight system tips (always available)
-    out.push(
-      {
-        id: 'sys-tips',
-        kind: 'system',
-        title: 'Stay private',
-        body: 'You control who sees your phone number when they save you.',
-        when: 'Tips',
-        unread: !readIds.has('sys-tips'),
-      },
-      {
-        id: 'sys-live',
-        kind: 'system',
-        title: 'Live typing',
-        body: 'Peers can see characters as you type. Hide it anytime in Settings.',
-        when: 'Tips',
-        unread: !readIds.has('sys-live'),
-      },
-    )
+    out.push({
+      id: 'sys-tips',
+      kind: 'system',
+      title: 'Stay private',
+      body: 'You control who sees your phone number when they save you.',
+      when: 'Tips',
+      unread: !readIds.has('sys-tips'),
+    })
 
     out.sort((a, b) => {
       const ta = a.iso ? Date.parse(a.iso) : 0
@@ -331,15 +349,21 @@ export function Notifications({
 
   itemsRef.current = items
 
-  // When leaving a tab, mark that tab's notifications as read
+  // Do not auto-mark on tab switch — only on click / Mark all as read
   useEffect(() => {
+    prevFilterRef.current = filter
+  }, [filter])
+
+  useEffect(() => {
+    return // disabled: was marking on leave
     const prev = prevFilterRef.current
     if (prev === filter) return
     const list = itemsRef.current
     const match = (i: NotifItem) => {
       if (prev === 'all') return false // leaving all → don't bulk-clear unless intentional
-      if (prev === 'games') return i.kind === 'game' || (i as any).action === 'game_invite'
       if (prev === 'calls') return i.kind === 'missed_call'
+      if (prev === 'status') return i.kind === 'status'
+      if (prev === 'games') return i.kind === 'game' || (i as any).action === 'game_invite'
       if (prev === 'system') return i.kind === 'system' || i.kind === 'premium'
       return false
     }
@@ -370,15 +394,17 @@ export function Notifications({
     prevFilterRef.current = filter
   }, [filter, refreshNotifCount])
 
-  // Leaving the whole Notifications screen marks current tab read
+  // Leaving screen does not auto-mark (unread until click / mark all)
   useEffect(() => {
     return () => {
+      return
       const cur = prevFilterRef.current
       const list = itemsRef.current
       const match = (i: NotifItem) => {
         if (cur === 'all') return !!i.unread
-        if (cur === 'games') return i.kind === 'game' || (i as any).action === 'game_invite'
         if (cur === 'calls') return i.kind === 'missed_call'
+        if (cur === 'status') return i.kind === 'status'
+        if (cur === 'games') return i.kind === 'game' || (i as any).action === 'game_invite'
         if (cur === 'system') return i.kind === 'system' || i.kind === 'premium'
         return false
       }
@@ -407,8 +433,9 @@ export function Notifications({
 
   const filtered = items.filter((i) => {
     if (filter === 'all') return true
-    if (filter === 'games') return i.kind === 'game' || (i as any).action === 'game_invite'
     if (filter === 'calls') return i.kind === 'missed_call'
+    if (filter === 'status') return i.kind === 'status'
+    if (filter === 'games') return i.kind === 'game' || (i as any).action === 'game_invite'
     if (filter === 'system') return i.kind === 'system' || i.kind === 'premium'
     return true
   })
@@ -417,20 +444,18 @@ export function Notifications({
 
   const iconFor = (kind: NotifItem['kind']) => {
     if (kind === 'request') return UserPlus
-    if (kind === 'game') return Sparkles
+    if (kind === 'game') return Gamepad2
+    if (kind === 'status') return Circle
     if (kind === 'missed_call') return PhoneMissed
     if (kind === 'message') return MessageCircle
-    if (kind === 'premium') return Sparkles
-    return Info
+    if (kind === 'premium') return Bell
+    if (kind === 'system') return MessageCircle
+    return Bell
   }
 
-  const tintFor = (kind: NotifItem['kind']) => {
-    if (kind === 'request') return 'bg-brand-purple/12 text-brand-purple'
-    if (kind === 'game') return 'bg-[#5984F2]/12 text-[#5984F2]'
-    if (kind === 'missed_call') return 'bg-red-50 text-red-500'
-    if (kind === 'message') return 'bg-sky-50 text-sky-600'
-    if (kind === 'premium') return 'bg-brand-purple/12 text-brand-purple'
-    return 'bg-amber-50 text-amber-600'
+  const tintFor = (_kind: NotifItem['kind']) => {
+    // Always user theme (brand tokens)
+    return 'bg-brand-purple/10 text-brand-purple'
   }
 
   return (
@@ -458,7 +483,7 @@ export function Notifications({
             className="flex h-10 items-center gap-1 rounded-full px-3 text-xs font-extrabold text-brand-purple hover:bg-brand-purple/8"
           >
             <CheckCheck size={16} />
-            Read all
+            Mark all as read
           </button>
         </div>
 
@@ -466,8 +491,9 @@ export function Notifications({
           {(
             [
               ['all', 'All'],
-              ['games', 'Games'],
               ['calls', 'Calls'],
+              ['status', 'Status'],
+              ['games', 'Games'],
               ['system', 'System'],
             ] as const
           ).map(([id, label]) => (
@@ -475,7 +501,7 @@ export function Notifications({
               key={id}
               type="button"
               onClick={() => setFilter(id)}
-              className={`shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-extrabold transition ${
+              className={`mt-[2px] shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-extrabold transition ${
                 filter === id
                   ? 'bg-brand-purple text-white'
                   : 'bg-white text-gray-500 ring-1 ring-brand-purple/15'
@@ -534,33 +560,53 @@ export function Notifications({
                     }}
                     className={`flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition active:scale-[0.99] ${
                       n.unread
-                        ? 'bg-white shadow-sm ring-1 ring-brand-purple/10'
+                        ? 'bg-brand-purple/[0.07] shadow-sm ring-1 ring-brand-purple/20'
                         : 'bg-white/70 ring-1 ring-black/[0.04]'
                     }`}
                   >
-                    {n.kind === 'message' || n.kind === 'missed_call' || n.kind === 'request' || n.kind === 'game' ? (
-                      n.photo || n.hue ? (
-                        <Avatar
-                          contact={{
-                            id: n.contactId || n.id,
-                            name: n.title,
-                            photo: n.photo,
-                            hue: n.hue || ['#7B2CBF', '#6389EB'],
-                          }}
-                          size={44}
+                    <span
+                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${tintFor(n.kind)}`}
+                      aria-hidden
+                    >
+                      {n.kind === 'status' ? (
+                        /* Status like: heart — filled unread, outline when read */
+                        <Heart
+                          size={20}
+                          strokeWidth={2.2}
+                          className={n.unread ? 'fill-brand-purple text-brand-purple' : 'fill-none text-brand-purple'}
                         />
+                      ) : n.kind === 'game' ? (
+                        <Gamepad2
+                          size={20}
+                          strokeWidth={2.2}
+                          className={n.unread ? 'fill-brand-purple/30 text-brand-purple' : 'text-brand-purple'}
+                        />
+                      ) : n.kind === 'system' || n.kind === 'premium' ? (
+                        /* SafeChat outline */
+                        <svg width="22" height="22" viewBox="0 0 112 112" fill="none" aria-hidden>
+                          <path
+                            d="M56 8C29.5 8 8 27.2 8 51c0 12.6 6 23.9 15.6 31.8L18 102l22-9.6c5 1.1 10.3 1.6 16 1.6 26.5 0 48-19.2 48-43S82.5 8 56 8Z"
+                            stroke={`url(#sc-notif-grad-${n.id})`}
+                            strokeWidth="8"
+                            fill={n.unread ? `url(#sc-notif-grad-${n.id})` : 'none'}
+                            fillOpacity={n.unread ? 0.15 : 0}
+                          />
+                          <defs>
+                            <linearGradient id={`sc-notif-grad-${n.id}`} x1="8" y1="100" x2="104" y2="12" gradientUnits="userSpaceOnUse">
+                              <stop stopColor="#FF8C00" />
+                              <stop offset="0.45" stopColor="#C2308F" />
+                              <stop offset="1" stopColor="#7B2CBF" />
+                            </linearGradient>
+                          </defs>
+                        </svg>
+                      ) : n.kind === 'missed_call' ? (
+                        <PhoneMissed size={20} strokeWidth={2.2} className="text-brand-purple" />
+                      ) : n.kind === 'request' ? (
+                        <UserPlus size={20} strokeWidth={2.2} className="text-brand-purple" />
                       ) : (
-                        <span
-                          className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${tintFor(n.kind)}`}
-                        >
-                          <Icon size={20} strokeWidth={2.4} />
-                        </span>
-                      )
-                    ) : (
-                      <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${tintFor(n.kind)}`}>
-                        <Sparkles size={18} strokeWidth={2.4} />
-                      </span>
-                    )}
+                        <Icon size={20} strokeWidth={2.2} />
+                      )}
+                    </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
                         <span className="truncate text-[14px] font-extrabold text-ink">{n.title}</span>

@@ -29,7 +29,15 @@ export function StatusTab({ onOpenStatus }: Props) {
   const { statusList, me, refreshStatus, settings, setSetting, showToast, patchStatusList } = useStore()
   const isPremium = ((settings as any)?.subscriptionPlan || me?.subscriptionPlan) === 'premium'
 
-  const [bgCode, setBgCode] = useState(() => themeDefaultStatusBg('purple'))
+  const [bgCode, setBgCode] = useState(() => {
+    try {
+      const raw = localStorage.getItem('sc_settings')
+      const theme = raw ? (JSON.parse(raw) as any)?.theme : 'purple'
+      return themeDefaultStatusBg(theme || 'purple')
+    } catch {
+      return themeDefaultStatusBg('purple')
+    }
+  })
   const [validity, setValidity] = useState<(typeof VALIDITY)[number]>('24 hours')
   const [privacy, setPrivacy] = useState<(typeof PRIVACY)[number]>('My contacts')
   const [text, setText] = useState('')
