@@ -18,7 +18,7 @@ import { useStore } from '../store'
 
 type Props = {
   onCall: (id: string, kind: 'audio' | 'video') => void
-  onSimulateIncoming?: () => void
+  onSimulateIncoming: () => void
   onOpenContacts?: () => void
   /** Desktop: open new-call UI in the right column instead of fullscreen */
   onOpenNewCallPanel?: () => void
@@ -28,7 +28,7 @@ const FILTERS = ['All', 'Missed', 'Video', 'Audio'] as const
 type CallFilter = (typeof FILTERS)[number]
 
 export function CallsTab({ onCall, onOpenContacts, onOpenNewCallPanel }: Props) {
-  const { settings, calls, contacts } = useStore()
+  const { calls, contacts } = useStore()
   const [picker, setPicker] = useState(false)
   const [q, setQ] = useState('')
   const [kind, setKind] = useState<'audio' | 'video'>('audio')
@@ -223,7 +223,6 @@ export function CallsTab({ onCall, onOpenContacts, onOpenNewCallPanel }: Props) 
         </ul>
       </div>
 
-      {settings.showFab !== false && (
       <motion.button
         type="button"
         aria-label="New call"
@@ -233,11 +232,10 @@ export function CallsTab({ onCall, onOpenContacts, onOpenNewCallPanel }: Props) 
           if (onOpenNewCallPanel) onOpenNewCallPanel()
           else setPicker(true)
         }}
-        className="fab-theme absolute bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white md:bottom-6"
+        className="fab-theme fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white md:bottom-6"
       >
         <Plus size={26} strokeWidth={2.4} />
       </motion.button>
-      )}
 
       <AnimatePresence>
         {picker && (
@@ -343,7 +341,7 @@ export function NewCallPanel({
   }, [contacts, q])
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden bg-white dark:bg-[#121821]">
+    <div className="flex h-full flex-col bg-white dark:bg-[#121821]">
       <header className="flex items-center gap-2 border-b border-gray-100 px-4 pb-3 pt-3 dark:border-white/10">
         <button
           type="button"

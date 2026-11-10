@@ -20,12 +20,12 @@ export function LogoIcon({
       fill="none"
       initial={animate ? { opacity: 0, scale: 0.92 } : false}
       animate={
-        animate && !outlined
+        animate
           ? { opacity: 1, scale: 1, y: [0, -4, 0] }
           : { opacity: 1, scale: 1 }
       }
       transition={
-        animate && !outlined
+        animate
           ? {
               opacity: { duration: 0.55, ease: 'easeOut' },
               scale: { duration: 0.55, ease: 'easeOut' },
@@ -48,51 +48,49 @@ export function LogoIcon({
         strokeWidth={outlined ? 2.25 : undefined}
         strokeLinejoin="round"
       />
-      {[36, 56, 76].map((cx, i) => (
-        <motion.circle
-          key={cx}
-          cx={cx}
-          cy={51}
-          r={outlined ? 4.5 : 5.5}
-          fill={outlined ? 'none' : '#fff'}
-          stroke={outlined ? `url(#${gradId})` : undefined}
-          strokeWidth={outlined ? 1.25 : undefined}
-          initial={{ opacity: 1, cy: 51 }}
-          animate={
-            animate && !outlined
-              ? { opacity: [0.35, 1, 0.35], cy: [51, 46, 51] }
-              : { opacity: 1, cy: 51 }
-          }
-          transition={
-            animate && !outlined
-              ? {
-                  duration: 1.4,
-                  repeat: Infinity,
-                  delay: i * 0.22,
-                  ease: 'easeInOut',
-                }
-              : undefined
-          }
-        />
-      ))}
+      {[36, 56, 76].map((cx, i) =>
+        animate ? (
+          <motion.circle
+            key={cx}
+            cx={cx}
+            cy={51}
+            r={outlined ? 5 : 5.5}
+            fill={outlined ? 'none' : '#fff'}
+            stroke={outlined ? `url(#${gradId})` : undefined}
+            strokeWidth={outlined ? 1.25 : undefined}
+            initial={{ opacity: 0.35, cy: 51 }}
+            animate={{ opacity: [0.35, 1, 0.35], cy: [51, 46, 51] }}
+            transition={{
+              duration: 1.4,
+              repeat: Infinity,
+              delay: i * 0.22,
+              ease: 'easeInOut',
+            }}
+          />
+        ) : (
+          <circle
+            key={cx}
+            cx={cx}
+            cy={51}
+            r={outlined ? 5 : 5.5}
+            fill={outlined ? 'none' : '#fff'}
+            stroke={outlined ? `url(#${gradId})` : undefined}
+            strokeWidth={outlined ? 1.25 : undefined}
+            opacity={1}
+          />
+        ),
+      )}
     </motion.svg>
   )
 }
 
 /** Brand wordmark — absolute hex colors (never follow theme). */
-export function Wordmark({
-  className = 'text-4xl',
-  light = false,
-}: {
-  className?: string
-  /** Lighter weight for empty states; dot stays bold */
-  light?: boolean
-}) {
+export function Wordmark({ className = 'text-4xl' }: { className?: string }) {
   return (
     <p className={`font-display tracking-tight ${className}`}>
-      <span style={{ color: '#E3404C', fontWeight: light ? 500 : undefined }}>Safe</span>
-      <span style={{ color: '#7B2CBF', fontWeight: light ? 500 : undefined }}>Chat</span>
-      <span style={{ color: '#6389EB', fontWeight: 800 }}>.</span>
+      <span style={{ color: '#E3404C' }}>Safe</span>
+      <span style={{ color: '#7B2CBF' }}>Chat</span>
+      <span style={{ color: '#6389EB' }}>.</span>
     </p>
   )
 }

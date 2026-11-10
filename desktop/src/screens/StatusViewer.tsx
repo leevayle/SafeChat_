@@ -95,7 +95,6 @@ type ViewerRow = { id: string; username: string; name: string; photo: string | n
 export function StatusViewer({
   userId, initialStatusId, onClose, onReplyToStatus }: Props) {
   const likeInFlight = useRef(false)
-  const lastLikeAt = useRef(0)
   const viewSentRef = useRef<Set<string>>(new Set())
   const { statusList, refreshStatus, showToast, patchStatusList, me } = useStore()
   // Only non-expired statuses for this user, oldest first (play order)
@@ -344,16 +343,7 @@ export function StatusViewer({
     }, HOLD_MS)
   }
 
-  const onPressEnd = (e?: PointerEvent) => {
-    try {
-      if (e?.target && (e.target as HTMLElement).closest?.('[data-status-action]')) {
-        if (holdTimerRef.current) {
-          clearTimeout(holdTimerRef.current)
-          holdTimerRef.current = null
-        }
-        return
-      }
-    } catch { /* */ }
+  const onPressEnd = () => {
     if (holdTimerRef.current) {
       clearTimeout(holdTimerRef.current)
       holdTimerRef.current = null
@@ -451,42 +441,25 @@ export function StatusViewer({
   }
 
   const toggleLike = (e: MouseEvent) => {
-    e.preventDefault()
     e.stopPropagation()
-    if (!current || isOwner) return
-    const id = String(current.id || '')
-    if (!id) return
-    if (likeInFlight.current) return
-    likeInFlight.current = true
+    if (!current) return
+    if (isOwner) return
+    const id = current.id
     const was = !!likes[id]
-    const nextVal = !was
-    setLikes((prev) => {
-      const next = { ...prev, [id]: nextVal }
-      saveLikes(next)
-      return next
-    })
+    const next = { ...likes, [id]: !was }
+    setLikes(next)
+    saveLikes(next)
     setLikePulse(true)
     window.setTimeout(() => setLikePulse(false), 450)
-    if (nextVal) showToast('Sending like…')
+    if (!was) showToast('Sending like…')
+    if (likeInFlight.current) return
+    likeInFlight.current = true
     void api
       .likeStatus(id)
-      .then((res) => {
-        // Prefer server liked flag when present
-        const serverLiked = res?.liked ?? res?.data?.liked
-        if (typeof serverLiked === 'boolean') {
-          setLikes((prev) => {
-            const next = { ...prev, [id]: serverLiked }
-            saveLikes(next)
-            return next
-          })
-        }
-      })
       .catch(() => {
-        setLikes((prev) => {
-          const next = { ...prev, [id]: was }
-          saveLikes(next)
-          return next
-        })
+        const rolled = { ...likes, [id]: was }
+        setLikes(rolled)
+        saveLikes(rolled)
         showToast('Could not update like')
       })
       .finally(() => {
@@ -525,17 +498,16 @@ export function StatusViewer({
         time = new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
       }
     } catch { /* */ }
-    const payload = {
-      peerId: userId,
-      preview,
-      time,
-      statusId: current?.id || undefined,
-    }
     try {
-      sessionStorage.setItem('sc_status_reply', JSON.stringify(payload))
-    } catch { /* */ }
-    try {
-      window.dispatchEvent(new CustomEvent('sc:status-reply', { detail: payload }))
+      sessionStorage.setItem(
+        'sc_status_reply',
+        JSON.stringify({
+          peerId: userId,
+          preview,
+          time,
+          statusId: current?.id || undefined,
+        }),
+      )
     } catch { /* */ }
     onClose()
     onReplyToStatus?.(userId)
@@ -549,22 +521,16 @@ export function StatusViewer({
       className="relative flex h-full flex-col select-none text-white"
       style={{ background: bgCss }}
       onContextMenu={(e) => e.preventDefault()}
-      onPointerUp={(e) => onPressEnd(e)}
-      onPointerCancel={(e) => onPressEnd(e)}
+      onPointerUp={onPressEnd}
+      onPointerCancel={onPressEnd}
       onTouchStart={(e) => {
-        if ((e.target as HTMLElement).closest('[data-status-action]')) return
         swipeStartY.current = e.touches[0].clientY
       }}
       onTouchMove={(e) => {
-        if ((e.target as HTMLElement).closest('[data-status-action]')) return
         const dy = swipeStartY.current - e.touches[0].clientY
         if (dy > 0) setSwipeDy(Math.min(80, dy))
       }}
-      onTouchEnd={(e) => {
-        if ((e.target as HTMLElement).closest('[data-status-action]')) {
-          setSwipeDy(0)
-          return
-        }
+      onTouchEnd={() => {
         if (swipeDy > 48 && !isOwner) commitStatusReply()
         setSwipeDy(0)
       }}
@@ -606,8 +572,8 @@ export function StatusViewer({
         </button>
       </div>
 
-      {/* Left / mid / right zones — leave bottom clear for like/reply actions */}
-      <div className="absolute inset-x-0 top-0 bottom-36 z-10 flex">
+      {/* Left / mid / right zones */}
+      <div className="absolute inset-0 z-10 flex">
         <div className="h-full w-[30%]" onPointerDown={onPressStart('left')} />
         <div className="h-full flex-1" onPointerDown={onPressStart('mid')} />
         <div className="h-full w-[30%]" onPointerDown={onPressStart('right')} />
@@ -659,7 +625,7 @@ export function StatusViewer({
         </AnimatePresence>
       </div>
 
-      <div className="relative z-30 flex items-end justify-between px-5 pb-8 safe-pb pointer-events-auto" data-status-action>
+      <div className="relative z-20 flex items-end justify-between px-5 pb-8 safe-pb" data-status-action>
         {isOwner ? (
           <>
             <button
@@ -739,33 +705,13 @@ export function StatusViewer({
               <button
                 type="button"
                 data-status-action
-                onPointerDown={(e) => {
-                  e.stopPropagation()
-                  e.preventDefault()
-                }}
-                onPointerUp={(e) => {
-                  e.stopPropagation()
-                  e.preventDefault()
-                  const now = Date.now()
-                  if (now - lastLikeAt.current < 450) return
-                  lastLikeAt.current = now
-                  toggleLike(e as unknown as MouseEvent)
-                }}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  e.preventDefault()
-                  const now = Date.now()
-                  if (now - lastLikeAt.current < 450) return
-                  lastLikeAt.current = now
-                  toggleLike(e)
-                }}
-                className={`flex h-14 w-14 items-center justify-center rounded-full backdrop-blur-sm transition-transform duration-200 ${
+                onClick={toggleLike}
+                className={`flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-sm transition-transform duration-200 ${
                   liked ? 'bg-brand-red/90 text-white' : 'bg-white/10 text-white'
                 } ${likePulse ? 'scale-125' : 'scale-100'}`}
                 aria-label={liked ? 'Unlike' : 'Like'}
-                style={{ touchAction: 'manipulation' }}
               >
-                <Heart size={22} fill={liked ? 'currentColor' : 'none'} className={likePulse ? 'animate-pulse' : ''} />
+                <Heart size={20} fill={liked ? 'currentColor' : 'none'} className={likePulse ? 'animate-pulse' : ''} />
               </button>
             </div>
           </>
@@ -774,20 +720,12 @@ export function StatusViewer({
 
       {!isOwner && (
         <div
-          className="absolute inset-x-0 bottom-0 z-30 flex justify-center pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex justify-center pb-[max(0.75rem,env(safe-area-inset-bottom))]"
           style={{ opacity: 0.55 + swipeDy / 120, transform: `translateY(${-swipeDy * 0.25}px)` }}
         >
-          <button
-            type="button"
-            data-status-action
-            onClick={(e) => {
-              e.stopPropagation()
-              commitStatusReply()
-            }}
-            className="pointer-events-auto rounded-full bg-black/35 px-4 py-1.5 text-xs font-bold text-white/95 backdrop-blur-md transition hover:bg-black/50 active:scale-95"
-          >
+          <div className="rounded-full bg-black/35 px-4 py-1.5 text-xs font-bold text-white/95 backdrop-blur-md">
             Swipe up to reply
-          </button>
+          </div>
         </div>
       )}
 

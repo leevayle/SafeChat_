@@ -6,33 +6,26 @@ type Props = {
   subtitle?: string
 }
 
-/** Static empty state — outlined logo; follows light/dark like the rest of the UI. */
+/** Static empty state — thin outlined logo; same bg as chats feed. */
 export function EmptyChatPane({
   subtitle = 'Select a chat to start messaging.',
 }: Props) {
-  const { settings } = useStore()
-  const colorMode = settings.colorMode
-  const isDark =
-    String(colorMode || 'light').toLowerCase() === 'dark' ||
-    (typeof document !== 'undefined' &&
-      (document.documentElement.classList.contains('dark') ||
-        document.documentElement.getAttribute('data-mode') === 'dark'))
+  const colorMode = useStore((s) => s.settings.colorMode)
+  const isDark = String(colorMode || 'light').toLowerCase() === 'dark'
 
   return (
     <div
-      className={`flex h-full w-full flex-col items-center justify-center px-8 text-center ${
-        isDark ? 'bg-[#121821]' : 'bg-white'
-      }`}
+      className="flex h-full w-full flex-col items-center justify-center px-8 text-center"
+      style={{ background: isDark ? '#121821' : '#ffffff' }}
     >
       <div className="flex flex-col items-center">
         <LogoIcon size={120} animate={false} outlined />
         <div className="mt-4">
-          <Wordmark light className="text-[2.5rem] leading-none font-medium" />
+          <Wordmark className="text-[2.5rem] leading-none" />
         </div>
         <p
-          className={`mt-5 max-w-sm text-[15px] font-semibold ${
-            isDark ? 'text-gray-400' : 'text-gray-500'
-          }`}
+          className="mt-5 max-w-sm text-[15px] font-semibold"
+          style={{ color: isDark ? '#9ca3af' : '#6b7280' }}
         >
           {subtitle}
         </p>

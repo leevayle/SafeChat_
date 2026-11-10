@@ -25,10 +25,6 @@ import { fileToDataUrl } from '../lib/imageProcess'
 const WHO = ['Everyone', 'My contacts', 'Nobody']
 const themeLabelFromId = (id: string) =>
   THEMES[id as keyof typeof THEMES]?.label || THEMES.purple.label
-const themeIdFromLabel = (label: string) => {
-  const hit = Object.values(THEMES).find((t: any) => t.label === label || t.id === label)
-  return (hit as any)?.id || 'purple'
-}
 
 type Page =
   | 'home'
@@ -66,7 +62,7 @@ function Row({
     <Tag
       onClick={onClick}
       className={`flex w-full items-center gap-3 px-5 py-3.5 text-left ${
-        onClick ? 'transition-colors hover:bg-gray-50 active:bg-gray-100 dark:hover:bg-white/[0.04] dark:active:bg-white/[0.06]' : ''
+        onClick ? 'transition-colors hover:bg-gray-50 active:bg-gray-100' : ''
       }`}
     >
       <div className="min-w-0 flex-1">
@@ -74,16 +70,14 @@ function Row({
         {hint && <p className="text-xs font-semibold text-gray-400">{hint}</p>}
       </div>
       {value && <span className="max-w-[45%] truncate text-sm font-bold text-gray-400">{value}</span>}
-      {right ?? (onClick && !danger && <ChevronRight size={18} className="text-gray-300 dark:text-white/25" />)}
+      {right ?? (onClick && !danger && <ChevronRight size={18} className="text-gray-300" />)}
     </Tag>
   )
 }
 
 function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
   return (
-    <div
-      className={`sc-settings-card divide-y divide-black/[0.06] overflow-hidden rounded-3xl bg-white shadow-sm dark:divide-white/[0.06] dark:bg-[#1a222d] dark:shadow-none dark:ring-1 dark:ring-white/[0.04] ${className}`}
-    >
+    <div className={`divide-y divide-gray-100 overflow-hidden rounded-3xl bg-white shadow-sm ${className}`}>
       {children}
     </div>
   )
@@ -189,9 +183,9 @@ export function Settings({
     return () => clearTimeout(t)
   }, [draft.username, page, s.username])
 
-  const sel = (title: string, key: keyof S | string, options: string[]) => ({
-    value: String((s as any)[key] ?? ''),
-    onClick: () => setPicker({ title, key: key as keyof S, options }),
+  const sel = (title: string, key: keyof S, options: string[]) => ({
+    value: String(s[key]),
+    onClick: () => setPicker({ title, key, options }),
   })
 
   const title =
@@ -528,7 +522,6 @@ export function Settings({
                           name: draft.name.trim(),
                           username: draft.username.trim().toLowerCase(),
                           bio: draft.bio || '',
-                          photo: (draft as any).photo ?? s.photo ?? null,
                         })
                         setToast('Profile updated')
                       } catch (e: any) {
@@ -598,7 +591,6 @@ export function Settings({
                     <Toggle
                       on={(s as any).statusLikeNotif !== false}
                       onChange={(v) => setSetting('statusLikeNotif' as any, v as never)}
-                      label="Status likes"
                     />
                   }
                 />
@@ -653,17 +645,6 @@ export function Settings({
                       on={!!s.enterIsSend}
                       onChange={(v) => setSetting('enterIsSend', v as never)}
                       label="Enter send"
-                    />
-                  }
-                />
-                <Row
-                  label="New chat button"
-                  hint="Floating + on chats, groups, and calls"
-                  right={
-                    <Toggle
-                      on={s.showFab !== false}
-                      onChange={(v) => setSetting('showFab', v as never)}
-                      label="FAB"
                     />
                   }
                 />
@@ -842,7 +823,7 @@ export function Settings({
                   setToast('Defaults restored')
                   void api.updateMe({ theme: 'purple' })
                 }}
-                className="w-full rounded-2xl bg-white py-3.5 text-sm font-extrabold text-brand-purple shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]"
+                className="w-full rounded-2xl bg-white py-3.5 text-sm font-extrabold text-brand-purple shadow-sm ring-1 ring-gray-100"
               >
                 Restore defaults
               </button>
@@ -1467,103 +1448,76 @@ export function Settings({
                   }
                 />
                 {!!(s as any).busyEnabled && (
-                  <div className="border-t border-black/[0.06] px-5 py-4 dark:border-white/[0.06]">
-                    <div className="space-y-4">
-                      <div>
-                        <p className="text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Who sees busy</p>
-                        <div className="mt-2 flex gap-2">
-                          {[
-                            { value: 'everyone', label: 'Everyone' },
-                            { value: 'contacts', label: 'My contacts' },
-                          ].map((o) => {
-                            const on = ((s as any).busyScope || 'everyone') === o.value
-                            return (
-                              <button
-                                key={o.value}
-                                type="button"
-                                onClick={() => setSetting('busyScope' as any, o.value as never)}
-                                className={`flex-1 rounded-2xl py-2.5 text-xs font-extrabold transition ${
-                                  on
-                                    ? 'bg-brand-purple/12 text-brand-purple ring-1 ring-brand-purple/25'
-                                    : 'bg-gray-50 text-gray-500 ring-1 ring-black/[0.04] dark:bg-white/[0.04] dark:text-gray-400 dark:ring-white/[0.06]'
-                                }`}
-                              >
-                                {o.label}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <p className="text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Custom message</p>
-                          <span className="text-[10px] font-bold text-gray-300">
-                            {String((s as any).busyMessage || '').length}/28
-                          </span>
-                        </div>
-                        <input
-                          value={(s as any).busyMessage || ''}
-                          maxLength={28}
-                          onChange={(e) => setSetting('busyMessage' as any, e.target.value.slice(0, 28) as never)}
-                          placeholder="e.g. in a meeting"
-                          className="mt-2 w-full rounded-2xl bg-gray-50 px-3.5 py-2.5 text-sm font-bold text-ink outline-none ring-1 ring-black/[0.05] focus:ring-brand-purple/25 dark:bg-white/[0.05] dark:text-gray-100 dark:ring-white/[0.08]"
-                        />
-                      </div>
-                      <div>
-                        <p className="text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Duration</p>
-                        <div className="mt-2 flex gap-2">
-                          {[
-                            { m: 15, label: '15 min' },
-                            { m: 30, label: '30 min' },
-                            { m: 60, label: '1 hour' },
-                          ].map((d) => {
-                            const active = Number((s as any).busyDurationMin || 30) === d.m
-                            return (
-                              <button
-                                key={d.m}
-                                type="button"
-                                onClick={() => setSetting('busyDurationMin' as any, d.m as never)}
-                                className={`flex-1 rounded-2xl py-2.5 text-xs font-extrabold transition ${
-                                  active
-                                    ? 'bg-brand-purple/12 text-brand-purple ring-1 ring-brand-purple/25'
-                                    : 'bg-gray-50 text-gray-500 ring-1 ring-black/[0.04] dark:bg-white/[0.04] dark:text-gray-400 dark:ring-white/[0.06]'
-                                }`}
-                              >
-                                {d.label}
-                              </button>
-                            )
-                          })}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={busyUpdating}
-                        className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white shadow-sm transition active:scale-[0.98] disabled:opacity-60 disabled:active:scale-100"
-                        onClick={() => {
-                          if (busyUpdating) return
-                          const mins = Number((s as any).busyDurationMin || 30)
-                          const until = new Date(Date.now() + mins * 60 * 1000).toISOString()
-                          setSetting('busyUntil' as any, until as never)
-                          setSetting('busyEnabled' as any, true as never)
-                          setBusyUpdating(true)
-                          void api
-                            .updatePreferences({
-                              busy_enabled: true,
-                              busy_message: (s as any).busyMessage || '',
-                              busy_until: until,
-                              busy_scope: (s as any).busyScope || 'everyone',
-                            })
-                            .then(() => setToast('Busy status updated, contacts see your message'))
-                            .catch(() => setToast('Could not update busy status'))
-                            .finally(() => setBusyUpdating(false))
-                        }}
-                      >
-                        {busyUpdating ? 'Updating…' : 'Update busy status'}
-                      </button>
-                      <p className="text-[11px] font-semibold leading-relaxed text-gray-400">
-                        Overrides Online for contacts. Typing still shows. Expires after the duration.
-                      </p>
+                  <div className="space-y-3 px-1 pb-3">
+                    <label className="block text-[11px] font-extrabold text-gray-400">Who sees busy</label>
+                    <Select
+                      value={(s as any).busyScope || 'everyone'}
+                      onChange={(v) => setSetting('busyScope' as any, v as never)}
+                      options={[
+                        { value: 'everyone', label: 'Everyone' },
+                        { value: 'contacts', label: 'My contacts' },
+                      ]}
+                    />
+                    <label className="block text-[11px] font-extrabold text-gray-400">Custom message</label>
+                    <input
+                      value={(s as any).busyMessage || ''}
+                      maxLength={28}
+                      onChange={(e) => setSetting('busyMessage' as any, e.target.value.slice(0, 28) as never)}
+                      placeholder="e.g. in a meeting"
+                      className="w-full rounded-2xl bg-gray-50 px-3 py-2.5 text-sm font-bold outline-none ring-1 ring-black/5 focus:ring-brand-purple/30"
+                    />
+                    <label className="block text-[11px] font-extrabold text-gray-400">Duration (max 1 hour)</label>
+                    <div className="flex gap-2">
+                      {[
+                        { m: 15, label: '15 min' },
+                        { m: 30, label: '30 min' },
+                        { m: 60, label: '1 hour' },
+                      ].map((d) => {
+                        const active = Number((s as any).busyDurationMin || 30) === d.m
+                        return (
+                          <button
+                            key={d.m}
+                            type="button"
+                            onClick={() => setSetting('busyDurationMin' as any, d.m as never)}
+                            className={`flex-1 rounded-2xl py-2.5 text-xs font-extrabold transition ${
+                              active
+                                ? 'bg-brand-purple text-white shadow-md'
+                                : 'bg-gray-50 text-ink ring-1 ring-black/5'
+                            }`}
+                          >
+                            {d.label}
+                          </button>
+                        )
+                      })}
                     </div>
+                    <button
+                      type="button"
+                      disabled={busyUpdating}
+                      className="w-full rounded-full bg-gradient-to-r from-brand-purple to-brand-orange py-3 text-sm font-extrabold text-white shadow-md active:scale-[0.98] disabled:opacity-60 disabled:active:scale-100"
+                      onClick={() => {
+                        if (busyUpdating) return
+                        const mins = Number((s as any).busyDurationMin || 30)
+                        const until = new Date(Date.now() + mins * 60 * 1000).toISOString()
+                        setSetting('busyUntil' as any, until as never)
+                        setSetting('busyEnabled' as any, true as never)
+                        setBusyUpdating(true)
+                        void api
+                          .updatePreferences({
+                            busy_enabled: true,
+                            busy_message: (s as any).busyMessage || '',
+                            busy_until: until,
+                            busy_scope: (s as any).busyScope || 'everyone',
+                          })
+                          .then(() => setToast('Busy status updated, contacts see your message'))
+                          .catch(() => setToast('Could not update busy status'))
+                          .finally(() => setBusyUpdating(false))
+                      }}
+                    >
+                      {busyUpdating ? 'Updating…' : 'Update busy status'}
+                    </button>
+                    <p className="text-[11px] font-semibold text-gray-400">
+                      Overrides Online for contacts. Typing still shows. Expires after the duration.
+                    </p>
                   </div>
                 )}
               </Card>
@@ -1627,7 +1581,7 @@ export function Settings({
                 })}
               </div>
 
-              <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]">
+              <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
                 <button
                   type="button"
                   disabled={mpesaPaying || mpesaPaid}
@@ -1653,7 +1607,7 @@ export function Settings({
               <button
                 type="button"
                 onClick={() => setPage('sponsor')}
-                className="flex w-full items-center gap-3 rounded-3xl bg-white px-4 py-4 text-left shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06] active:scale-[0.99]"
+                className="flex w-full items-center gap-3 rounded-3xl bg-white px-4 py-4 text-left shadow-sm ring-1 ring-gray-100 active:scale-[0.99]"
               >
                 <span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-orange/15 text-brand-orange">
                   <User size={20} />
@@ -1753,7 +1707,7 @@ export function Settings({
 
           {page === 'sponsor' && (
             <motion.div key="sponsor" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
-              <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]">
+              <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
                 <p className="text-sm font-extrabold text-ink">Find a friend</p>
                 <p className="mt-0.5 text-[11px] font-semibold text-gray-400">
                   Search by username, then pay their Premium with M-Pesa.
@@ -1820,7 +1774,7 @@ export function Settings({
                 })}
               </div>
               {sponsorPick && (
-                <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]">
+                <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-gray-100">
                   <p className="text-sm font-extrabold text-ink">
                     Sponsoring @{sponsorPick.username} · <span className="capitalize">{mpesaPlan}</span>
                   </p>
@@ -1884,7 +1838,7 @@ export function Settings({
 
           {page === 'account' && (
             <motion.div key="account" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
-              <div className="overflow-hidden rounded-3xl bg-white p-5 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]">
+              <div className="overflow-hidden rounded-3xl bg-white p-5 shadow-sm ring-1 ring-gray-100">
                 <div className="flex items-center gap-4">
                   <Avatar
                     contact={{
@@ -1978,13 +1932,13 @@ export function Settings({
             value={
               picker.key === 'theme'
                 ? themeLabelFromId(String(s.theme || 'purple'))
-                : String((s as any)[picker.key] ?? '')
+                : String(s[picker.key])
             }
             onPick={(o) => {
               if (picker.key === 'theme') {
                 setSetting('theme', themeIdFromLabel(o) as never)
               } else {
-                setSetting(picker.key as keyof typeof s, o as never)
+                setSetting(picker.key, o as never)
               }
               setPicker(null)
             }}

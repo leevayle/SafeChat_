@@ -192,19 +192,7 @@ export function Notifications({
         .listNotifications()
         .then(({ notifications }) => {
           if (!alive) return
-          const now = Date.now()
-          const list = (notifications || []).filter((n: any) => {
-            const exp = n.expires_at || n.expiresAt || n.metadata?.expires_at
-            if (!exp) return true
-            try {
-              let s = String(exp)
-              if (/^\d{4}-\d{2}-\d{2}T/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z'
-              const t = Date.parse(s)
-              return Number.isNaN(t) || t > now
-            } catch {
-              return true
-            }
-          })
+          const list = notifications || []
           ;(window as any).__sc_server_notifs = list
           void saveCachedNotifications(list)
           setServerNotifs(list)
@@ -274,11 +262,6 @@ export function Notifications({
       } catch {
         /* */
       }
-      return next
-    })
-    setServerNotifs((prev) => {
-      const next = (prev || []).map((x: any) => ({ ...x, read: true }))
-      void saveCachedNotifications(next)
       return next
     })
     showToast('All caught up')
@@ -356,11 +339,6 @@ export function Notifications({
         continue
       }
       if (n.type === 'status_like') {
-        const exp = n.expires_at || n.expiresAt || n.metadata?.expires_at
-        if (exp) {
-          const t = Date.parse(String(exp).endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(String(exp)) ? String(exp) : String(exp) + 'Z')
-          if (!Number.isNaN(t) && t <= Date.now()) continue
-        }
         const id = `slike-${n.id}`
         out.push({
           id,
@@ -377,11 +355,6 @@ export function Notifications({
         continue
       }
       if (n.type === 'status_new' || n.type === 'status_update') {
-        const exp = n.expires_at || n.expiresAt || n.metadata?.expires_at
-        if (exp) {
-          const t = Date.parse(String(exp).endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(String(exp)) ? String(exp) : String(exp) + 'Z')
-          if (!Number.isNaN(t) && t <= Date.now()) continue
-        }
         const id = `snew-${n.id}`
         out.push({
           id,
@@ -473,21 +446,9 @@ export function Notifications({
         } catch {
           /* */
         }
-        try {
-          const cached = (itemsRef.current || [])
-            .map((i) => i.id.replace(/^(ginv-|slike-|snew-|cacc-|live-slike-|live-snew-|live-ginv-|live-)/, ''))
-          // mark server cache entries read so next login does not flash unread
-          setServerNotifs((prev) => {
-            const next = (prev || []).map((x: any) => ({ ...x, read: true }))
-            void saveCachedNotifications(next)
-            return next
-          })
-        } catch {
-          /* */
-        }
       }
       try {
-        void /* no getState on context store */ undefined
+        void useStore.getState?.()
       } catch {
         /* */
       }
@@ -528,8 +489,8 @@ export function Notifications({
   }
 
   return (
-    <div className="sc-notif-page flex h-full flex-col bg-gradient-to-b from-[#f3eeff]/80 via-white to-[#eef4ff]/50 dark:from-[#121821] dark:via-[#121821] dark:to-[#121821] dark:bg-[#121821]">
-      <header className="z-10 shrink-0 border-b border-black/5 bg-white/90 px-3 pb-3 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur-md dark:border-white/10 dark:bg-[#121821]/95">
+    <div className="flex h-full flex-col bg-gradient-to-b from-[#f3eeff]/80 via-white to-[#eef4ff]/50">
+      <header className="z-10 shrink-0 border-b border-black/5 bg-white/90 px-3 pb-3 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur-md">
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -572,8 +533,8 @@ export function Notifications({
               onClick={() => setFilter(id)}
               className={`mt-[2px] shrink-0 rounded-full px-3.5 py-1.5 text-[12px] font-extrabold transition ${
                 filter === id
-                  ? 'sc-notif-filter-active bg-brand-purple text-white'
-                  : 'sc-notif-filter bg-white text-gray-500 ring-1 ring-brand-purple/15 dark:bg-white/10 dark:text-gray-300 dark:ring-white/10'
+                  ? 'bg-brand-purple text-white'
+                  : 'bg-white text-gray-500 ring-1 ring-brand-purple/15'
               }`}
             >
               {label}
@@ -627,10 +588,10 @@ export function Notifications({
                         /* buttons handle accept */
                       }
                     }}
-                    className={`sc-notif-card flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition active:scale-[0.99] ${
+                    className={`flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition active:scale-[0.99] ${
                       n.unread
-                        ? 'bg-brand-purple/15 shadow-sm ring-1 ring-brand-purple/30 dark:bg-brand-purple/20 dark:ring-brand-purple/40'
-                        : 'bg-white/70 ring-1 ring-black/[0.04] dark:bg-white/[0.06] dark:ring-white/10'
+                        ? 'bg-brand-purple/15 shadow-sm ring-1 ring-brand-purple/30'
+                        : 'bg-white/70 ring-1 ring-black/[0.04]'
                     }`}
                   >
                     <span
@@ -678,13 +639,13 @@ export function Notifications({
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex items-center gap-2">
-                        <span className="truncate text-[14px] font-extrabold text-ink dark:text-gray-100">{n.title}</span>
+                        <span className="truncate text-[14px] font-extrabold text-ink">{n.title}</span>
                         {n.unread ? (
                           <span className="h-2 w-2 shrink-0 rounded-full bg-brand-orange" />
                         ) : null}
                         <span className="ml-auto shrink-0 text-[11px] font-bold text-gray-400">{n.when}</span>
                       </span>
-                      <span className="mt-0.5 line-clamp-2 text-[13px] font-semibold text-gray-500 dark:text-gray-400">
+                      <span className="mt-0.5 line-clamp-2 text-[13px] font-semibold text-gray-500">
                         {n.body}
                       </span>
                       {(n.kind === 'premium' || n.action === 'recharge') && (

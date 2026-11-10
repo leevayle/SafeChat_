@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { NavRail, type RailItem } from './NavRail'
 import { EmptyChatPane } from './EmptyChatPane'
-import { BottomNav, type Tab } from '../BottomNav'
+import type { Tab } from '../BottomNav'
 
 const SIDEBAR_KEY = 'sc_sidebar_width'
 const RIGHT_KEY = 'sc_right_width_v2'
@@ -27,13 +27,6 @@ type Props = {
   overlays?: ReactNode
   onLogout?: () => void
   loading?: boolean
-  /**
-   * Foldable dual-pane:
-   * left = home feed + mobile bottom nav (no side rail)
-   * right = inbox
-   */
-  compact?: boolean
-  onTabChange?: (t: Tab) => void
 }
 
 export function DesktopShell({
@@ -50,8 +43,6 @@ export function DesktopShell({
   overlays,
   onLogout,
   loading,
-  compact = false,
-  onTabChange,
 }: Props) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
@@ -77,13 +68,12 @@ export function DesktopShell({
   const startW = useRef(0)
 
   useEffect(() => {
-    if (compact) return
     try {
       localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth))
     } catch {
       /* */
     }
-  }, [sidebarWidth, compact])
+  }, [sidebarWidth])
 
   useEffect(() => {
     try {
@@ -95,7 +85,6 @@ export function DesktopShell({
 
   const onResizeStart = useCallback(
     (which: 'left' | 'right') => (e: React.MouseEvent) => {
-      if (compact) return
       e.preventDefault()
       dragSide.current = which
       startX.current = e.clientX
@@ -103,11 +92,10 @@ export function DesktopShell({
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
     },
-    [sidebarWidth, rightWidth, compact],
+    [sidebarWidth, rightWidth],
   )
 
   useEffect(() => {
-    if (compact) return
     const onMove = (e: MouseEvent) => {
       if (!dragSide.current) return
       if (dragSide.current === 'left') {
@@ -130,51 +118,9 @@ export function DesktopShell({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [compact])
+  }, [])
 
-  const hasRight = !compact && rightPanel != null
-
-  const mainPane = showEmpty ? (
-    <EmptyChatPane title={emptyTitle} subtitle={emptySubtitle} />
-  ) : (
-    <div className="conversation-pane sc-surface sc-center-bg flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden">
-      {main}
-    </div>
-  )
-
-  const tabBadges: Partial<Record<Tab, number>> = {
-    chats: badges.chats || 0,
-    groups: badges.groups || 0,
-    status: badges.status || 0,
-    calls: badges.calls || 0,
-  }
-
-  /* Foldable: [home feed + bottom nav] 50% | inbox 50% — no side rail */
-  if (compact) {
-    return (
-      <div className="desktop-shell flex h-dvh w-full min-w-0 overflow-hidden sc-shell-bg bg-[#dfe3e8]">
-        <div className="relative flex h-full min-w-0 w-1/2 shrink-0 flex-col border-r border-black/[0.06] dark:border-white/10">
-          <div className="desktop-sidebar sc-surface flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white dark:bg-[#121821]">
-            {sidebar}
-          </div>
-          <div className="relative h-[5.25rem] shrink-0">
-            <BottomNav
-              tab={tab}
-              onChange={(t) => {
-                onTabChange?.(t)
-                onRailSelect(t)
-              }}
-              badges={tabBadges}
-            />
-          </div>
-        </div>
-        <div className="relative flex h-full min-w-0 w-1/2 flex-1 flex-col overflow-hidden sc-center-bg">
-          {mainPane}
-        </div>
-        {overlays}
-      </div>
-    )
-  }
+  const hasRight = rightPanel != null
 
   return (
     <div className="desktop-shell flex h-dvh w-full min-w-0 overflow-hidden sc-shell-bg bg-[#dfe3e8]">
@@ -194,8 +140,14 @@ export function DesktopShell({
         />
       </div>
 
-      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden sc-center-bg">
-        {mainPane}
+      <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden sc-center-bg bg-white">
+        {showEmpty ? (
+          <EmptyChatPane title={emptyTitle} subtitle={emptySubtitle} />
+        ) : (
+          <div className="conversation-pane sc-surface sc-center-bg flex h-full w-full min-w-0 flex-1 flex-col overflow-hidden bg-white">
+            {main}
+          </div>
+        )}
       </div>
 
       {hasRight && (

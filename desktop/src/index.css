@@ -97,34 +97,6 @@
   }
 }
 
-html[data-mode="dark"] .sk-shimmer,
-html.dark .sk-shimmer {
-  background: linear-gradient(
-    105deg,
-    #1a222d 0%,
-    #1a222d 38%,
-    #2a3444 50%,
-    #1a222d 62%,
-    #1a222d 100%
-  );
-  background-size: 200% 100%;
-}
-html[data-mode="dark"] .sk-shimmer,
-html.dark .sk-shimmer {
-  animation: sk-shimmer-sweep 1.55s ease-in-out infinite;
-}
-@media (prefers-reduced-motion: reduce) {
-  html[data-mode="dark"] .sk-shimmer,
-  html.dark .sk-shimmer {
-    animation: none;
-    background: #1a222d;
-  }
-}
-html[data-mode="dark"] .animate-pulse.bg-white,
-html.dark .animate-pulse.bg-white {
-  background-color: #1a222d !important;
-}
-
 
 
 
@@ -421,11 +393,9 @@ img.sc-media-transparent,
     background-color: rgba(123, 44, 191, 0.05);
   }
 
-  /* FAB stays inside the sidebar list pane (absolute, not viewport-fixed) */
+  /* Hide mobile FAB inside desktop sidebar — actions live in header */
   .desktop-chat-list .fab-theme {
-    position: absolute !important;
-    bottom: 1.25rem !important;
-    right: 1.25rem !important;
+    display: none !important;
   }
 
   /* Conversation pane: tighten header safe-area for desktop */
@@ -506,6 +476,7 @@ img.sc-media-transparent,
   }
   .conversation-pane [data-msg-list] {
     /* keep horizontal padding; don't shrink the scrollport */
+    min-width: 0;
   }
   .conversation-pane header,
   .conversation-pane footer,
@@ -518,8 +489,11 @@ img.sc-media-transparent,
 
 /* Auth: full-viewport gradient; content centered, no phone chrome */
 .auth-shell {
-  /* Same as mobile login/onboarding */
-  background: linear-gradient(to bottom, #F8F1FF, #ffffff, #EEF2FF) !important;
+  background:
+    radial-gradient(ellipse 90% 70% at 15% 10%, rgba(123, 44, 191, 0.18), transparent 55%),
+    radial-gradient(ellipse 80% 60% at 85% 90%, rgba(255, 140, 0, 0.14), transparent 50%),
+    radial-gradient(ellipse 60% 40% at 50% 50%, rgba(156, 49, 161, 0.08), transparent 60%),
+    #f5f0fa !important;
   width: 100%;
   min-height: 100dvh;
 }
@@ -529,6 +503,7 @@ img.sc-media-transparent,
   border: none !important;
   border-radius: 0 !important;
 }
+
 
 /* ── Desktop theme: LIGHT by default; DARK only when Settings sets data-mode=dark ── */
 .desktop-shell,
@@ -622,9 +597,8 @@ html.dark .desktop-sidebar .bg-gray-100 {
 }
 html[data-mode="dark"] .sc-menu-panel,
 html.dark .sc-menu-panel {
-  background: #1a222d !important;
+  background: #121821 !important;
   color: #e5e7eb !important;
-  ring-color: rgba(255,255,255,0.1);
 }
 html[data-mode="dark"] .sc-menu-panel .text-ink,
 html.dark .sc-menu-panel .text-ink {
@@ -638,145 +612,4 @@ html[data-mode="dark"] .sc-center-bg,
 html.dark .sc-center-bg {
   background: #121821 !important;
   background-color: #121821 !important;
-}
-
-
-/* Unified dark shell — same surface as mobile */
-html[data-mode="dark"] .nav-rail,
-html.dark .nav-rail,
-html[data-mode="dark"] .desktop-sidebar,
-html.dark .desktop-sidebar,
-html[data-mode="dark"] .desktop-right,
-html.dark .desktop-right,
-html[data-mode="dark"] .sc-center-bg,
-html.dark .sc-center-bg,
-html[data-mode="dark"] .sc-empty,
-html.dark .sc-empty,
-html[data-mode="dark"] .conversation-pane,
-html.dark .conversation-pane {
-  background: #121821 !important;
-  background-color: #121821 !important;
-  border-color: transparent !important;
-  box-shadow: none !important;
-}
-html[data-mode="dark"] .nav-rail,
-html.dark .nav-rail {
-  border-right: none !important;
-}
-html[data-mode="dark"] .desktop-shell,
-html.dark .desktop-shell,
-html[data-mode="dark"] .sc-shell-bg,
-html.dark .sc-shell-bg {
-  background: #0d1218 !important;
-}
-
-/* Notifications — full page + cards follow dark */
-html[data-mode="dark"] .sc-notif-page,
-html.dark .sc-notif-page {
-  background: #121821 !important;
-}
-html[data-mode="dark"] .sc-notif-page header,
-html.dark .sc-notif-page header {
-  background: rgba(18, 24, 33, 0.92) !important;
-  border-color: rgba(255, 255, 255, 0.06) !important;
-}
-html[data-mode="dark"] .sc-notif-card,
-html.dark .sc-notif-card {
-  background: rgba(255, 255, 255, 0.06) !important;
-  color: #e5e7eb !important;
-  box-shadow: none !important;
-  ring-color: rgba(255, 255, 255, 0.08) !important;
-}
-html[data-mode="dark"] .sc-notif-card .text-ink,
-html.dark .sc-notif-card .text-ink {
-  color: #e5e7eb !important;
-}
-html[data-mode="dark"] .sc-notif-filter,
-html.dark .sc-notif-filter {
-  background: rgba(255, 255, 255, 0.06) !important;
-  color: #9ca3af !important;
-}
-html[data-mode="dark"] .sc-notif-filter-active,
-html.dark .sc-notif-filter-active {
-  background: var(--color-brand-purple, #7b2cbf) !important;
-  color: #fff !important;
-}
-
-
-/* Auth + logout screens — light/dark */
-.auth-shell,
-.sc-auth-gradient {
-  background: linear-gradient(to bottom, #F8F1FF, #ffffff, #EEF2FF) !important;
-}
-html[data-mode="dark"] .auth-shell,
-html.dark .auth-shell,
-html[data-mode="dark"] .sc-auth-gradient,
-html.dark .sc-auth-gradient {
-  background: linear-gradient(to bottom, #0d1218, #121821, #1a222d) !important;
-}
-
-/* Nav rail: transparent in dark, no item boxes */
-html[data-mode="dark"] .nav-rail,
-html.dark .nav-rail {
-  background: transparent !important;
-  background-color: transparent !important;
-  border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
-  border-top: none !important;
-  border-bottom: none !important;
-  border-left: none !important;
-  box-shadow: none !important;
-}
-
-/* Settings: soft uniform dividers in dark */
-html[data-mode="dark"] .sc-settings-card,
-html.dark .sc-settings-card {
-  background: #1a222d !important;
-  box-shadow: none !important;
-}
-html[data-mode="dark"] .sc-settings-card.divide-y > * + *,
-html.dark .sc-settings-card.divide-y > * + *,
-html[data-mode="dark"] .divide-gray-100 > * + *,
-html.dark .divide-gray-100 > * + * {
-  border-color: rgba(255, 255, 255, 0.06) !important;
-}
-html[data-mode="dark"] .border-gray-100,
-html[data-mode="dark"] .border-gray-200,
-html.dark .border-gray-100,
-html.dark .border-gray-200 {
-  border-color: rgba(255, 255, 255, 0.06) !important;
-}
-html[data-mode="dark"] .ring-gray-100,
-html.dark .ring-gray-100 {
-  --tw-ring-color: rgba(255, 255, 255, 0.06) !important;
-}
-
-/* Selection ribbon dark */
-html[data-mode="dark"] .desktop-sidebar .z-30.bg-white\/95,
-html.dark .desktop-sidebar .z-30 {
-  background-color: rgba(18, 24, 33, 0.95) !important;
-}
-
-/* Light: faint nav | chats divider */
-.nav-rail {
-  border-right: 1px solid rgba(0, 0, 0, 0.06);
-}
-html[data-mode="dark"] .nav-rail,
-html.dark .nav-rail {
-  border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
-  background: transparent !important;
-}
-
-:root { --sc-status-viewed: #d1d5db; }
-html[data-mode="dark"],
-html.dark {
-  --sc-status-viewed: #4b5563;
-}
-
-/* Foldable: FAB stays on the home (left) half, not the second screen */
-[data-sc-foldable="1"] .fab-theme {
-  position: absolute !important;
-  bottom: 1.25rem !important;
-  right: 1.25rem !important;
-  left: auto !important;
-  z-index: 20 !important;
 }

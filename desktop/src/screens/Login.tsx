@@ -42,23 +42,7 @@ export function Login({
       } catch { /* */ }
       onSuccess()
     } catch (e: any) {
-      const raw = String(e?.message || '')
-      const low = raw.toLowerCase()
-      if (
-        low.includes('failed to fetch') ||
-        low.includes('networkerror') ||
-        low.includes('load failed') ||
-        low.includes('network request failed')
-      ) {
-        const offline = typeof navigator !== 'undefined' && navigator.onLine === false
-        setError(
-          offline
-            ? "You're offline. Check your internet connection and try again."
-            : 'SafeChat server could not be reached. Please try again in a moment.',
-        )
-      } else {
-        setError(raw || 'Login failed')
-      }
+      setError(e?.message || 'Login failed')
       setLoading(false)
       return
     }
@@ -86,8 +70,8 @@ export function Login({
         <div className="mt-3">
           <Wordmark className="text-3xl" />
         </div>
-        <h2 className="mt-6 text-2xl font-black tracking-tight text-ink dark:text-gray-100">Welcome</h2>
-        <p className="mt-1.5 max-w-[280px] text-sm font-semibold text-gray-500 dark:text-gray-400">
+        <h2 className="mt-6 text-2xl font-black tracking-tight text-ink">Welcome</h2>
+        <p className="mt-1.5 max-w-[280px] text-sm font-semibold text-gray-500">
           Sign in to start Safechatting now!
         </p>
       </motion.div>
@@ -99,7 +83,7 @@ export function Login({
         className="relative z-10 mt-10 space-y-4"
       >
         <div>
-          <label className="mb-1.5 block text-left text-xs font-bold text-gray-500 dark:text-gray-400">
+          <label className="mb-1.5 block text-left text-xs font-bold text-gray-500">
             Phone
           </label>
           <input
@@ -108,19 +92,19 @@ export function Login({
             placeholder="+2547…"
             inputMode="tel"
             autoComplete="tel"
-            className="h-12 w-full rounded-2xl bg-transparent px-4 text-[15px] font-semibold text-ink outline-none ring-1 ring-black/10 transition focus:ring-brand-purple/30 dark:text-gray-100 dark:ring-white/15"
+            className="h-12 w-full rounded-2xl bg-transparent px-4 text-[15px] font-semibold outline-none ring-1 ring-black/10 transition focus:ring-brand-purple/30"
             onKeyDown={(e) => e.key === 'Enter' && submit()}
           />
         </div>
         <div>
-          <label className="mb-1.5 block text-left text-xs font-bold text-gray-500 dark:text-gray-400">Password</label>
+          <label className="mb-1.5 block text-left text-xs font-bold text-gray-500">Password</label>
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Your password"
             autoComplete="current-password"
-            className="h-12 w-full rounded-2xl bg-transparent px-4 text-[15px] font-semibold text-ink outline-none ring-1 ring-black/10 transition focus:ring-brand-purple/30 dark:text-gray-100 dark:ring-white/15"
+            className="h-12 w-full rounded-2xl bg-transparent px-4 text-[15px] font-semibold outline-none ring-1 ring-black/10 transition focus:ring-brand-purple/30"
             onKeyDown={(e) => e.key === 'Enter' && submit()}
           />
         </div>

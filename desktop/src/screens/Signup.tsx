@@ -66,19 +66,7 @@ export function Signup({ loading, onSubmit, onLogin, onBack }: Props) {
         setTaken(true)
         setError('This number is already on SafeChat. Log in instead.')
       } else {
-        {
-          const low = String(msg || '').toLowerCase()
-          if (low.includes('failed to fetch') || low.includes('network') || low.includes('load failed')) {
-            const offline = typeof navigator !== 'undefined' && navigator.onLine === false
-            setError(
-              offline
-                ? "You're offline. Check your internet connection and try again."
-                : 'SafeChat server could not be reached. Please try again in a moment.',
-            )
-          } else {
-            setError(msg || 'Could not verify this number. Try again.')
-          }
-        }
+        setError(msg || 'Could not verify this number. Try again.')
       }
     } finally {
       setChecking(false)

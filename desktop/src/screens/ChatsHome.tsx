@@ -55,7 +55,7 @@ export function ChatsHome({
   onNotifications,
   onSupport,
 }: Props) {
-  const { settings, chats, contacts, statusList, me, listsReady, saveRequestPending, notifUnreadCount, typingPeers, presenceMap, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, refreshNotifCount, refreshSubscription, showToast } = useStore()
+  const { chats, contacts, statusList, me, listsReady, saveRequestPending, notifUnreadCount, typingPeers, presenceMap, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, refreshNotifCount, refreshSubscription, showToast } = useStore()
   /** System-only: save requests etc. Chat unreads live on the bottom nav. */
   const systemNotifCount = (saveRequestPending || 0) + (notifUnreadCount || 0)
   const [filter, setFilter] = useState<Filter>('All chats')
@@ -63,7 +63,6 @@ export function ChatsHome({
   const [q, setQ] = useState('')
   const [menu, setMenu] = useState(false)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('sc_pinned_chats') || '[]') } catch { return [] }
   })
@@ -74,7 +73,7 @@ export function ChatsHome({
   const [chatsLocked, setChatsLocked] = useState(() => {
     try { return localStorage.getItem('sc_chats_locked') === '1' } catch { return false }
   })
-  const [lockUi, setLockUi] = useState<'none' | 'set' | 'confirm' | 'unlock' | 'lock-apply'>('none')
+  const [lockUi, setLockUi] = useState<'none' | 'set' | 'confirm' | 'unlock'>('none')
   const [pendingPin, setPendingPin] = useState('')
 
   const pendingCount = saveRequestPending
@@ -239,14 +238,10 @@ export function ChatsHome({
     clearSelection()
   }
   const deleteSelected = () => {
-    setDeleteConfirm(true)
-  }
-  const confirmDeleteSelected = () => {
     try {
       window.dispatchEvent(new CustomEvent('sc:delete-chats', { detail: { ids: [...selectedIds] } }))
     } catch { /* */ }
     showToast(selectedIds.length > 1 ? 'Chats deleted' : 'Chat deleted')
-    setDeleteConfirm(false)
     clearSelection()
   }
   const lockSelected = () => {
@@ -258,12 +253,24 @@ export function ChatsHome({
       onSettings()
       return
     }
-    setLockUi('lock-apply')
+    const entered = window.prompt('Enter chat lock PIN to lock')
+    if (entered == null) return
+    if (entered !== pin) {
+      showToast('Wrong PIN')
+      return
+    }
+    try {
+      const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+      for (const id of selectedIds) map[id] = true
+      localStorage.setItem('sc_chat_locks', JSON.stringify(map))
+      showToast(selectedIds.length > 1 ? 'Chats locked' : 'Chat locked')
+    } catch { /* */ }
+    clearSelection()
   }
 
 
   return (
-    <div className="relative flex h-full flex-col overflow-hidden bg-white dark:bg-[#121821]">
+    <div className="relative flex h-full flex-col bg-white">
       {/* z-10: sticky top chrome - below overlays */}
       <header className="sticky top-0 z-10 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 pb-3 px-5 pt-[max(12px,env(safe-area-inset-top))] backdrop-blur">
         <div className="flex w-full items-center">
@@ -316,12 +323,12 @@ export function ChatsHome({
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -6 }}
           transition={{ duration: 0.22, ease: 'easeOut', delay: 0.12 }}
-          className="z-30 flex items-center gap-2 border-b border-black/5 bg-white/95 px-2 py-2 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#121821]/95 dark:shadow-none"
+          className="z-30 flex items-center gap-2 border-b border-black/5 bg-white/95 px-2 py-2 shadow-sm backdrop-blur"
         >
           <button
             type="button"
             onClick={clearSelection}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600 dark:bg-white/10 dark:text-gray-300"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-600"
             aria-label="Cancel selection"
           >
             <X size={18} />
@@ -339,10 +346,10 @@ export function ChatsHome({
             <button type="button" onClick={deleteSelected} className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-red/10 px-3 py-2 text-xs font-extrabold text-brand-red">
               <Trash2 size={15} /> Delete
             </button>
-            <button type="button" disabled className="flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-3 py-2 text-xs font-extrabold text-gray-300 dark:bg-white/5 dark:text-gray-500">
+            <button type="button" disabled className="flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-3 py-2 text-xs font-extrabold text-gray-300">
               <EyeOff size={15} /> Hide
             </button>
-            <button type="button" disabled className="flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-3 py-2 text-xs font-extrabold text-gray-300 dark:bg-white/5 dark:text-gray-500">
+            <button type="button" disabled className="flex shrink-0 items-center gap-1.5 rounded-full bg-gray-50 px-3 py-2 text-xs font-extrabold text-gray-300">
               <Archive size={15} /> Archive
             </button>
             <button type="button" onClick={lockSelected} className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-purple/10 px-3 py-2 text-xs font-extrabold text-brand-purple">
@@ -360,7 +367,7 @@ export function ChatsHome({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-0 z-40 bg-ink/40 backdrop-blur-sm"
+              className="fixed inset-0 z-40 bg-ink/40 backdrop-blur-sm"
               onClick={() => setMenu(false)}
             />
             <motion.ul
@@ -397,7 +404,7 @@ export function ChatsHome({
                           }
                         } catch { /* */ }
                         await Promise.all([
-                          refreshChats(),
+                          refreshChats({ lean: true }),
                           refreshCalls(),
                           refreshStatus(),
                           refreshContacts(),
@@ -448,27 +455,23 @@ export function ChatsHome({
 
 
       {lockUi !== 'none' && (
-        <div className="absolute inset-0 z-[60] bg-white dark:bg-[#121821]">
+        <div className="absolute inset-0 z-[60] bg-white ">
           <PinPad
             title={
               lockUi === 'set'
                 ? 'Create PIN'
                 : lockUi === 'confirm'
                   ? 'Confirm PIN'
-                  : lockUi === 'lock-apply'
-                    ? 'Lock chat'
-                    : 'Chats locked'
+                  : 'Chats locked'
             }
             subtitle={
               lockUi === 'set'
                 ? 'Choose a 4-digit PIN to lock your chat list'
                 : lockUi === 'confirm'
                   ? 'Enter the same PIN again'
-                  : lockUi === 'lock-apply'
-                    ? 'Enter your PIN to lock the selected chat'
-                    : 'Enter your PIN to unlock chats'
+                  : 'Enter your PIN to unlock chats'
             }
-            mode={lockUi === 'unlock' || lockUi === 'lock-apply' ? 'unlock' : 'set'}
+            mode={lockUi === 'unlock' ? 'unlock' : 'set'}
             onCancel={() => {
               setLockUi('none')
               setPendingPin('')
@@ -496,23 +499,6 @@ export function ChatsHome({
                 showToast('Chat lock enabled')
                 return true
               }
-              if (lockUi === 'lock-apply') {
-                let stored = ''
-                try { stored = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
-                if (pin !== stored) {
-                  showToast('Wrong PIN')
-                  return false
-                }
-                try {
-                  const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
-                  for (const id of selectedIds) map[id] = true
-                  localStorage.setItem('sc_chat_locks', JSON.stringify(map))
-                  showToast(selectedIds.length > 1 ? 'Chats locked' : 'Chat locked')
-                } catch { /* */ }
-                setLockUi('none')
-                clearSelection()
-                return true
-              }
               // unlock
               let stored = ''
               try { stored = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
@@ -528,7 +514,7 @@ export function ChatsHome({
       )}
 
       {chatsLocked && lockUi === 'none' ? (
-        <div className="absolute inset-0 z-[55] bg-white dark:bg-[#121821]">
+        <div className="absolute inset-0 z-[55] bg-white ">
           <PinPad
             title="Chats locked"
             subtitle="Enter your PIN to open your inbox"
@@ -710,9 +696,7 @@ export function ChatsHome({
                                 aria-hidden
                               />
                             ) : null}
-                            {me?.id && c.contactId === me.id
-                              ? `me(${me.username ? `@${String(me.username).replace(/^@/, '')}` : 'you'})`
-                              : ((ct as any).savedName || ct.name)}
+                            {(ct as any).savedName || ct.name}
                           </p>
                           <div className="flex shrink-0 flex-col items-end gap-0.5">
                             <span
@@ -767,49 +751,16 @@ export function ChatsHome({
         )}
       </div>
 
-      {settings.showFab !== false && (
       <motion.button
         type="button"
         aria-label="New chat"
         whileHover={{ scale: 1.06 }}
         whileTap={{ scale: 0.94 }}
         onClick={onNewChat}
-        className="fab-theme absolute bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white md:bottom-6"
+        className="fab-theme fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white"
       >
         <Plus size={26} strokeWidth={2.4} />
       </motion.button>
-      )}
-
-      {deleteConfirm && (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
-            <p className="text-lg font-black text-ink dark:text-gray-100">
-              Delete chat{selectedIds.length > 1 ? 's' : ''}?
-            </p>
-            <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
-              {selectedIds.length > 1
-                ? `${selectedIds.length} chats will be removed from this device.`
-                : 'This chat will be removed from this device.'}
-            </p>
-            <div className="mt-6 flex gap-3">
-              <button
-                type="button"
-                className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200"
-                onClick={() => setDeleteConfirm(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white"
-                onClick={confirmDeleteSelected}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

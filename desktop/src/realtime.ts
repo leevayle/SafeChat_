@@ -25,13 +25,8 @@ export type RtMsg = {
   type?: string
   image?: string | null
   state?: string
-  client_key?: string
-  clientKey?: string
   reply_to_message_id?: string | null
   reply_to_text?: string | null
-  replyToId?: string | null
-  replyToText?: string | null
-  reactions?: { emoji: string; user_id?: string }[]
 }
 
 export type RtCallPacket = {

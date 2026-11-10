@@ -29,23 +29,24 @@ const ITEMS: { id: RailItem; label: string; Icon: typeof MessageCircle }[] = [
   { id: 'contacts', label: 'Contacts', Icon: ContactRound },
 ]
 
+/** Mobile-like: soft active tint + thin ring; hover = thin outline only */
 function itemClass(isActive: boolean) {
   if (isActive) {
-    return 'bg-brand-purple/15 text-brand-purple ring-1 ring-brand-purple/25'
+    return 'bg-brand-purple/10 text-brand-purple ring-1 ring-brand-purple/35'
   }
-  return 'bg-transparent text-gray-500 hover:text-brand-purple dark:text-gray-400 dark:hover:text-brand-purple'
+  return 'text-gray-500 ring-1 ring-transparent hover:ring-brand-purple/30 hover:text-brand-purple'
 }
 
 export function NavRail({ active, badges = {}, onSelect, onLogout, loading }: Props) {
   return (
     <aside
-      className="nav-rail flex h-full w-[4.5rem] shrink-0 flex-col items-center border-r border-black/[0.06] bg-transparent py-3 dark:border-white/10"
+      className="nav-rail sc-surface flex h-full w-[4.5rem] shrink-0 flex-col items-center border-r border-black/8 bg-white py-3"
       aria-label="Main navigation"
     >
       <button
         type="button"
         onClick={() => onSelect('chats')}
-        className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl text-brand-purple transition hover:text-brand-purple"
+        className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl text-brand-purple transition hover:ring-1 hover:ring-brand-purple/30"
         aria-label="SafeChat"
         title={loading ? 'Loading…' : 'SafeChat'}
       >
@@ -64,12 +65,12 @@ export function NavRail({ active, badges = {}, onSelect, onLogout, loading }: Pr
               title={label}
               aria-label={label}
               aria-current={isActive ? 'page' : undefined}
-              className={`relative flex h-11 w-11 items-center justify-center rounded-xl bg-transparent transition ${itemClass(isActive)}`}
+              className={`relative flex h-11 w-11 items-center justify-center rounded-xl transition ${itemClass(isActive)}`}
             >
               <Icon size={22} strokeWidth={isActive ? 2.25 : 1.9} />
               {badge > 0 && (
-                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-red px-1 text-[10px] font-black text-white">
-                  {badge > 9 ? '9+' : badge}
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-purple px-1 text-[10px] font-black text-white">
+                  {badge > 99 ? '99+' : badge}
                 </span>
               )}
             </button>
@@ -77,24 +78,24 @@ export function NavRail({ active, badges = {}, onSelect, onLogout, loading }: Pr
         })}
       </nav>
 
-      <div className="mt-auto flex flex-col items-center gap-1.5 pb-1">
+      <div className="mt-auto flex flex-col items-center gap-1.5">
         <button
           type="button"
           onClick={() => onSelect('settings')}
           title="Settings"
           aria-label="Settings"
-          className={`flex h-11 w-11 items-center justify-center rounded-xl bg-transparent transition ${itemClass(active === 'settings')}`}
+          className={`flex h-11 w-11 items-center justify-center rounded-xl transition ${itemClass(active === 'settings')}`}
         >
-          <Settings2 size={22} strokeWidth={active === 'settings' ? 2.25 : 1.9} />
+          <Settings2 size={22} />
         </button>
         <button
           type="button"
           onClick={() => onSelect('profile')}
           title="Profile"
           aria-label="Profile"
-          className={`flex h-11 w-11 items-center justify-center rounded-xl bg-transparent transition ${itemClass(active === 'profile')}`}
+          className={`flex h-11 w-11 items-center justify-center rounded-xl transition ${itemClass(active === 'profile')}`}
         >
-          <User size={22} strokeWidth={active === 'profile' ? 2.25 : 1.9} />
+          <User size={22} />
         </button>
         {onLogout && (
           <button
@@ -102,7 +103,7 @@ export function NavRail({ active, badges = {}, onSelect, onLogout, loading }: Pr
             onClick={onLogout}
             title="Log out"
             aria-label="Log out"
-            className="mt-1 flex h-11 w-11 items-center justify-center rounded-xl bg-brand-red/15 text-brand-red transition hover:bg-brand-red/25 hover:text-[#c42d38]"
+            className="mt-1 flex h-11 w-11 items-center justify-center rounded-xl text-gray-500 ring-1 ring-transparent transition hover:text-brand-red hover:ring-brand-red/35"
           >
             <LogOut size={20} />
           </button>

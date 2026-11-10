@@ -285,7 +285,7 @@ export function CallScreen({
 
     pc.onconnectionstatechange = () => {
       const st = pc.connectionState
-      if (st === ('connected' as string) || st === ('completed' as string)) {
+      if (st === 'connected' || st === 'completed') {
         connectedRef.current = true
         startedAtRef.current = Date.now()
         setConnected(true)
@@ -298,7 +298,7 @@ export function CallScreen({
 
     pc.oniceconnectionstatechange = () => {
       const st = pc.iceConnectionState
-      if (st === ('connected' as string) || st === ('completed' as string)) {
+      if (st === 'connected' || st === 'completed') {
         connectedRef.current = true
         setConnected(true)
         setStatusText('Connected')
@@ -467,9 +467,9 @@ export function CallScreen({
         window.setTimeout(() => {
           if (!alive || intentionalEndRef.current || connectedRef.current) return
           const st = pcRef.current?.iceConnectionState
-          if (st === ('connected' as string) || st === ('completed' as string)) return
+          if (st === 'connected' || st === 'completed') return
           setStatusText(
-            st === 'checking' || st === ('connected' as string)
+            st === 'checking' || st === 'connected'
               ? 'Connecting…'
               : 'Still connecting — use same Wi‑Fi or enable TURN on the server',
           )

@@ -124,10 +124,12 @@ function pushPremiumLifecycleNotifs(
   }
 }
 
-export type Settings = {
+type Settings = {
   messageNotifs?: boolean
   callNotifs?: boolean
   statusNotifs?: boolean
+  about?: string
+  statusPrivacy?: string
   forceReadReceipts?: boolean
   liveTyping?: boolean
   hideLiveTyping?: boolean
@@ -137,10 +139,9 @@ export type Settings = {
   busyEnabled?: boolean
   busyScope?: string
   busyMessage?: string
-  busyUntil?: string | null
-  busyDurationMin?: number
-  timeFormat?: string
-  showFab?: boolean
+  autoDownload?: string
+  enterIsSend?: boolean
+  language?: string
 
   name: string
   username: string
@@ -358,6 +359,7 @@ export function defaultAppearance(): Appearance {
   return {
     theme: 'purple',
     chatAccent: 'purple',
+  timeFormat: '24h',
     colorMode: 'light',
     liquidGlass: false,
   }
@@ -474,8 +476,6 @@ const defaultSettings: Settings = {
   sound: 'Chime',
   fontSize: 'Medium',
   enterIsSend: true,
-  timeFormat: '24h',
-  showFab: true,
   wallpaper: 'Cloud',
   theme: 'purple',
   email: '',
@@ -499,7 +499,7 @@ type Store = {
   me: ApiUser | null
   settings: Settings
   setSetting: <K extends keyof Settings>(k: K, v: Settings[K]) => void
-  saveProfile: (profile: { name: string; username: string; bio: string; photo?: string | null }) => Promise<void>
+  saveProfile: (profile: { name: string; username: string; bio: string; photo: string | null }) => Promise<void>
   contacts: ApiContact[]
   chats: ChatPreview[]
   groups: any[]
@@ -540,7 +540,6 @@ type Store = {
     bio?: string
     email?: string
     photo?: string | null
-    registrationToken?: string
   }) => Promise<ApiUser>
   logout: () => Promise<void>
   applyUser: (user: ApiUser, settings?: Record<string, unknown>) => void
@@ -564,7 +563,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<ApiUser | null>(() =>
     hasAccessToken() ? getStoredUser() : null,
   )
-  const settingsRef = useRef<Settings>(defaultSettings)
   const [settings, setSettings] = useState<Settings>(() => {
     try {
       const owner = localStorage.getItem(LS_OWNER_KEY)
@@ -1410,7 +1408,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (stopped) return
       connectRealtime({
         onStatus: (st) => {
-          if (st !== 'open' && (st as string) !== 'connected') return
+          if (st !== 'open' && st !== 'connected') return
           // Flush outbox when connection restored
           void loadOutbox().then(async (items) => {
             for (const item of items) {
@@ -1797,7 +1795,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     bio?: string
     email?: string
     photo?: string | null
-    registrationToken?: string
+    registrationToken: string
   }) => {
     const nationalNumber = data.phone.replace(/\D/g, '').replace(/^0/, '')
     const phoneNumber = `${data.countryCode || ''}${nationalNumber}`.replace(/[^+\d]/g, '')
@@ -1924,14 +1922,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // Device preferences are local-only. Never send them to the profile endpoint.
   // Busy fields are draft-only until the user taps "Update busy status".
-  useEffect(() => {
-    settingsRef.current = settings
-  }, [settings])
-
   const setSetting = useCallback(<K extends keyof Settings>(k: K, v: Settings[K]) => {
     const next = { ...settings, [k]: v }
     setSettings(next)
-    settingsRef.current = next
     // Appearance keys: CSS variables only — no component remount
     if (k === 'theme' || k === 'chatAccent' || k === 'liquidGlass' || k === 'colorMode') {
       applyAppearance({
@@ -1984,20 +1977,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       colorMode: 'color_mode',
       liquidGlass: 'liquid_glass',
       hideLiveTyping: 'hide_live_typing',
-      showFab: 'show_fab',
-      timeFormat: 'time_format',
-      previews: 'previews',
-      vibrate: 'vibrate',
-      lowDataCalls: 'low_data_calls',
-      disappearing: 'disappearing',
-      lastSeen: 'last_seen',
-      profilePhoto: 'profile_photo',
-      about: 'about_privacy',
-      groupsAdd: 'groups_add',
-      forceReadReceipts: 'force_read_receipts',
-      liveTyping: 'live_typing',
-      statusAdsEnabled: 'status_ads_enabled',
-      verifiedBadge: 'verified_badge',
     }
     const sk = serverKey[k as string]
     // Background preference sync — no toast (only button-driven actions toast)
@@ -2008,7 +1987,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // Persist profile fields with one PATCH and update the local session cache;
   // profile saves must not call /auth/me again.
-  const saveProfile = useCallback(async (profile: { name: string; username: string; bio: string; photo?: string | null }) => {
+  const saveProfile = useCallback(async (profile: { name: string; username: string; bio: string; photo: string | null }) => {
     const current = meRef.current
     if (!current) throw new Error('You must be signed in to update your profile')
     await api.updateMe(profile)
@@ -2017,7 +1996,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       name: profile.name,
       username: profile.username,
       bio: profile.bio,
-      photo: profile.photo ?? current.photo ?? null,
+      photo: profile.photo,
     }
     meRef.current = updated
     setMe(updated)
@@ -2043,7 +2022,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const patchGroup = (id: string, fn: (g: any) => any) => {
     setGroups((gs) => gs.map((g) => (g.id === id ? fn(g) : g)))
     // best-effort persist muted/pinned
-    const g = groups.find((x: any) => x.id === id) as any
+    const g = groups.find((x) => x.id === id)
     if (g) {
       const next = fn(g)
       api.patchGroup(id, { muted: next.muted, pinned: next.pinned, name: next.name, desc: next.desc }).catch(() => {})
@@ -2338,6 +2317,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       calls,
       saveRequestPending,
       notifUnreadCount,
+      refreshNotifCount,
       refreshChats,
       syncSubscription,
       refreshContacts,

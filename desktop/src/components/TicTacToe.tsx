@@ -442,7 +442,7 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
       )}
 
       {mode === 'pick-friend' && (
-        <div className="flex min-h-0 flex-1 flex-col bg-white dark:bg-[#121821]">
+        <div className="flex min-h-0 flex-1 flex-col">
           <p className="shrink-0 px-4 pb-1 pt-3 text-xs font-bold text-gray-400">Choose one contact</p>
           <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
             {friends.length === 0 && (
