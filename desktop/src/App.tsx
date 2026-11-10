@@ -257,21 +257,24 @@ function Shell() {
       }
       if (!p?.from) return
       if (p.a === 'ring') {
-        setIncoming((prev) =>
-          prev?.ringId === p.callId
-            ? {
-                ...prev,
-                peerName: p.fromName || prev.peerName,
-                peerUsername: p.fromUsername || prev.peerUsername,
-              }
-            : {
-                id: p.from!,
-                kind: p.kind === 'video' ? 'video' : 'audio',
-                ringId: p.callId,
-                peerName: p.fromName,
-                peerUsername: p.fromUsername,
-              },
-        )
+        setIncoming((prev) => {
+          if (prev && p.callId && prev.ringId === p.callId) {
+            return {
+              ...prev,
+              id: prev.id,
+              kind: prev.kind,
+              peerName: p.fromName || prev.peerName,
+              peerUsername: p.fromUsername || prev.peerUsername,
+            }
+          }
+          return {
+            id: String(p.from),
+            kind: p.kind === 'video' ? 'video' : 'audio',
+            ringId: p.callId,
+            peerName: p.fromName,
+            peerUsername: p.fromUsername,
+          }
+        })
       } else if (p.a === 'offer' && p.sdp) {
         setIncoming((prev) => {
           if (prev && prev.id === p.from) {

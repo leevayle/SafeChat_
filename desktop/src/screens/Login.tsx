@@ -42,7 +42,23 @@ export function Login({
       } catch { /* */ }
       onSuccess()
     } catch (e: any) {
-      setError(e?.message || 'Login failed')
+      const raw = String(e?.message || '')
+      const low = raw.toLowerCase()
+      if (
+        low.includes('failed to fetch') ||
+        low.includes('networkerror') ||
+        low.includes('load failed') ||
+        low.includes('network request failed')
+      ) {
+        const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+        setError(
+          offline
+            ? "You're offline. Check your internet connection and try again."
+            : 'SafeChat server could not be reached. Please try again in a moment.',
+        )
+      } else {
+        setError(raw || 'Login failed')
+      }
       setLoading(false)
       return
     }

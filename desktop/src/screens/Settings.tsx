@@ -524,6 +524,7 @@ export function Settings({
                           name: draft.name.trim(),
                           username: draft.username.trim().toLowerCase(),
                           bio: draft.bio || '',
+                          photo: (draft as any).photo ?? s.photo ?? null,
                         })
                         setToast('Profile updated')
                       } catch (e: any) {
@@ -593,6 +594,7 @@ export function Settings({
                     <Toggle
                       on={(s as any).statusLikeNotif !== false}
                       onChange={(v) => setSetting('statusLikeNotif' as any, v as never)}
+                      label="Status likes"
                     />
                   }
                 />
@@ -1972,13 +1974,13 @@ export function Settings({
             value={
               picker.key === 'theme'
                 ? themeLabelFromId(String(s.theme || 'purple'))
-                : String(s[picker.key])
+                : String((s as any)[picker.key] ?? '')
             }
             onPick={(o) => {
               if (picker.key === 'theme') {
                 setSetting('theme', themeIdFromLabel(o) as never)
               } else {
-                setSetting(picker.key, o as never)
+                setSetting(picker.key as keyof typeof s, o as never)
               }
               setPicker(null)
             }}
