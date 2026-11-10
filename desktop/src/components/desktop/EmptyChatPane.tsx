@@ -10,7 +10,8 @@ type Props = {
 export function EmptyChatPane({
   subtitle = 'Select a chat to start messaging.',
 }: Props) {
-  const colorMode = useStore((s) => s.settings.colorMode)
+  const { settings } = useStore()
+  const colorMode = settings.colorMode
   const isDark =
     String(colorMode || 'light').toLowerCase() === 'dark' ||
     (typeof document !== 'undefined' &&

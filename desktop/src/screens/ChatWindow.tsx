@@ -689,7 +689,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         const prevById = new Map(prev.map((m) => [m.id, m]))
         const claimedKeys = new Set<string>()
         const claimedIds = new Set<string>()
-        const mapped = messages.map((sm) => {
+        const mapped = messages.map((sm: any) => {
           const prior = prevById.get(sm.id)
           if (prior) {
             if (prior.clientKey) claimedKeys.add(prior.clientKey)

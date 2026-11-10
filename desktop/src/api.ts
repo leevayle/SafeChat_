@@ -91,6 +91,7 @@ export type ChatPreview = {
   contactId: string
   conversationId?: string
   name?: string
+  publicName?: string
   photo?: string | null
   hue?: [string, string]
   last: string
@@ -955,6 +956,7 @@ export const api = {
     message?: string
     sharePhone?: boolean
     nickname?: string
+    phone?: string
   }) => {
     if (!body.username) throw new Error('Username required to add contact')
     const data = await req<any>('/api/v1/contacts/requests', {
@@ -1314,6 +1316,28 @@ export const api = {
         liked: !!v.liked,
       })),
     }
+  },
+
+  sendContactRequest: async (opts: {
+    username?: string
+    peerId?: string
+    savedName?: string
+    message?: string
+    sharePhone?: boolean
+    nickname?: string
+    phone?: string
+  }) => {
+    return req<any>('/api/v1/contacts/requests', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: opts.username,
+        contact_user_id: opts.peerId,
+        nickname: opts.nickname || opts.savedName,
+        message: opts.message,
+        share_phone: opts.sharePhone,
+        phone_number: opts.phone,
+      }),
+    })
   },
 
   likeStatus: async (id: string) => {

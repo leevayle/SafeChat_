@@ -124,7 +124,7 @@ function pushPremiumLifecycleNotifs(
   }
 }
 
-type Settings = {
+export type Settings = {
   messageNotifs?: boolean
   callNotifs?: boolean
   statusNotifs?: boolean
@@ -2017,7 +2017,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       name: profile.name,
       username: profile.username,
       bio: profile.bio,
-      photo: profile.photo,
+      photo: profile.photo ?? current.photo ?? null,
     }
     meRef.current = updated
     setMe(updated)

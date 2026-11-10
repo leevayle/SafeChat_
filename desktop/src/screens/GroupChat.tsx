@@ -27,7 +27,7 @@ export function GroupChat({
   groupId: string
   onBack: () => void
   onClosed: () => void
-  onCall: (id: string, kind: 'audio' | 'video') => void
+  onCall?: (id: string, kind: 'audio' | 'video') => void
 }) {
   const { groups, contacts, me, settings, refreshGroups, showToast } = useStore()
   const g = groups.find((x) => x.id === groupId)

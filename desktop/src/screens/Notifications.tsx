@@ -487,7 +487,7 @@ export function Notifications({
         }
       }
       try {
-        void useStore.getState?.()
+        void /* no getState on context store */ undefined
       } catch {
         /* */
       }

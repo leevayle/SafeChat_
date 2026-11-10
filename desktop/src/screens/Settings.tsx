@@ -25,6 +25,10 @@ import { fileToDataUrl } from '../lib/imageProcess'
 const WHO = ['Everyone', 'My contacts', 'Nobody']
 const themeLabelFromId = (id: string) =>
   THEMES[id as keyof typeof THEMES]?.label || THEMES.purple.label
+const themeIdFromLabel = (label: string) => {
+  const hit = Object.values(THEMES).find((t: any) => t.label === label || t.id === label)
+  return (hit as any)?.id || 'purple'
+}
 
 type Page =
   | 'home'
@@ -185,9 +189,9 @@ export function Settings({
     return () => clearTimeout(t)
   }, [draft.username, page, s.username])
 
-  const sel = (title: string, key: keyof S, options: string[]) => ({
-    value: String(s[key]),
-    onClick: () => setPicker({ title, key, options }),
+  const sel = (title: string, key: keyof S | string, options: string[]) => ({
+    value: String((s as any)[key] ?? ''),
+    onClick: () => setPicker({ title, key: key as keyof S, options }),
   })
 
   const title =

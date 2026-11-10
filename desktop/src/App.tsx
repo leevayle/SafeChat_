@@ -840,11 +840,7 @@ function Shell() {
       )
     } else if (group) {
       mainContent = (
-        <GroupChat
-          groupId={group}
-          onBack={() => setGroup(null)}
-          onClosed={() => setGroup(null)}
-        />
+        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} />
       )
     } else {
       showEmpty = true
@@ -1211,7 +1207,7 @@ function Shell() {
       )
     } else if (group) {
       second = (
-        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} />
+        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} />
       )
     }
 
@@ -1400,7 +1396,7 @@ function Shell() {
 
         {group && (
           <div className="absolute inset-0 z-20 bg-white">
-            <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} />
+            <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} />
           </div>
         )}
 

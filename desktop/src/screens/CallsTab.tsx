@@ -18,7 +18,7 @@ import { useStore } from '../store'
 
 type Props = {
   onCall: (id: string, kind: 'audio' | 'video') => void
-  onSimulateIncoming: () => void
+  onSimulateIncoming?: () => void
   onOpenContacts?: () => void
   /** Desktop: open new-call UI in the right column instead of fullscreen */
   onOpenNewCallPanel?: () => void

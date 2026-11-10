@@ -397,7 +397,7 @@ export function ChatsHome({
                           }
                         } catch { /* */ }
                         await Promise.all([
-                          refreshChats({ lean: true }),
+                          refreshChats(),
                           refreshCalls(),
                           refreshStatus(),
                           refreshContacts(),
