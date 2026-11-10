@@ -44,7 +44,7 @@ export function GroupInfo({ groupId, onBack, onLeft }: { groupId: string; onBack
   const log = (text: string) => patchGroup(groupId, (x) => ({ ...x, messages: [...x.messages, sys(text)] }))
   const link = `safechat.app/join/${g.invite}`
   const members = [...membersList].sort((a, b) => Number(b.admin) - Number(a.admin))
-  const shown = members.filter((m) => whoById(m.id).name.toLowerCase().includes(q.toLowerCase()))
+  const shown = members.filter((m: any) => whoById(m.id).name.toLowerCase().includes(q.toLowerCase()))
   const addable = contacts.filter((c) => !membersList.some((m: any) => m.id === c.id) && !blocked.includes(c.id))
   const target = sheet && typeof sheet === 'object' ? membersList.find((m: any) => m.id === sheet.member) : undefined
 
@@ -61,7 +61,7 @@ export function GroupInfo({ groupId, onBack, onLeft }: { groupId: string; onBack
       <ScreenHeader title="Group info" onBack={onBack} right={isAdmin ? <button onClick={() => { setDraft({ name: g.name, desc: g.desc }); setSheet('edit') }} aria-label="Edit group" className="flex h-10 w-10 items-center justify-center rounded-full text-brand-purple hover:bg-gray-100"><Pencil size={20} /></button> : undefined} />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-6">
         <div className="flex flex-col items-center text-center">
-          <motion.button whileTap={isAdmin ? { scale: 0.94 } : undefined} onClick={() => isAdmin && setSheet('color')} aria-label="Change group colour"><Avatar contact={{ name: g.name, hue: g.hue, online: false }} size={112} /></motion.button>
+          <motion.button whileTap={isAdmin ? { scale: 0.94 } : undefined} onClick={() => isAdmin && setSheet('color')} aria-label="Change group colour"><Avatar contact={{ name: g.name, hue: g.hue, online: false, id: (m as any)?.id || (m as any)?.userId || "member" }} size={112} /></motion.button>
           <h2 className="mt-3 text-2xl font-black">{g.name}</h2>
           <p className="text-sm font-bold text-gray-400">Group · {g.members.length} members</p>
           <p className="mt-2 max-w-xs font-semibold text-gray-500">{g.desc || 'No description'}</p>
@@ -93,7 +93,7 @@ export function GroupInfo({ groupId, onBack, onLeft }: { groupId: string; onBack
           <div className="overflow-hidden rounded-3xl bg-white shadow-sm">
             <div className="flex items-center gap-2 border-b border-gray-100 px-5 py-3"><Search size={16} className="text-gray-400" /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search members" className="w-full bg-transparent text-sm font-semibold outline-none placeholder:text-gray-400" /></div>
             {isAdmin && <button onClick={() => { setAdding([]); setSheet('add') }} className="flex w-full items-center gap-3 px-5 py-3 text-left hover:bg-gray-50"><span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-purple text-white"><UserPlus size={20} /></span><span className="font-extrabold">Add members</span></button>}
-            {shown.map((m) => {
+            {shown.map((m: any) => {
               const c = whoById(m.id)
               const username = (c as any).username || m.username || ''
               const phone = (c as any).phone || m.phone || ''
@@ -174,8 +174,8 @@ export function GroupInfo({ groupId, onBack, onLeft }: { groupId: string; onBack
           <div className="space-y-1">
             {[
               { l: 'Message', show: true, f: () => setToast('Opening chat…') },
-              { l: target.admin ? 'Dismiss as admin' : 'Make group admin', show: isAdmin, f: () => { patchGroup(groupId, (x) => ({ ...x, members: x.members.map((m) => (m.id === target.id ? { ...m, admin: !m.admin } : m)) })); log(`${target.admin ? 'dismissed' : 'made'} ${whoById(target.id).name.split(' ')[0]} ${target.admin ? 'as admin' : 'an admin'}`); setSheet(null) } },
-              { l: 'Remove from group', show: isAdmin, danger: true, f: () => { patchGroup(groupId, (x) => ({ ...x, members: x.members.filter((m) => m.id !== target.id), messages: [...x.messages, sys(`removed ${whoById(target.id).name.split(' ')[0]}`)] })); setSheet(null) } },
+              { l: target.admin ? 'Dismiss as admin' : 'Make group admin', show: isAdmin, f: () => { patchGroup(groupId, (x) => ({ ...x, members: x.members.map((m: any) => (m.id === target.id ? { ...m, admin: !m.admin } : m)) })); log(`${target.admin ? 'dismissed' : 'made'} ${whoById(target.id).name.split(' ')[0]} ${target.admin ? 'as admin' : 'an admin'}`); setSheet(null) } },
+              { l: 'Remove from group', show: isAdmin, danger: true, f: () => { patchGroup(groupId, (x) => ({ ...x, members: x.members.filter((m: any) => m.id !== target.id), messages: [...x.messages, sys(`removed ${whoById(target.id).name.split(' ')[0]}`)] })); setSheet(null) } },
             ].filter((o) => o.show).map((o) => <button key={o.l} onClick={o.f} className={`w-full rounded-2xl px-4 py-3.5 text-left font-bold hover:bg-gray-100 ${o.danger ? 'text-brand-red' : ''}`}>{o.l}</button>)}
           </div>
         )}

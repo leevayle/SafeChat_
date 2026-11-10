@@ -4,6 +4,11 @@
  */
 
 const BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+if (typeof window !== 'undefined' && import.meta.env.PROD && !BASE) {
+  console.error(
+    '[SafeChat] VITE_API_URL is not set. Cloudflare Pages must define VITE_API_URL=https://your-api.onrender.com and rebuild.',
+  )
+}
 
 export type ApiUser = {
   id: string
@@ -91,6 +96,7 @@ export type ChatPreview = {
   contactId: string
   conversationId?: string
   name?: string
+  publicName?: string
   photo?: string | null
   hue?: [string, string]
   last: string
@@ -577,7 +583,23 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
   const tkn = accessToken()
   if (tkn) headers.Authorization = `Bearer ${tkn}`
 
-  const res = await fetch(`${BASE}${path}`, { ...opts, headers })
+  if (!BASE && import.meta.env.PROD) {
+    const err = new Error('SafeChat server could not be reached. API URL is not configured.')
+    ;(err as any).status = 0
+    ;(err as any).network = true
+    throw err
+  }
+
+  let res: Response
+  try {
+    res = await fetch(`${BASE}${path}`, { ...opts, headers })
+  } catch (e: any) {
+    const msg = networkReachabilityMessage(e)
+    const err = new Error(msg)
+    ;(err as any).status = 0
+    ;(err as any).network = true
+    throw err
+  }
   const body: BackendEnvelope = await res.json().catch(() => ({} as BackendEnvelope))
 
   if (res.status === 401 && !publicPath) {
@@ -609,6 +631,19 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
   return (body.data !== undefined ? body.data : body) as T
 }
 
+
+/** Offline vs SafeChat server unreachable — never show raw "Failed to fetch". */
+function networkReachabilityMessage(_raw?: unknown): string {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return "You're offline. Check your internet connection and try again."
+    }
+  } catch {
+    /* */
+  }
+  return 'SafeChat server could not be reached. Please try again in a moment.'
+}
+
 /** Map technical API errors to short, user-friendly copy. */
 function friendlyError(raw: string, status?: number, path?: string): string {
   const t = (raw || '').toLowerCase()
@@ -633,11 +668,23 @@ function friendlyError(raw: string, status?: number, path?: string): string {
     return 'Session expired — log in again'
   }
   if (status === 403 || t.includes('forbidden')) return 'You don’t have permission for that'
-  if (status === 404 || t.includes('not found')) return 'Not found'
+  if (status === 404 || t.includes('not found')) {
+    if (isAuthForm) return 'Cannot reach server — start the backend on port 8000, then try again'
+    return 'Not found'
+  }
   if (status === 409 || t.includes('conflict') || t.includes('already')) return raw.length < 80 ? raw : 'That action isn’t available right now'
   if (status === 429 || t.includes('rate limit') || t.includes('too many')) return 'Slow down a moment and try again'
   if (status && status >= 500) return 'Something went wrong — try again'
-  if (t.includes('network') || t.includes('failed to fetch')) return 'Check your connection and try again'
+  if (
+    t.includes('network') ||
+    t.includes('failed to fetch') ||
+    t.includes('econnrefused') ||
+    t.includes('proxy') ||
+    t.includes('load failed') ||
+    t.includes('networkerror')
+  ) {
+    return networkReachabilityMessage(raw)
+  }
   if (t.includes('incorrect password') || t.includes('wrong password')) return 'Incorrect password'
   // Keep short human messages; trim long technical dumps
   if (raw && raw.length <= 90 && !t.includes('exception') && !t.includes('traceback')) return raw
@@ -677,16 +724,27 @@ export const api = {
       .then((j) => ({ ok: j.status === 'ok' || j.status === 'alive' })),
 
   checkUsername: async (username: string) => {
+    if (!BASE && import.meta.env.PROD) {
+      throw new Error('SafeChat server could not be reached. API URL is not configured.')
+    }
     const data = await req<any>(`/api/v1/auth/username/check?username=${encodeURIComponent(username)}`)
-    // support { available } or nested
-    const available = data?.available ?? data?.data?.available ?? false
-    return { available: !!available }
+    const available = data?.available ?? data?.data?.available
+    if (typeof available !== 'boolean') {
+      throw new Error('SafeChat server could not be reached. Please try again in a moment.')
+    }
+    return { available }
   },
 
   checkPhone: async (phone: string) => {
+    if (!BASE && import.meta.env.PROD) {
+      throw new Error('SafeChat server could not be reached. API URL is not configured.')
+    }
     const data = await req<any>(`/api/v1/auth/phone/check?phone=${encodeURIComponent(phone)}`)
-    const available = data?.available ?? data?.data?.available ?? false
-    return { available: !!available }
+    const available = data?.available ?? data?.data?.available
+    if (typeof available !== 'boolean') {
+      throw new Error('SafeChat server could not be reached. Please try again in a moment.')
+    }
+    return { available }
   },
 
   sendPhoneCode: (phone_number: string) => req<any>('/api/v1/auth/phone/send-code', {
@@ -777,9 +835,25 @@ export const api = {
       sound: 'sound',
       read_receipts: 'readReceipts',
       status_like_notif: 'statusLikeNotif',
-      hide_live_typing: 'hideLiveTyping',
       color_mode: 'colorMode',
       liquid_glass: 'liquidGlass',
+      hide_live_typing: 'hideLiveTyping',
+      show_fab: 'showFab',
+      time_format: 'timeFormat',
+      previews: 'previews',
+      vibrate: 'vibrate',
+      low_data_calls: 'lowDataCalls',
+      disappearing: 'disappearing',
+      last_seen: 'lastSeen',
+      profile_photo: 'profilePhoto',
+      about_privacy: 'about',
+      groups_add: 'groupsAdd',
+      force_read_receipts: 'forceReadReceipts',
+      live_typing: 'liveTyping',
+      status_ads_enabled: 'statusAdsEnabled',
+      verified_badge: 'verifiedBadge',
+      wallpaper: 'wallpaper',
+      language: 'language',
     }
     const mapped: Record<string, unknown> = {
       theme: prefs.theme || theme,
@@ -905,6 +979,7 @@ export const api = {
     message?: string
     sharePhone?: boolean
     nickname?: string
+    phone?: string
   }) => {
     if (!body.username) throw new Error('Username required to add contact')
     const data = await req<any>('/api/v1/contacts/requests', {
@@ -1266,8 +1341,32 @@ export const api = {
     }
   },
 
+  sendContactRequest: async (opts: {
+    username?: string
+    peerId?: string
+    savedName?: string
+    message?: string
+    sharePhone?: boolean
+    nickname?: string
+    phone?: string
+  }) => {
+    return req<any>('/api/v1/contacts/requests', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: opts.username,
+        contact_user_id: opts.peerId,
+        nickname: opts.nickname || opts.savedName,
+        message: opts.message,
+        share_phone: opts.sharePhone,
+        phone_number: opts.phone,
+      }),
+    })
+  },
+
   likeStatus: async (id: string) => {
-    return req<any>(`/api/v1/statuses/${id}/like`, { method: 'POST' })
+    const res = await req<any>(`/api/v1/statuses/${encodeURIComponent(id)}/like`, { method: 'POST' })
+    // Backend may wrap as { data: { liked } } or return payload directly
+    return res?.data ?? res
   },
 
   notifUnreadCount: async () => {
@@ -1283,7 +1382,7 @@ export const api = {
     return { notifications: list || [] }
   },
   markNotificationRead: async (id: string) => {
-    await req(`/api/v1/notifications/${id}/read`, { method: 'POST' })
+    await req(`/api/v1/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' })
     return { ok: true }
   },
   markAllNotificationsRead: async () => {

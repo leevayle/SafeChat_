@@ -373,6 +373,8 @@ export function StatusTab({ onOpenStatus }: Props) {
               >
                 <X size={20} />
               </button>
+              <div className="min-w-0 flex-1" aria-hidden />
+              <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
                 onClick={() => {
@@ -381,11 +383,10 @@ export function StatusTab({ onOpenStatus }: Props) {
                     fileRef.current.click()
                   }
                 }}
-                className={`inline-flex h-11 min-w-0 flex-1 items-center justify-center gap-1 rounded-full px-2 shadow-sm ring-1 backdrop-blur-md active:scale-95 ${onLight}`}
+                className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full shadow-sm ring-1 backdrop-blur-md active:scale-95 ${onLight}`}
                 aria-label="Add photo"
               >
                 <ImagePlus size={18} strokeWidth={2.2} />
-                <span className="text-[11px] font-extrabold">Photo</span>
               </button>
               <button
                 type="button"
@@ -395,11 +396,10 @@ export function StatusTab({ onOpenStatus }: Props) {
                     fileRef.current.click()
                   }
                 }}
-                className={`inline-flex h-11 min-w-0 flex-1 items-center justify-center gap-1 rounded-full px-2 shadow-sm ring-1 backdrop-blur-md active:scale-95 ${onLight}`}
+                className={`inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full shadow-sm ring-1 backdrop-blur-md active:scale-95 ${onLight}`}
                 aria-label="Take photo"
               >
                 <Camera size={18} strokeWidth={2.2} />
-                <span className="text-[11px] font-extrabold">Cam</span>
               </button>
               <div className="relative flex shrink-0 items-center">
                 <PillButton onClick={post} loading={busy} variant="orange" className={`!h-11 !px-4 !text-sm shadow-lg ${isPremium ? '!rounded-r-none' : ''}`}>
@@ -423,6 +423,7 @@ export function StatusTab({ onOpenStatus }: Props) {
                     )}
                   </>
                 )}
+              </div>
               </div>
             </div>
             {isPremium && adMode && (

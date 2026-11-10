@@ -1,5 +1,6 @@
 import { Toast } from './components/ui'
 import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { DeactivatedGate } from './screens/DeactivatedGate'
 import { Splash } from './screens/Splash'
 import { Welcome } from './screens/Welcome'
@@ -29,9 +30,10 @@ import { StoreProvider, useStore } from './store'
 import { IncomingCall } from './components/IncomingCall'
 import { BottomNav, type Tab } from './components/BottomNav'
 import { DesktopShell } from './components/desktop/DesktopShell'
+import { EmptyChatPane } from './components/desktop/EmptyChatPane'
 import { ContactInfoPanel } from './components/desktop/ContactInfoPanel'
 import type { RailItem } from './components/desktop/NavRail'
-import { useMediaQuery, DESKTOP_BREAKPOINT } from './hooks/useMediaQuery'
+import { useMediaQuery, DESKTOP_BREAKPOINT, WIDE_DESKTOP_BREAKPOINT, useFoldableDualPane } from './hooks/useMediaQuery'
 
 type Stage = 'splash' | 'welcome' | 'signup' | 'verify' | 'login' | 'loading' | 'profile' | 'done' | 'app'
 type Call = { id: string; kind: 'audio' | 'video'; ringId?: string; remoteOfferSdp?: string; peerName?: string; peerUsername?: string }
@@ -47,7 +49,16 @@ export default function App() {
 
 function Shell() {
   const { ready, listsReady, me, logout, contacts, toast, clearToast, settings, chats, groups, calls } = useStore()
+  const [logoutConfirm, setLogoutConfirm] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT)
+  const isFoldableDual = useFoldableDualPane()
+  const isWideDesktop = useMediaQuery(WIDE_DESKTOP_BREAKPOINT)
+  /** Dual-pane shell: classic desktop OR foldable / mid-width */
+  /** True foldable / dual mid-width — mobile home + second screen */
+  const foldableTwoPane = isFoldableDual && !isWideDesktop
+  /** Classic desktop only (not foldable dual-pane) */
+  const useDesktopShell = (isWideDesktop || isDesktop) && !foldableTwoPane
 
   // Must be declared before any use — avoids TDZ "Cannot access before initialization"
   const [seenMissed, setSeenMissed] = useState<Set<string>>(() => {
@@ -85,6 +96,27 @@ function Shell() {
   }
 
   const groupUnread = (groups || []).reduce((n, g: any) => n + (g.unread > 0 ? 1 : 0), 0)
+
+  const requestLogout = () => setLogoutConfirm(true)
+  const confirmLogout = async () => {
+    setLogoutConfirm(false)
+    setLoggingOut(true)
+    try {
+      setChat(null)
+      setGroup(null)
+      setCall(null)
+      setTab('chats')
+      restored.current = false
+      setOverlay(null)
+      await logout()
+      setStage('login')
+    } catch {
+      setStage('login')
+    } finally {
+      setLoggingOut(false)
+    }
+  }
+
   const [stage, setStage] = useState<Stage>('splash')
   const [submitting, setSubmitting] = useState(false)
   const [username, setUsername] = useState('')
@@ -225,21 +257,24 @@ function Shell() {
       }
       if (!p?.from) return
       if (p.a === 'ring') {
-        setIncoming((prev) =>
-          prev?.ringId === p.callId
-            ? {
-                ...prev,
-                peerName: p.fromName || prev.peerName,
-                peerUsername: p.fromUsername || prev.peerUsername,
-              }
-            : {
-                id: p.from!,
-                kind: p.kind === 'video' ? 'video' : 'audio',
-                ringId: p.callId,
-                peerName: p.fromName,
-                peerUsername: p.fromUsername,
-              },
-        )
+        setIncoming((prev) => {
+          if (prev && p.callId && prev.ringId === p.callId) {
+            return {
+              ...prev,
+              id: prev.id,
+              kind: prev.kind,
+              peerName: p.fromName || prev.peerName,
+              peerUsername: p.fromUsername || prev.peerUsername,
+            }
+          }
+          return {
+            id: String(p.from),
+            kind: p.kind === 'video' ? 'video' : 'audio',
+            ringId: p.callId,
+            peerName: p.fromName,
+            peerUsername: p.fromUsername,
+          }
+        })
       } else if (p.a === 'offer' && p.sdp) {
         setIncoming((prev) => {
           if (prev && prev.id === p.from) {
@@ -459,7 +494,47 @@ function Shell() {
               }}
             />
           )}
-          {toast && <Toast msg={toast} clear={clearToast} />}
+          
+        {logoutConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
+              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                You will need to sign in again to use SafeChat on this device.
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button
+                  type="button"
+                  className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200"
+                  onClick={() => setLogoutConfirm(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white"
+                  onClick={() => void confirmLogout()}
+                >
+                  Log out
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {loggingOut && (
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex gap-2">
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
+              </div>
+              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
+            </div>
+          </div>
+        )}
+
+        {toast && <Toast msg={toast} clear={clearToast} />}
         </main>
       </div>
     )
@@ -475,10 +550,7 @@ function Shell() {
               /* session refreshed via reload */
               window.location.reload()
             }}
-            onLogout={() => {
-              void (logout as any)?.()
-              window.location.reload()
-            }}
+            onLogout={requestLogout}
           />
         </main>
       </div>
@@ -509,6 +581,8 @@ function Shell() {
     groups: groupUnread,
     calls: missedCallBadge,
   }
+
+
 
   const onRailSelect = (item: RailItem) => {
     if (item === 'contacts') {
@@ -583,16 +657,7 @@ function Shell() {
             <Settings
               onBack={() => setOverlay(null)}
               onSupport={() => setOverlay('support')}
-              onLogout={async () => {
-                setChat(null)
-                setGroup(null)
-                setCall(null)
-                setTab('chats')
-                restored.current = false
-                await logout()
-                setOverlay(null)
-                setStage('login')
-              }}
+              onLogout={requestLogout}
             />
           </div>
         </div>
@@ -603,16 +668,7 @@ function Shell() {
             <Settings
               onBack={() => setOverlay(null)}
               onSupport={() => setOverlay('support')}
-              onLogout={async () => {
-                setChat(null)
-                setGroup(null)
-                setCall(null)
-                setTab('chats')
-                restored.current = false
-                await logout()
-                setOverlay(null)
-                setStage('login')
-              }}
+              onLogout={requestLogout}
             />
           </div>
         </div>
@@ -744,8 +800,8 @@ function Shell() {
     </>
   )
 
-  // Desktop: list | conversation | right context panel
-  if (isDesktop) {
+  // Desktop + foldables: list | conversation [| right on wide desktop only]
+  if (useDesktopShell) {
     const sidebar =
       tab === 'groups' ? (
         <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
@@ -784,11 +840,7 @@ function Shell() {
       )
     } else if (group) {
       mainContent = (
-        <GroupChat
-          groupId={group}
-          onBack={() => setGroup(null)}
-          onClosed={() => setGroup(null)}
-        />
+        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} />
       )
     } else {
       showEmpty = true
@@ -832,16 +884,7 @@ function Shell() {
         <Settings
           onBack={() => setOverlay(null)}
           onSupport={() => setOverlay('support')}
-          onLogout={async () => {
-            setChat(null)
-            setGroup(null)
-            setCall(null)
-            setTab('chats')
-            restored.current = false
-            await logout()
-            setOverlay(null)
-            setStage('login')
-          }}
+          onLogout={requestLogout}
         />
       )
     } else if (overlay === 'notifications') {
@@ -1026,17 +1069,272 @@ function Shell() {
           rightPanel={rightPanel}
           overlays={desktopOverlays}
           loading={!listsReady}
-          onLogout={async () => {
-            setChat(null)
-            setGroup(null)
-            setCall(null)
-            setTab('chats')
-            restored.current = false
-            await logout()
+          onLogout={requestLogout}
+        />
+
+        {logoutConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
+              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                You will need to sign in again to use SafeChat on this device.
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button type="button" className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Cancel</button>
+                <button type="button" className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {loggingOut && (
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex gap-2">
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
+              </div>
+              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
+            </div>
+          </div>
+        )}
+
+      </div>
+    )
+  }
+
+
+  // Foldables: mobile home left | second screen right; status fullscreen
+  if (foldableTwoPane && stage === 'app') {
+    const foldBadges = {
+      chats: chatUnread,
+      groups: groupUnread,
+      calls: missedCallBadge,
+    }
+
+    // Second screen priority: overlays (settings etc.) → chat → group → empty
+    let second: ReactNode = <EmptyChatPane subtitle="Select a chat to start messaging." />
+    if (overlay === 'contacts') {
+      second = (
+        <Contacts
+          onClose={() => setOverlay(null)}
+          onChat={(id) => {
             setOverlay(null)
-            setStage('login')
+            setTab('chats')
+            setChat(id)
+          }}
+          onCall={(id, kind) => {
+            setOverlay(null)
+            placeCall(id, kind)
           }}
         />
+      )
+    } else if (overlay === 'settings' || overlay === 'profile') {
+      second = (
+        <Settings
+          onBack={() => setOverlay(null)}
+          onSupport={() => setOverlay('support')}
+          onLogout={requestLogout}
+        />
+      )
+    } else if (overlay === 'notifications') {
+      second = (
+        <Notifications
+          onBack={() => setOverlay(null)}
+          onOpenChat={(id) => {
+            setOverlay(null)
+            setChat(id)
+          }}
+          onOpenStatus={(userId, statusId) => {
+            setStatusUser({ userId, statusId })
+          }}
+        />
+      )
+    } else if (overlay === 'saveRequests') {
+      second = (
+        <SaveRequests
+          onClose={() => setOverlay(null)}
+          onChat={(id) => {
+            setOverlay(null)
+            setChat(id)
+          }}
+        />
+      )
+    } else if (overlay === 'support') {
+      second = <Support onClose={() => setOverlay(null)} />
+    } else if (overlay === 'newChat') {
+      second = (
+        <NewChat
+          onClose={() => setOverlay(null)}
+          onPick={(id) => {
+            setOverlay(null)
+            setChat(id)
+          }}
+        />
+      )
+    } else if (overlay === 'newGroup') {
+      second = (
+        <CreateGroup
+          onClose={() => setOverlay(null)}
+          onCreated={(id) => {
+            setOverlay(null)
+            setGroup(id)
+          }}
+        />
+      )
+    } else if (overlay === 'newCall') {
+      second = (
+        <NewCallPanel
+          onClose={() => setOverlay(null)}
+          onCall={(id, kind) => {
+            setOverlay(null)
+            placeCall(id, kind)
+          }}
+        />
+      )
+    } else if (chat) {
+      second = (
+        <ChatWindow
+          contactId={chat}
+          onBack={() => setChat(null)}
+          onCall={(kind) => placeCall(chat, kind)}
+          onOpenCalls={() => {
+            setChat(null)
+            setTab('calls')
+          }}
+          onOpenStatus={(userId, statusId) => setStatusUser({ userId, statusId })}
+        />
+      )
+    } else if (group) {
+      second = (
+        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} />
+      )
+    }
+
+    return (
+      <div data-sc-foldable="1" className="relative flex h-dvh w-full min-w-0 overflow-hidden bg-[#f0f2f5] dark:bg-[#0d1218]">
+        {/* Left: mobile home + docked bottom nav */}
+        <div className="relative flex h-full min-w-0 w-1/2 flex-col overflow-hidden border-r border-black/[0.06] bg-white dark:border-white/10 dark:bg-[#121821]">
+          <div className="relative min-h-0 flex-1 overflow-hidden">
+            <div className={tab === 'chats' ? 'h-full' : 'hidden'}>
+              <ChatsHome {...chatsHomeProps} />
+            </div>
+            <div className={tab === 'groups' ? 'h-full' : 'hidden'}>
+              <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
+            </div>
+            <div className={tab === 'status' ? 'h-full' : 'hidden'}>
+              <StatusTab onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
+            </div>
+            <div className={tab === 'calls' ? 'h-full' : 'hidden'}>
+              <CallsTab
+                onCall={placeCall}
+                onOpenContacts={() => setOverlay('contacts')}
+                onOpenNewCallPanel={() => setOverlay('newCall')}
+              />
+            </div>
+          </div>
+          <BottomNav
+            docked
+            tab={tab}
+            onChange={(t) => {
+              if (t === 'calls') markMissedSeen()
+              setTab(t)
+            }}
+            badges={foldBadges}
+          />
+        </div>
+
+        {/* Right: second screen — chat OR settings / contacts / etc. */}
+        <div className="relative flex h-full min-w-0 w-1/2 flex-col overflow-hidden bg-white dark:bg-[#121821]">
+          {second}
+        </div>
+
+        {/* Status viewer: portal to body so foldable dual-screen hit-testing works */}
+        {statusUser &&
+          createPortal(
+            <div
+              className="sc-foldable-status-overlay fixed inset-0 z-[9999] bg-black"
+              style={{
+                position: 'fixed',
+                width: '100vw',
+                height: '100dvh',
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+                pointerEvents: 'auto',
+                touchAction: 'manipulation',
+                isolation: 'isolate',
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <StatusViewer
+                userId={statusUser.userId}
+                initialStatusId={statusUser.statusId}
+                onClose={() => setStatusUser(null)}
+                onReplyToStatus={(peerId) => {
+                  setStatusUser(null)
+                  setChat(peerId)
+                  setTab('chats')
+                }}
+              />
+            </div>,
+            document.body,
+          )}
+
+        {call && (
+          <div className="fixed inset-0 z-[95]">
+            <CallScreen
+              contactId={call.id}
+              kind={call.kind}
+              ringId={call.ringId}
+              remoteOfferSdp={call.remoteOfferSdp}
+              peerName={call.peerName}
+              peerUsername={call.peerUsername}
+              onEnd={() => setCall(null)}
+            />
+          </div>
+        )}
+
+        {incoming && (
+          <IncomingCall
+            contactId={incoming.id}
+            kind={incoming.kind}
+            onAccept={() => {
+              setCall({ id: incoming.id, kind: incoming.kind })
+              setIncoming(null)
+            }}
+            onDecline={() => setIncoming(null)}
+          />
+        )}
+
+        {logoutConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
+              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                You will need to sign in again to use SafeChat on this device.
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button type="button" className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Cancel</button>
+                <button type="button" className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {loggingOut && (
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex gap-2">
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
+              </div>
+              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
+            </div>
+          </div>
+        )}
+        {toast && <Toast msg={toast} clear={clearToast} />}
       </div>
     )
   }
@@ -1098,11 +1396,39 @@ function Shell() {
 
         {group && (
           <div className="absolute inset-0 z-20 bg-white">
-            <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} />
+            <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} />
           </div>
         )}
 
         {renderOverlays(true)}
+        
+        {logoutConfirm && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
+              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                You will need to sign in again to use SafeChat on this device.
+              </p>
+              <div className="mt-6 flex gap-3">
+                <button type="button" className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Cancel</button>
+                <button type="button" className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {loggingOut && (
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
+            <div className="flex flex-col items-center gap-4">
+              <div className="flex gap-2">
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
+                <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
+              </div>
+              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
+            </div>
+          </div>
+        )}
+
       </main>
     </div>
   )
