@@ -1979,6 +1979,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       colorMode: 'color_mode',
       liquidGlass: 'liquid_glass',
       hideLiveTyping: 'hide_live_typing',
+      showFab: 'show_fab',
+      timeFormat: 'time_format',
+      previews: 'previews',
+      vibrate: 'vibrate',
+      lowDataCalls: 'low_data_calls',
+      disappearing: 'disappearing',
+      lastSeen: 'last_seen',
+      profilePhoto: 'profile_photo',
+      about: 'about_privacy',
+      groupsAdd: 'groups_add',
+      forceReadReceipts: 'force_read_receipts',
+      liveTyping: 'live_typing',
+      statusAdsEnabled: 'status_ads_enabled',
+      verifiedBadge: 'verified_badge',
     }
     const sk = serverKey[k as string]
     // Background preference sync — no toast (only button-driven actions toast)

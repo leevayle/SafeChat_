@@ -95,6 +95,7 @@ type ViewerRow = { id: string; username: string; name: string; photo: string | n
 export function StatusViewer({
   userId, initialStatusId, onClose, onReplyToStatus }: Props) {
   const likeInFlight = useRef(false)
+  const lastLikeAt = useRef(0)
   const viewSentRef = useRef<Set<string>>(new Set())
   const { statusList, refreshStatus, showToast, patchStatusList, me } = useStore()
   // Only non-expired statuses for this user, oldest first (play order)
@@ -343,7 +344,16 @@ export function StatusViewer({
     }, HOLD_MS)
   }
 
-  const onPressEnd = () => {
+  const onPressEnd = (e?: PointerEvent) => {
+    try {
+      if (e?.target && (e.target as HTMLElement).closest?.('[data-status-action]')) {
+        if (holdTimerRef.current) {
+          clearTimeout(holdTimerRef.current)
+          holdTimerRef.current = null
+        }
+        return
+      }
+    } catch { /* */ }
     if (holdTimerRef.current) {
       clearTimeout(holdTimerRef.current)
       holdTimerRef.current = null
@@ -539,16 +549,22 @@ export function StatusViewer({
       className="relative flex h-full flex-col select-none text-white"
       style={{ background: bgCss }}
       onContextMenu={(e) => e.preventDefault()}
-      onPointerUp={onPressEnd}
-      onPointerCancel={onPressEnd}
+      onPointerUp={(e) => onPressEnd(e)}
+      onPointerCancel={(e) => onPressEnd(e)}
       onTouchStart={(e) => {
+        if ((e.target as HTMLElement).closest('[data-status-action]')) return
         swipeStartY.current = e.touches[0].clientY
       }}
       onTouchMove={(e) => {
+        if ((e.target as HTMLElement).closest('[data-status-action]')) return
         const dy = swipeStartY.current - e.touches[0].clientY
         if (dy > 0) setSwipeDy(Math.min(80, dy))
       }}
-      onTouchEnd={() => {
+      onTouchEnd={(e) => {
+        if ((e.target as HTMLElement).closest('[data-status-action]')) {
+          setSwipeDy(0)
+          return
+        }
         if (swipeDy > 48 && !isOwner) commitStatusReply()
         setSwipeDy(0)
       }}
@@ -591,7 +607,7 @@ export function StatusViewer({
       </div>
 
       {/* Left / mid / right zones — leave bottom clear for like/reply actions */}
-      <div className="absolute inset-x-0 top-0 bottom-28 z-10 flex">
+      <div className="absolute inset-x-0 top-0 bottom-36 z-10 flex">
         <div className="h-full w-[30%]" onPointerDown={onPressStart('left')} />
         <div className="h-full flex-1" onPointerDown={onPressStart('mid')} />
         <div className="h-full w-[30%]" onPointerDown={onPressStart('right')} />
@@ -725,14 +741,31 @@ export function StatusViewer({
                 data-status-action
                 onPointerDown={(e) => {
                   e.stopPropagation()
+                  e.preventDefault()
                 }}
-                onClick={toggleLike}
-                className={`flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-sm transition-transform duration-200 ${
+                onPointerUp={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  const now = Date.now()
+                  if (now - lastLikeAt.current < 450) return
+                  lastLikeAt.current = now
+                  toggleLike(e as unknown as MouseEvent)
+                }}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  const now = Date.now()
+                  if (now - lastLikeAt.current < 450) return
+                  lastLikeAt.current = now
+                  toggleLike(e)
+                }}
+                className={`flex h-14 w-14 items-center justify-center rounded-full backdrop-blur-sm transition-transform duration-200 ${
                   liked ? 'bg-brand-red/90 text-white' : 'bg-white/10 text-white'
                 } ${likePulse ? 'scale-125' : 'scale-100'}`}
                 aria-label={liked ? 'Unlike' : 'Like'}
+                style={{ touchAction: 'manipulation' }}
               >
-                <Heart size={20} fill={liked ? 'currentColor' : 'none'} className={likePulse ? 'animate-pulse' : ''} />
+                <Heart size={22} fill={liked ? 'currentColor' : 'none'} className={likePulse ? 'animate-pulse' : ''} />
               </button>
             </div>
           </>

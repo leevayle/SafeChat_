@@ -780,9 +780,25 @@ export const api = {
       sound: 'sound',
       read_receipts: 'readReceipts',
       status_like_notif: 'statusLikeNotif',
-      hide_live_typing: 'hideLiveTyping',
       color_mode: 'colorMode',
       liquid_glass: 'liquidGlass',
+      hide_live_typing: 'hideLiveTyping',
+      show_fab: 'showFab',
+      time_format: 'timeFormat',
+      previews: 'previews',
+      vibrate: 'vibrate',
+      low_data_calls: 'lowDataCalls',
+      disappearing: 'disappearing',
+      last_seen: 'lastSeen',
+      profile_photo: 'profilePhoto',
+      about_privacy: 'about',
+      groups_add: 'groupsAdd',
+      force_read_receipts: 'forceReadReceipts',
+      live_typing: 'liveTyping',
+      status_ads_enabled: 'statusAdsEnabled',
+      verified_badge: 'verifiedBadge',
+      wallpaper: 'wallpaper',
+      language: 'language',
     }
     const mapped: Record<string, unknown> = {
       theme: prefs.theme || theme,
@@ -1288,7 +1304,7 @@ export const api = {
     return { notifications: list || [] }
   },
   markNotificationRead: async (id: string) => {
-    await req(`/api/v1/notifications/${id}/read`, { method: 'POST' })
+    await req(`/api/v1/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' })
     return { ok: true }
   },
   markAllNotificationsRead: async () => {

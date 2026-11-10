@@ -192,7 +192,19 @@ export function Notifications({
         .listNotifications()
         .then(({ notifications }) => {
           if (!alive) return
-          const list = notifications || []
+          const now = Date.now()
+          const list = (notifications || []).filter((n: any) => {
+            const exp = n.expires_at || n.expiresAt || n.metadata?.expires_at
+            if (!exp) return true
+            try {
+              let s = String(exp)
+              if (/^\d{4}-\d{2}-\d{2}T/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z'
+              const t = Date.parse(s)
+              return Number.isNaN(t) || t > now
+            } catch {
+              return true
+            }
+          })
           ;(window as any).__sc_server_notifs = list
           void saveCachedNotifications(list)
           setServerNotifs(list)
@@ -262,6 +274,11 @@ export function Notifications({
       } catch {
         /* */
       }
+      return next
+    })
+    setServerNotifs((prev) => {
+      const next = (prev || []).map((x: any) => ({ ...x, read: true }))
+      void saveCachedNotifications(next)
       return next
     })
     showToast('All caught up')
@@ -339,6 +356,11 @@ export function Notifications({
         continue
       }
       if (n.type === 'status_like') {
+        const exp = n.expires_at || n.expiresAt || n.metadata?.expires_at
+        if (exp) {
+          const t = Date.parse(String(exp).endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(String(exp)) ? String(exp) : String(exp) + 'Z')
+          if (!Number.isNaN(t) && t <= Date.now()) continue
+        }
         const id = `slike-${n.id}`
         out.push({
           id,
@@ -355,6 +377,11 @@ export function Notifications({
         continue
       }
       if (n.type === 'status_new' || n.type === 'status_update') {
+        const exp = n.expires_at || n.expiresAt || n.metadata?.expires_at
+        if (exp) {
+          const t = Date.parse(String(exp).endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(String(exp)) ? String(exp) : String(exp) + 'Z')
+          if (!Number.isNaN(t) && t <= Date.now()) continue
+        }
         const id = `snew-${n.id}`
         out.push({
           id,
@@ -443,6 +470,18 @@ export function Notifications({
         }
         try {
           void api.markAllNotificationsRead()
+        } catch {
+          /* */
+        }
+        try {
+          const cached = (itemsRef.current || [])
+            .map((i) => i.id.replace(/^(ginv-|slike-|snew-|cacc-|live-slike-|live-snew-|live-ginv-|live-)/, ''))
+          // mark server cache entries read so next login does not flash unread
+          setServerNotifs((prev) => {
+            const next = (prev || []).map((x: any) => ({ ...x, read: true }))
+            void saveCachedNotifications(next)
+            return next
+          })
         } catch {
           /* */
         }

@@ -233,7 +233,7 @@ export function CallsTab({ onCall, onOpenContacts, onOpenNewCallPanel }: Props) 
           if (onOpenNewCallPanel) onOpenNewCallPanel()
           else setPicker(true)
         }}
-        className="fab-theme fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-40 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white md:absolute md:bottom-6 md:right-5 md:z-20"
+        className="fab-theme absolute bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-5 z-20 flex h-14 w-14 items-center justify-center rounded-full bg-brand-purple text-white md:bottom-6"
       >
         <Plus size={26} strokeWidth={2.4} />
       </motion.button>

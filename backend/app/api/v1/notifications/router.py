@@ -13,6 +13,17 @@ async def list_notifications(
     user: dict = Depends(get_current_user),
 ):
     db = get_database()
+    now = datetime.now(timezone.utc)
+    # Drop expired status-related notifications (status gone)
+    try:
+        await db.notifications.delete_many(
+            {
+                "user_id": user["id"],
+                "expires_at": {"$lte": now},
+            }
+        )
+    except Exception:
+        pass
     rows = (
         await db.notifications.find({"user_id": user["id"]})
         .sort("created_at", -1)
@@ -20,6 +31,15 @@ async def list_notifications(
     )
     out = []
     for n in rows:
+        exp = n.get("expires_at")
+        if exp is not None:
+            try:
+                if getattr(exp, "tzinfo", None) is None and hasattr(exp, "replace"):
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if hasattr(exp, "timestamp") and exp <= now:
+                    continue
+            except Exception:
+                pass
         out.append(
             {
                 "id": str(n["_id"]),
@@ -33,6 +53,11 @@ async def list_notifications(
                 "game_id": n.get("game_id") or (n.get("metadata") or {}).get("game_id"),
                 "metadata": n.get("metadata") or {},
                 "read": bool(n.get("read")),
+                "expires_at": (
+                    exp.isoformat()
+                    if hasattr(exp, "isoformat")
+                    else (n.get("expires_at").isoformat() if hasattr(n.get("expires_at"), "isoformat") else n.get("expires_at"))
+                ) if n.get("expires_at") is not None else None,
                 "created_at": (
                     n["created_at"].isoformat()
                     if isinstance(n.get("created_at"), datetime)

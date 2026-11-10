@@ -778,5 +778,5 @@ html.dark {
   bottom: 1.25rem !important;
   right: 1.25rem !important;
   left: auto !important;
-  z-index: 30 !important;
+  z-index: 20 !important;
 }

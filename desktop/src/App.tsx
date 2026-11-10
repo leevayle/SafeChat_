@@ -1256,6 +1256,7 @@ function Shell() {
             <div
               className="sc-foldable-status-overlay fixed inset-0 z-[9999] bg-black"
               style={{
+                position: 'fixed',
                 width: '100vw',
                 height: '100dvh',
                 left: 0,
@@ -1264,7 +1265,9 @@ function Shell() {
                 bottom: 0,
                 pointerEvents: 'auto',
                 touchAction: 'manipulation',
+                isolation: 'isolate',
               }}
+              onPointerDown={(e) => e.stopPropagation()}
             >
               <StatusViewer
                 userId={statusUser.userId}

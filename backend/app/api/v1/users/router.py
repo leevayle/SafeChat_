@@ -65,6 +65,23 @@ class PreferencesUpdate(BaseModel):
     busy_message: Optional[str] = None
     busy_until: Optional[str] = None
     busy_scope: Optional[str] = None
+    read_receipts: Optional[bool] = None
+    status_like_notif: Optional[bool] = None
+    hide_live_typing: Optional[bool] = None
+    show_fab: Optional[bool] = None
+    time_format: Optional[str] = None
+    previews: Optional[bool] = None
+    vibrate: Optional[bool] = None
+    low_data_calls: Optional[bool] = None
+    disappearing: Optional[str] = None
+    last_seen: Optional[str] = None
+    profile_photo: Optional[str] = None
+    about_privacy: Optional[str] = None
+    groups_add: Optional[str] = None
+    force_read_receipts: Optional[bool] = None
+    live_typing: Optional[bool] = None
+    status_ads_enabled: Optional[bool] = None
+    verified_badge: Optional[bool] = None
 
 
 class PrivacySettingsUpdate(BaseModel):
@@ -155,6 +172,21 @@ async def update_my_preferences(
         set_ops[f"preferences.{k}"] = v
     db = get_database()
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
+    # Mirror privacy-related prefs into privacy_settings for API consumers
+    privacy_map = {
+        "last_seen": "last_seen",
+        "profile_photo": "profile_photo",
+        "about_privacy": "about",
+        "read_receipts": "read_receipts",
+        "status_privacy": "status",
+        "groups_add": "groups",
+    }
+    priv_ops = {}
+    for k, pk in privacy_map.items():
+        if k in raw and raw[k] is not None:
+            priv_ops[f"privacy_settings.{pk}"] = raw[k]
+    if priv_ops:
+        await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": priv_ops})
     # Fan-out busy / presence note to contacts when busy fields change
     if any(k.startswith("busy") for k in raw.keys()):
         try:

@@ -280,6 +280,9 @@ class StatusService:
             raise ForbiddenError("Can only delete your own status")
         await db.statuses.delete_one({"_id": ObjectId(status_id)})
         await db.status_views.delete_many({"status_id": status_id})
+        await db.status_likes.delete_many({"status_id": status_id})
+        # Remove notifications tied to this status (likes, etc.)
+        await db.notifications.delete_many({"status_id": status_id})
         try:
             peers = await StatusService._eligible_peer_ids(db, user_id, s)
             await StatusService._ws_send_users(
@@ -409,6 +412,7 @@ class StatusService:
                                 "actor_photo": (liker or {}).get("profile_photo"),
                                 "read": False,
                                 "created_at": now,
+                                "expires_at": s.get("expires_at"),
                             }
                         )
                         try:
@@ -421,6 +425,11 @@ class StatusService:
                                     "from": user_id,
                                     "from_name": name,
                                     "title": f"{name} liked your status",
+                                    "expires_at": (
+                                        s.get("expires_at").isoformat()
+                                        if hasattr(s.get("expires_at"), "isoformat")
+                                        else s.get("expires_at")
+                                    ),
                                 },
                             )
                         except Exception:
