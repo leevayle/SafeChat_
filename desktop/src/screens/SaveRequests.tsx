@@ -53,22 +53,25 @@ export function SaveRequests({ onClose, onChat }: Props) {
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<RequestItem[] | null> => {
     setLoading(true)
     try {
       const [inRes, outRes] = await Promise.all([
         api.incomingContactRequests(),
         api.outgoingContactRequests(),
       ])
-      setIncoming((inRes.requests || []).filter((r) => r.status === 'pending'))
+      const nextIncoming = (inRes.requests || []).filter((r) => r.status === 'pending')
+      setIncoming(nextIncoming)
       // Sent: show pending + accepted (Message only when accepted)
       setOutgoing(
         (outRes.requests || []).filter(
           (r) => r.status === 'pending' || r.status === 'accepted',
         ),
       )
+      return nextIncoming
     } catch {
       showToast('Could not load save requests')
+      return null
     } finally {
       setLoading(false)
     }
@@ -82,22 +85,27 @@ export function SaveRequests({ onClose, onChat }: Props) {
     const row = incoming.find((r) => r.id === id)
     setBusyId(id)
     try {
-      await api.acceptContactRequest(id)
+      const res = await api.acceptContactRequest(id)
       showToast(
         row?.username || row?.name
-          ? `Saved @${row.username || row.name}, you can stay in touch`
+          ? `Saved @${row.username || row.name} — both sides updated`
           : 'Contact saved on both sides',
       )
       setIncoming((list) => list.filter((r) => r.id !== id))
-      void refreshContacts()
+      // Server wrote mutual edges — pull full list into cache then UI
+      await refreshContacts()
       void load()
     } catch (e: any) {
+      let refreshedRequests: RequestItem[] | null = null
       try {
-        void refreshContacts()
-        await load()
-        setIncoming((list) => list.filter((r) => r.id !== id))
-        showToast('Contact saved')
+        refreshedRequests = await load()
+        await refreshContacts()
       } catch {
+        // Keep the original acceptance error as the user-facing result.
+      }
+      if (refreshedRequests && !refreshedRequests.some((request) => request.id === id)) {
+        showToast('Contact saved on both sides')
+      } else {
         showToast(e?.message || 'Could not accept')
       }
     } finally {

@@ -6,7 +6,8 @@ import { Splash } from './screens/Splash'
 import { Welcome } from './screens/Welcome'
 import { Signup } from './screens/Signup'
 
-import { api } from './api'
+import { api, hasAccessToken} from './api'
+// hasAccessToken used in session routing
 import { Login } from './screens/Login'
 import { Loading } from './screens/Loading'
 import { Profile } from './screens/Profile'
@@ -35,6 +36,7 @@ import { ContactInfoPanel } from './components/desktop/ContactInfoPanel'
 import type { RailItem } from './components/desktop/NavRail'
 import { useMediaQuery, DESKTOP_BREAKPOINT, WIDE_DESKTOP_BREAKPOINT, useFoldableDualPane } from './hooks/useMediaQuery'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/kv'
 type Stage = 'splash' | 'welcome' | 'signup' | 'verify' | 'login' | 'loading' | 'profile' | 'done' | 'app'
 type Call = { id: string; kind: 'audio' | 'video'; ringId?: string; remoteOfferSdp?: string; peerName?: string; peerUsername?: string }
 type Overlay = 'newChat' | 'newGroup' | 'settings' | 'contacts' | 'saveRequests' | 'notifications' | 'support' | 'profile' | 'newCall' | null
@@ -63,7 +65,7 @@ function Shell() {
   // Must be declared before any use — avoids TDZ "Cannot access before initialization"
   const [seenMissed, setSeenMissed] = useState<Set<string>>(() => {
     try {
-      const raw = localStorage.getItem('sc_seen_missed')
+      const raw = kvGet('sc_seen_missed')
       return new Set(raw ? JSON.parse(raw) : [])
     } catch {
       return new Set()
@@ -87,7 +89,7 @@ function Shell() {
           .map((c: any) => String(c.id || c.call_id || ''))
       list.forEach((id) => id && next.add(id))
       try {
-        localStorage.setItem('sc_seen_missed', JSON.stringify([...next]))
+        kvSet('sc_seen_missed', JSON.stringify([...next]))
       } catch {
         /* */
       }
@@ -109,8 +111,10 @@ function Shell() {
       restored.current = false
       setOverlay(null)
       await logout()
+      setLoginBackVisible(false)
       setStage('login')
     } catch {
+      setLoginBackVisible(false)
       setStage('login')
     } finally {
       setLoggingOut(false)
@@ -118,6 +122,8 @@ function Shell() {
   }
 
   const [stage, setStage] = useState<Stage>('splash')
+  const [loginBackVisible, setLoginBackVisible] = useState(false)
+  const [loginNotice, setLoginNotice] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [username, setUsername] = useState('')
   const [donePhase, setDonePhase] = useState<'setup' | 'success' | 'error'>('setup')
@@ -325,16 +331,19 @@ function Shell() {
     return () => window.removeEventListener('sc:open-premium', openPremium)
   }, [])
 
-  /** Device session helpers — localStorage is the source of truth for "has logged in on this device" */
+  /** Device session helpers — IndexedDB (kv) holds has-logged-in device flag */
   const readDeviceSession = () => {
-    const hasTokens =
-      !!localStorage.getItem('sc_access') ||
-      !!localStorage.getItem('sc_token') ||
-      !!localStorage.getItem('sc_user')
-    const hasLoggedIn = localStorage.getItem('sc_has_logged_in') === '1' || hasTokens
+    const hasLoggedIn = kvGet('sc_has_logged_in') === '1'
+    // Session token lives in memory / cookie — not localStorage
+    let hasSession = false
+    try {
+      hasSession = typeof hasAccessToken === 'function' ? hasAccessToken() : false
+    } catch {
+      hasSession = false
+    }
     let appLock = settings.appLock
     try {
-      const raw = localStorage.getItem('sc_settings')
+      const raw = kvGet('sc_settings')
       if (raw) {
         const parsed = JSON.parse(raw) as { appLock?: boolean }
         if (typeof parsed.appLock === 'boolean') appLock = parsed.appLock
@@ -342,7 +351,7 @@ function Shell() {
     } catch {
       /* ignore */
     }
-    return { hasTokens, hasLoggedIn, appLock }
+    return { hasTokens: hasSession, hasLoggedIn, appLock }
   }
 
   // After splash may land on loading while store finishes hydrating a saved session
@@ -352,6 +361,7 @@ function Shell() {
 
     // App lock always requires re-auth for returning users
     if (appLock && (me || hasTokens || hasLoggedIn)) {
+      setLoginBackVisible(false)
       setStage('login')
       return
     }
@@ -366,6 +376,7 @@ function Shell() {
     // Tokens existed but hydration failed (cleared session) — treat as new if no flag
     if (hasLoggedIn || hasTokens) {
       // Prefer login over Welcome so returning users don't see privacy/continue again
+      setLoginBackVisible(false)
       setStage('login')
       return
     }
@@ -396,13 +407,22 @@ function Shell() {
   const goApp = () => {
     // Mark this device as having completed a login so splash can skip Welcome
     try {
-      localStorage.setItem('sc_has_logged_in', '1')
+      kvSet('sc_has_logged_in', '1')
     } catch {
       /* ignore */
     }
     restored.current = true
+    setLoginNotice('')
     // Force app shell — authenticated users must never sit on login
     setStage('app')
+  }
+
+  const handlePasswordChanged = async () => {
+    await logout()
+    setOverlay(null)
+    setLoginBackVisible(false)
+    setLoginNotice('Password changed. Sign in again with your new password.')
+    setStage('login')
   }
 
   // ── Onboarding ─────────────────────────────────────────
@@ -424,6 +444,7 @@ function Shell() {
 
                 // Returning user with app lock → login (re-auth), skip Welcome entirely
                 if (appLock) {
+                  setLoginBackVisible(false)
                   setStage('login')
                   return
                 }
@@ -441,22 +462,44 @@ function Shell() {
             />
           )}
           {stage === 'welcome' && (
-            <Welcome onContinue={() => setStage('signup')} onLogin={() => setStage('login')} />
+            <Welcome
+              onContinue={() => setStage('signup')}
+              onLogin={() => {
+                setLoginBackVisible(true)
+                setLoginNotice('')
+                setStage('login')
+              }}
+            />
           )}
           {stage === 'login' && (
             <Login
-              onBack={() => {
-                // Returning users (app lock or existing session) stay on login — no Welcome
-                const { hasLoggedIn, hasTokens, appLock } = readDeviceSession()
-                if (hasLoggedIn || hasTokens || me || appLock) return
-                setStage('welcome')
-              }}
+              onBack={
+                loginBackVisible
+                  ? () => {
+                      setLoginBackVisible(false)
+                      setStage('welcome')
+                    }
+                  : undefined
+              }
               onSuccess={goApp}
-              onSignup={() => setStage('signup')}
+              onSignup={() => {
+                setLoginBackVisible(false)
+                setStage('signup')
+              }}
+              notice={loginNotice}
+              clearNotice={() => setLoginNotice('')}
             />
           )}
           {stage === 'signup' && (
-            <Signup loading={submitting} onSubmit={afterPhone} onLogin={() => setStage('login')} onBack={() => setStage('welcome')} />
+            <Signup
+              loading={submitting}
+              onSubmit={afterPhone}
+              onLogin={() => {
+                setLoginBackVisible(false)
+                setStage('login')
+              }}
+              onBack={() => setStage('welcome')}
+            />
           )}
           {stage === 'loading' && <Loading />}
           {stage === 'profile' && pendingReg && (
@@ -658,6 +701,7 @@ function Shell() {
               onBack={() => setOverlay(null)}
               onSupport={() => setOverlay('support')}
               onLogout={requestLogout}
+              onPasswordChanged={handlePasswordChanged}
             />
           </div>
         </div>
@@ -669,6 +713,7 @@ function Shell() {
               onBack={() => setOverlay(null)}
               onSupport={() => setOverlay('support')}
               onLogout={requestLogout}
+              onPasswordChanged={handlePasswordChanged}
             />
           </div>
         </div>
@@ -806,7 +851,7 @@ function Shell() {
       tab === 'groups' ? (
         <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
       ) : tab === 'status' ? (
-        <StatusTab onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
+        <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
       ) : tab === 'calls' ? (
         <CallsTab
           onCall={placeCall}
@@ -885,6 +930,7 @@ function Shell() {
           onBack={() => setOverlay(null)}
           onSupport={() => setOverlay('support')}
           onLogout={requestLogout}
+          onPasswordChanged={handlePasswordChanged}
         />
       )
     } else if (overlay === 'notifications') {
@@ -1135,6 +1181,7 @@ function Shell() {
           onBack={() => setOverlay(null)}
           onSupport={() => setOverlay('support')}
           onLogout={requestLogout}
+          onPasswordChanged={handlePasswordChanged}
         />
       )
     } else if (overlay === 'notifications') {
@@ -1223,7 +1270,7 @@ function Shell() {
               <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
             </div>
             <div className={tab === 'status' ? 'h-full' : 'hidden'}>
-              <StatusTab onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
+              <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
             </div>
             <div className={tab === 'calls' ? 'h-full' : 'hidden'}>
               <CallsTab
@@ -1355,7 +1402,7 @@ function Shell() {
             <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
           </div>
           <div className={tab === 'status' ? 'h-full' : 'hidden'}>
-            <StatusTab onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
+            <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
           </div>
           <div className={tab === 'calls' ? 'h-full' : 'hidden'}>
             <CallsTab

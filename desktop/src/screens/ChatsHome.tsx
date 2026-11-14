@@ -27,8 +27,8 @@ import { ChatsHomeSkeleton } from '../components/ChatsHomeSkeleton'
 import { EmptyState } from '../components/EmptyState'
 import { PinPad } from '../components/PinPad'
 import { useStore } from '../store'
-import { api } from '../api'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 const FILTERS = ['All chats', 'Unread', 'Online',] as const
 type Filter = (typeof FILTERS)[number]
 
@@ -55,7 +55,21 @@ export function ChatsHome({
   onNotifications,
   onSupport,
 }: Props) {
-  const { settings, chats, contacts, statusList, me, listsReady, saveRequestPending, notifUnreadCount, typingPeers, presenceMap, refreshChats, refreshCalls, refreshStatus, refreshContacts, refreshSaveRequests, refreshNotifCount, refreshSubscription, showToast } = useStore()
+  const {
+    settings,
+    chats,
+    contacts,
+    statusList,
+    me,
+    listsReady,
+    saveRequestPending,
+    notifUnreadCount,
+    typingPeers,
+    presenceMap,
+    refreshAll,
+    showToast,
+    deleteChats,
+  } = useStore()
   /** System-only: save requests etc. Chat unreads live on the bottom nav. */
   const systemNotifCount = (saveRequestPending || 0) + (notifUnreadCount || 0)
   const [filter, setFilter] = useState<Filter>('All chats')
@@ -65,14 +79,14 @@ export function ChatsHome({
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [pinnedIds, setPinnedIds] = useState<string[]>(() => {
-    try { return JSON.parse(localStorage.getItem('sc_pinned_chats') || '[]') } catch { return [] }
+    try { return JSON.parse(kvGet('sc_pinned_chats') || '[]') } catch { return [] }
   })
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const longPressMoved = useRef(false)
   const selectLockUntil = useRef(0)
   const selectTargetId = useRef<string | null>(null)
   const [chatsLocked, setChatsLocked] = useState(() => {
-    try { return localStorage.getItem('sc_chats_locked') === '1' } catch { return false }
+    try { return kvGet('sc_chats_locked') === '1' } catch { return false }
   })
   const [lockUi, setLockUi] = useState<'none' | 'set' | 'confirm' | 'unlock' | 'lock-apply'>('none')
   const [pendingPin, setPendingPin] = useState('')
@@ -211,7 +225,7 @@ export function ChatsHome({
   const clearSelection = () => setSelectedIds([])
   const persistPinned = (ids: string[]) => {
     setPinnedIds(ids)
-    try { localStorage.setItem('sc_pinned_chats', JSON.stringify(ids)) } catch { /* */ }
+    try { kvSet('sc_pinned_chats', JSON.stringify(ids)) } catch { /* */ }
   }
   const pinSelected = () => {
     const allPinned = selectedIds.length > 0 && selectedIds.every((id) => pinnedIds.includes(id))
@@ -241,17 +255,26 @@ export function ChatsHome({
   const deleteSelected = () => {
     setDeleteConfirm(true)
   }
-  const confirmDeleteSelected = () => {
-    try {
-      window.dispatchEvent(new CustomEvent('sc:delete-chats', { detail: { ids: [...selectedIds] } }))
-    } catch { /* */ }
-    showToast(selectedIds.length > 1 ? 'Chats deleted' : 'Chat deleted')
+  const confirmDeleteSelected = async () => {
+    const ids = [...selectedIds]
     setDeleteConfirm(false)
     clearSelection()
+    try {
+      const { deleted, failed } = await deleteChats(ids)
+      if (deleted && !failed) {
+        showToast(deleted > 1 ? 'Chats deleted' : 'Chat deleted')
+      } else if (deleted && failed) {
+        showToast(`Deleted ${deleted}, ${failed} failed`)
+      } else {
+        showToast(ids.length > 1 ? 'Could not delete chats' : 'Could not delete chat')
+      }
+    } catch {
+      showToast(ids.length > 1 ? 'Could not delete chats' : 'Could not delete chat')
+    }
   }
   const lockSelected = () => {
     let pin = ''
-    try { pin = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+    try { pin = kvGet('sc_chat_lock_pin') || '' } catch { /* */ }
     if (!pin) {
       showToast('Set a chat lock PIN in Settings → Security first')
       clearSelection()
@@ -383,30 +406,7 @@ export function ChatsHome({
                     label: 'Refresh',
                     fn: () => {
                       showToast('Refreshing…')
-                      void (async () => {
-                        // Flush pending sends before pulling new data
-                        try {
-                          const { loadOutbox, removeOutbox } = await import('../lib/appCache')
-                          const items = await loadOutbox()
-                          for (const item of items || []) {
-                            if (!item.conversationId) continue
-                            try {
-                              await api.send(item.conversationId, item.text, item.image)
-                              await removeOutbox(item.id)
-                            } catch { /* retry later */ }
-                          }
-                        } catch { /* */ }
-                        await Promise.all([
-                          refreshChats(),
-                          refreshCalls(),
-                          refreshStatus(),
-                          refreshContacts(),
-                          refreshSaveRequests(),
-                          refreshNotifCount?.() ?? Promise.resolve(),
-                          refreshSubscription(),
-                        ])
-                        showToast('Up to date')
-                      })()
+                      void refreshAll().then(() => showToast('Up to date'))
                     },
                     Icon: RefreshCw,
                   },
@@ -487,8 +487,8 @@ export function ChatsHome({
                   return false
                 }
                 try {
-                  localStorage.setItem('sc_chat_lock_pin', pin)
-                  localStorage.setItem('sc_chats_locked', '1')
+                  kvSet('sc_chat_lock_pin', pin)
+                  kvSet('sc_chats_locked', '1')
                 } catch { /* */ }
                 setChatsLocked(true)
                 setLockUi('none')
@@ -498,15 +498,15 @@ export function ChatsHome({
               }
               if (lockUi === 'lock-apply') {
                 let stored = ''
-                try { stored = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+                try { stored = kvGet('sc_chat_lock_pin') || '' } catch { /* */ }
                 if (pin !== stored) {
                   showToast('Wrong PIN')
                   return false
                 }
                 try {
-                  const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+                  const map = JSON.parse(kvGet('sc_chat_locks') || '{}')
                   for (const id of selectedIds) map[id] = true
-                  localStorage.setItem('sc_chat_locks', JSON.stringify(map))
+                  kvSet('sc_chat_locks', JSON.stringify(map))
                   showToast(selectedIds.length > 1 ? 'Chats locked' : 'Chat locked')
                 } catch { /* */ }
                 setLockUi('none')
@@ -515,9 +515,9 @@ export function ChatsHome({
               }
               // unlock
               let stored = ''
-              try { stored = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+              try { stored = kvGet('sc_chat_lock_pin') || '' } catch { /* */ }
               if (pin !== stored) return false
-              try { localStorage.setItem('sc_chats_locked', '0') } catch { /* */ }
+              try { kvSet('sc_chats_locked', '0') } catch { /* */ }
               setChatsLocked(false)
               setLockUi('none')
               showToast('Chats unlocked')
@@ -535,9 +535,9 @@ export function ChatsHome({
             mode="unlock"
             onComplete={(pin) => {
               let stored = ''
-              try { stored = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+              try { stored = kvGet('sc_chat_lock_pin') || '' } catch { /* */ }
               if (pin !== stored) return false
-              try { localStorage.setItem('sc_chats_locked', '0') } catch { /* */ }
+              try { kvSet('sc_chats_locked', '0') } catch { /* */ }
               setChatsLocked(false)
               showToast('Chats unlocked')
               return true
@@ -788,8 +788,8 @@ export function ChatsHome({
             </p>
             <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
               {selectedIds.length > 1
-                ? `${selectedIds.length} chats will be removed from this device.`
-                : 'This chat will be removed from this device.'}
+                ? `${selectedIds.length} chats and their messages will be permanently deleted.`
+                : 'This chat and its messages will be permanently deleted.'}
             </p>
             <div className="mt-6 flex gap-3">
               <button

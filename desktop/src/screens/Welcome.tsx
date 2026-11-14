@@ -5,6 +5,7 @@ import { LogoIcon, Wordmark } from '../components/Logo'
 import { ProgressDots } from '../components/ProgressDots'
 import { PillButton } from '../components/PillButton'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 export function Welcome({
   onContinue,
   onLogin,
@@ -114,7 +115,7 @@ export function Welcome({
                 <PillButton
                   onClick={() => {
                     try {
-                      if (code.trim()) localStorage.setItem('sc_referral', code.trim())
+                      if (code.trim()) kvSet('sc_referral', code.trim())
                     } catch { /* */ }
                     setReferralOpen(false)
                   }}

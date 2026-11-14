@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any, Tuple
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError
 from app.core.database import get_database
 from app.core.exceptions import (
     NotFoundError,
@@ -10,6 +11,7 @@ from app.core.exceptions import (
     ValidationError,
 )
 from app.models.messaging import ConversationType, MessageType, DeliveryStatus
+from app.models.contact import ContactRequestStatus, ContactStatus
 from app.core.security import generate_idempotency_key
 import logging
 
@@ -27,6 +29,83 @@ def _utc_iso(v):
 
 
 class MessagingService:
+    @staticmethod
+    async def _ensure_private_chat_allowed(
+        db, user_id: str, other_id: str
+    ) -> None:
+        blocked = await db.blocked_users.find_one(
+            {
+                "$or": [
+                    {"blocker_id": user_id, "blocked_id": other_id},
+                    {"blocker_id": other_id, "blocked_id": user_id},
+                ]
+            }
+        )
+        if blocked:
+            raise ForbiddenError("Cannot message this user while blocked")
+
+        removed = await db.contact_requests.find_one(
+            {
+                "cancel_reason": "contact_removed",
+                "$or": [
+                    {"from_user_id": user_id, "to_user_id": other_id},
+                    {"from_user_id": other_id, "to_user_id": user_id},
+                ],
+            }
+        )
+        if not removed:
+            return
+
+        accepted = [
+            ContactRequestStatus.ACCEPTED.value,
+            ContactRequestStatus.ACCEPTED.value.upper(),
+        ]
+        accepted_request = await db.contact_requests.find_one(
+            {
+                "status": {"$in": accepted},
+                "$or": [
+                    {"from_user_id": user_id, "to_user_id": other_id},
+                    {"from_user_id": other_id, "to_user_id": user_id},
+                ],
+            }
+        )
+        accepted_contact = await db.contacts.find_one(
+            {
+                "$and": [
+                    {
+                        "$or": [
+                            {
+                                "contact_status": {
+                                    "$in": [
+                                        ContactStatus.ACCEPTED.value,
+                                        ContactStatus.ACCEPTED.value.upper(),
+                                    ]
+                                }
+                            },
+                            {
+                                "status": {
+                                    "$in": [
+                                        ContactStatus.ACCEPTED.value,
+                                        ContactStatus.ACCEPTED.value.upper(),
+                                    ]
+                                }
+                            },
+                        ]
+                    },
+                    {
+                        "$or": [
+                            {"owner_user_id": user_id, "contact_user_id": other_id},
+                            {"owner_user_id": other_id, "contact_user_id": user_id},
+                        ]
+                    },
+                ],
+            }
+        )
+        if not accepted_request and not accepted_contact:
+            raise ForbiddenError(
+                "A new save request must be accepted before messaging this user"
+            )
+
     @staticmethod
     async def get_or_create_private_conversation(
         user_id: str,
@@ -53,7 +132,12 @@ class MessagingService:
                 }
             )
             if existing_self:
-                return await MessagingService._serialize_conversation(existing_self, user_id)
+                await MessagingService._unhide_membership(
+                    db, str(existing_self["_id"]), user_id
+                )
+                return await MessagingService._serialize_conversation(
+                    existing_self, user_id
+                )
             now = datetime.now(timezone.utc)
             doc = {
                 "conversation_type": ConversationType.PRIVATE.value,
@@ -70,17 +154,7 @@ class MessagingService:
             doc["_id"] = result.inserted_id
             return await MessagingService._serialize_conversation(doc, user_id)
 
-        # Check block either direction
-        blocked = await db.blocked_users.find_one(
-            {
-                "$or": [
-                    {"blocker_id": user_id, "blocked_id": other_id},
-                    {"blocker_id": other_id, "blocked_id": user_id},
-                ]
-            }
-        )
-        if blocked:
-            raise ForbiddenError("Cannot message this user")
+        await MessagingService._ensure_private_chat_allowed(db, user_id, other_id)
 
         participants = sorted([user_id, other_id])
         existing = await db.conversations.find_one(
@@ -91,6 +165,7 @@ class MessagingService:
             }
         )
         if existing:
+            await MessagingService._unhide_membership(db, str(existing["_id"]), user_id)
             return await MessagingService._serialize_conversation(existing, user_id)
 
         now = datetime.now(timezone.utc)
@@ -122,17 +197,155 @@ class MessagingService:
         if cursor and ObjectId.is_valid(cursor):
             pass  # simple limit for now
 
+        hidden_ids: set = set()
+        async for mem in db.conversation_members.find(
+            {"user_id": user_id, "hidden": True},
+            {"conversation_id": 1},
+        ):
+            cid = mem.get("conversation_id")
+            if cid:
+                hidden_ids.add(str(cid))
+
         cursor_q = (
             db.conversations.find(query)
             .sort([("last_message_at", -1), ("updated_at", -1)])
-            .limit(min(limit, 100))
+            .limit(min(limit * 2, 200))
         )
         items = []
         async for conv in cursor_q:
+            cid = str(conv["_id"])
+            if cid in hidden_ids:
+                continue
+            settings = conv.get("conversation_settings") or {}
+            user_settings = settings.get(user_id, {}) if isinstance(settings, dict) else {}
+            if user_settings.get("hidden") or user_settings.get("deleted"):
+                continue
             items.append(
                 await MessagingService._serialize_conversation(conv, user_id, lean=lean)
             )
+            if len(items) >= min(limit, 100):
+                break
         return {"conversations": items, "next_cursor": None}
+
+    @staticmethod
+    async def _unhide_membership(db, conversation_id: str, user_id: str) -> None:
+        """Clear hidden/deleted flags so a reopened chat appears again."""
+        now = datetime.now(timezone.utc)
+        await db.conversation_members.update_one(
+            {"conversation_id": conversation_id, "user_id": user_id},
+            {
+                "$set": {"hidden": False, "updated_at": now},
+                "$unset": {"deleted_at": ""},
+                "$setOnInsert": {
+                    "conversation_id": conversation_id,
+                    "user_id": user_id,
+                    "created_at": now,
+                },
+            },
+            upsert=True,
+        )
+        if ObjectId.is_valid(conversation_id):
+            await db.conversations.update_one(
+                {"_id": ObjectId(conversation_id)},
+                {
+                    "$set": {
+                        f"conversation_settings.{user_id}.hidden": False,
+                        "updated_at": now,
+                    },
+                    "$unset": {
+                        f"conversation_settings.{user_id}.deleted_at": "",
+                    },
+                },
+            )
+
+    @staticmethod
+    async def delete_conversation(conversation_id: str, user_id: str) -> None:
+        """Delete a conversation thread for the current user.
+
+        - Verifies membership
+        - Marks conversation_members.hidden + deleted_at
+        - Flags conversation_settings[user].hidden
+        - Hard-deletes messages, receipts, and reactions for private chats
+        - For group chats: only hides for this user (does not wipe group history)
+        """
+        db = get_database()
+        if not ObjectId.is_valid(conversation_id):
+            raise ValidationError("Invalid conversation id")
+
+        conv = await db.conversations.find_one({"_id": ObjectId(conversation_id)})
+        if not conv:
+            raise NotFoundError("Conversation not found")
+        if user_id not in [str(p) for p in conv.get("participant_ids", [])]:
+            raise ForbiddenError("Not a participant")
+
+        now = datetime.now(timezone.utc)
+        cid = str(conv["_id"])
+
+        await db.conversation_members.update_one(
+            {"conversation_id": cid, "user_id": user_id},
+            {
+                "$set": {
+                    "hidden": True,
+                    "deleted_at": now,
+                    "updated_at": now,
+                },
+                "$setOnInsert": {
+                    "conversation_id": cid,
+                    "user_id": user_id,
+                    "created_at": now,
+                },
+            },
+            upsert=True,
+        )
+
+        await db.conversations.update_one(
+            {"_id": conv["_id"]},
+            {
+                "$set": {
+                    f"conversation_settings.{user_id}.hidden": True,
+                    f"conversation_settings.{user_id}.deleted_at": now,
+                    "updated_at": now,
+                }
+            },
+        )
+
+        conv_type = conv.get("conversation_type")
+        is_private = conv_type == ConversationType.PRIVATE.value or conv_type == "private"
+        is_self = bool(conv.get("is_self"))
+
+        if is_private or is_self:
+            msg_ids: List[str] = []
+            async for m in db.messages.find({"conversation_id": cid}, {"_id": 1}):
+                msg_ids.append(str(m["_id"]))
+
+            if msg_ids:
+                oid_list = [ObjectId(mid) for mid in msg_ids if ObjectId.is_valid(mid)]
+                if oid_list:
+                    await db.messages.delete_many({"_id": {"$in": oid_list}})
+                await db.message_receipts.delete_many({"conversation_id": cid})
+                await db.message_reactions.delete_many({"message_id": {"$in": msg_ids}})
+            else:
+                await db.messages.delete_many({"conversation_id": cid})
+                await db.message_receipts.delete_many({"conversation_id": cid})
+
+            await db.conversations.update_one(
+                {"_id": conv["_id"]},
+                {
+                    "$set": {
+                        "last_message_id": None,
+                        "last_message_at": None,
+                        "updated_at": now,
+                    }
+                },
+            )
+
+        logger.info(
+            "conversation deleted user=%s conversation=%s type=%s hard=%s",
+            user_id,
+            cid,
+            conv_type,
+            is_private or is_self,
+        )
 
     @staticmethod
     async def get_conversation(conversation_id: str, user_id: str) -> dict:
@@ -164,10 +377,29 @@ class MessagingService:
             raise NotFoundError("Conversation not found")
         if sender_id not in conv.get("participant_ids", []):
             raise ForbiddenError("Not a participant")
+        if (
+            conv.get("conversation_type") == ConversationType.PRIVATE.value
+            and not conv.get("is_self")
+        ):
+            other_ids = [
+                str(participant)
+                for participant in conv.get("participant_ids", [])
+                if str(participant) != str(sender_id)
+            ]
+            if other_ids:
+                await MessagingService._ensure_private_chat_allowed(
+                    db, sender_id, other_ids[0]
+                )
 
         # Idempotency
         if idempotency_key:
-            existing = await db.messages.find_one({"idempotency_key": idempotency_key})
+            existing = await db.messages.find_one(
+                {
+                    "idempotency_key": idempotency_key,
+                    "conversation_id": conversation_id,
+                    "sender_id": sender_id,
+                }
+            )
             if existing:
                 return await MessagingService._serialize_message(existing)
 
@@ -222,7 +454,19 @@ class MessagingService:
             "idempotency_key": idempotency_key or generate_idempotency_key(),
             "edited": False,
         }
-        result = await db.messages.insert_one(msg)
+        try:
+            result = await db.messages.insert_one(msg)
+        except DuplicateKeyError:
+            existing = await db.messages.find_one(
+                {
+                    "idempotency_key": msg["idempotency_key"],
+                    "conversation_id": conversation_id,
+                    "sender_id": sender_id,
+                }
+            )
+            if existing:
+                return await MessagingService._serialize_message(existing)
+            raise ConflictError("Idempotency key has already been used")
         msg_id = str(result.inserted_id)
         msg["_id"] = result.inserted_id
 
@@ -619,6 +863,12 @@ class MessagingService:
                     {"$set": {"delivery_status": status}},
                 )
 
+        reactions = msg.get("_reactions")
+        if reactions is None:
+            reactions = []
+            async for r in db.message_reactions.find({"message_id": msg_id}):
+                reactions.append({"emoji": r.get("emoji"), "user_id": r.get("user_id")})
+
         return {
             "id": msg_id,
             "conversation_id": msg["conversation_id"],
@@ -636,8 +886,9 @@ class MessagingService:
             "deleted_at": msg["deleted_at"].isoformat() if msg.get("deleted_at") else None,
             "deleted": bool(msg.get("deleted_at")),
             "delivery_status": status,
+            "client_key": msg.get("idempotency_key"),
             "edited": msg.get("edited", False),
-            "reactions": msg.get("_reactions") or [],
+            "reactions": reactions,
         }
 
     @staticmethod
@@ -697,7 +948,14 @@ class MessagingService:
         )
 
         settings = conv.get("conversation_settings") or {}
-        user_settings = settings.get(viewer_id, {})
+        user_settings = settings.get(viewer_id, {}) if isinstance(settings, dict) else {}
+        pinned = bool(user_settings.get("pinned", False))
+        mem = await db.conversation_members.find_one(
+            {"conversation_id": str(conv["_id"]), "user_id": viewer_id},
+            {"pinned": 1},
+        )
+        if mem is not None and "pinned" in mem:
+            pinned = bool(mem.get("pinned"))
 
         return {
             "id": str(conv["_id"]),
@@ -713,4 +971,5 @@ class MessagingService:
             "unread_count": unread,
             "created_at": conv["created_at"].isoformat() if conv.get("created_at") else None,
             "settings": user_settings,
+            "pinned": pinned,
         }

@@ -1,3 +1,5 @@
+import { formatLocalTime } from './time'
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/kv'
 /**
  * SafeChat API client — talks to FastAPI backend at /api/v1
  * Response shape: { success, message, data }
@@ -23,6 +25,7 @@ export type ApiUser = {
   hue: [string, string]
   createdAt?: string
   email?: string | null
+  phoneMatch?: boolean
   account_role?: string
   subscriptionPlan?: string
   accountStatus?: string
@@ -35,6 +38,50 @@ export type ApiUser = {
   chatAccent?: string
   colorMode?: string
   liquidGlass?: boolean
+}
+
+export type SupportReply = {
+  id: string
+  authorRole: 'USER' | 'ADMIN' | 'SUPER_ADMIN'
+  body: string
+  createdAt: string
+}
+
+export type SupportTicket = {
+  id: string
+  subject: string
+  body: string
+  status: 'open' | 'replied' | 'closed'
+  createdAt: string
+  updatedAt: string
+  replies: SupportReply[]
+}
+
+type SupportTicketData = {
+  id: string
+  subject: string
+  body: string
+  status: SupportTicket['status']
+  created_at: string
+  updated_at: string
+  replies: { id: string; author_role: SupportReply['authorRole']; body: string; created_at: string }[]
+}
+
+function mapSupportTicket(ticket: SupportTicketData): SupportTicket {
+  return {
+    id: ticket.id,
+    subject: ticket.subject,
+    body: ticket.body,
+    status: ticket.status,
+    createdAt: ticket.created_at,
+    updatedAt: ticket.updated_at,
+    replies: ticket.replies.map((reply) => ({
+      id: reply.id,
+      authorRole: reply.author_role,
+      body: reply.body,
+      createdAt: reply.created_at,
+    })),
+  }
 }
 
 export type ApiContact = {
@@ -58,6 +105,7 @@ export type ApiContact = {
   pinned?: boolean
   favourite?: boolean
   blocked?: boolean
+  isContact?: boolean
   createdAt?: string
 }
 
@@ -92,6 +140,41 @@ export type ApiMsg = {
   } | null
 }
 
+
+export type ApiNote = {
+  id: string
+  kind: 'note' | 'checklist' | 'reminder'
+  title: string
+  body: string
+  items?: { id: string; text: string; done: boolean }[]
+  remindAt?: string | null
+  pinned?: boolean
+  color?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+function mapNote(n: any): ApiNote {
+  return {
+    id: String(n.id || n._id || ''),
+    kind: (n.kind || 'note') as ApiNote['kind'],
+    title: n.title || '',
+    body: n.body || '',
+    items: Array.isArray(n.items)
+      ? n.items.map((it: any) => ({
+          id: String(it.id || ''),
+          text: it.text || '',
+          done: !!it.done,
+        }))
+      : [],
+    remindAt: n.remind_at || n.remindAt || null,
+    pinned: !!n.pinned,
+    color: n.color || null,
+    createdAt: n.created_at || n.createdAt || new Date().toISOString(),
+    updatedAt: n.updated_at || n.updatedAt || new Date().toISOString(),
+  }
+}
+
 export type ChatPreview = {
   contactId: string
   conversationId?: string
@@ -122,12 +205,19 @@ function hueFor(id: string): [string, string] {
   return HUE_PALETTE[h]
 }
 
+let memoryAccess = ''
+
 function accessToken() {
-  return localStorage.getItem('sc_access') || localStorage.getItem('sc_token') || ''
+  if (memoryAccess) return memoryAccess
+  // Legacy IDB only during migration — prefer memory
+  const fromKv = kvGet('sc_access') || kvGet('sc_token') || ''
+  if (fromKv) memoryAccess = fromKv
+  return memoryAccess
 }
 
 function refreshToken() {
-  return localStorage.getItem('sc_refresh') || ''
+  // Refresh lives in HttpOnly cookie; body token only if still in memory/kv (migration)
+  return kvGet('sc_refresh') || ''
 }
 
 /** JWT exp (seconds) or 0 if unreadable — does not verify signature. */
@@ -147,7 +237,8 @@ async function ensureFreshAccess(): Promise<boolean> {
   if (sessionDead) return false
   const access = accessToken()
   const refresh = refreshToken()
-  if (!access && !refresh) return false
+  // Cookie may still allow refresh when both memory values are empty
+  if (!access && !refresh) return tryRefresh()
   if (!access && refresh) return tryRefresh()
   const exp = tokenExpiresAt(access)
   if (!exp) return true // opaque / non-JWT — let server decide
@@ -167,7 +258,7 @@ export async function ensureSessionFresh(): Promise<boolean> {
  */
 export async function forceRefreshSession(): Promise<boolean> {
   if (sessionDead) return false
-  if (!refreshToken()) return false
+  // Refresh cookie may exist even when memory refresh token is empty
   return tryRefresh()
 }
 
@@ -200,23 +291,26 @@ export function markSessionDead() {
 
 export function setSession(access: string, refresh: string, user: ApiUser) {
   sessionDead = false
-  localStorage.setItem('sc_access', access)
-  localStorage.setItem('sc_refresh', refresh)
-  localStorage.setItem('sc_token', access)
-  localStorage.setItem('sc_user', JSON.stringify(user))
+  memoryAccess = access || ''
+  // Access token: memory only. Refresh: HttpOnly cookie from server (do not persist secrets).
+  kvRemove('sc_access')
+  kvRemove('sc_token')
+  kvRemove('sc_refresh')
+  if (user) kvSet('sc_user', JSON.stringify(user))
   startProactiveRefresh()
 }
 
 export function saveStoredUser(user: ApiUser) {
-  localStorage.setItem('sc_user', JSON.stringify(user))
+  kvSet('sc_user', JSON.stringify(user))
 }
 
 export function clearSession() {
   stopProactiveRefresh()
-  localStorage.removeItem('sc_access')
-  localStorage.removeItem('sc_refresh')
-  localStorage.removeItem('sc_token')
-  localStorage.removeItem('sc_user')
+  memoryAccess = ''
+  kvRemove('sc_access')
+  kvRemove('sc_refresh')
+  kvRemove('sc_token')
+  kvRemove('sc_user')
 }
 
 function isPublicAuthPath(path: string) {
@@ -231,7 +325,7 @@ function isPublicAuthPath(path: string) {
 
 export function getStoredUser(): ApiUser | null {
   try {
-    const raw = localStorage.getItem('sc_user')
+    const raw = kvGet('sc_user')
     return raw ? JSON.parse(raw) : null
   } catch {
     return null
@@ -243,6 +337,7 @@ function mapUser(u: any): ApiUser {
   return {
     id,
     phone: u.phone_number || u.phone || '',
+    phoneMatch: !!u.phone_match,
     countryCode: u.countryCode,
     username: u.username || '',
     name: u.display_name || u.name || u.username || '',
@@ -317,7 +412,7 @@ function mapMessage(m: any, meId?: string): ApiMsg {
   try {
     const d = new Date(created)
     if (!isNaN(d.getTime())) {
-      timeLabel = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
+      timeLabel = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: (typeof window !== 'undefined' && (() => { try { const s = JSON.parse(kvGet('sc_settings') || '{}'); return s?.timeFormat === '12h' } catch { return false } })()) })
     }
   } catch { /* */ }
   const from = String(m.sender_id || m.from || '')
@@ -382,7 +477,7 @@ function mapConversation(c: any, meId?: string): ChatPreview {
   const iso = c.last_message_at || last?.created_at
   if (iso) {
     try {
-      time = new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      time = formatLocalTime(iso)
     } catch { /* */ }
   }
   const contactId = String(other.id || (c.participant_ids || []).find((id: string) => id !== meId) || c.id)
@@ -473,15 +568,13 @@ async function tryRefresh(): Promise<boolean> {
   if (refreshInflight) return refreshInflight
   refreshInflight = (async () => {
     const rt = refreshToken()
-    if (!rt) {
-      consecutiveRefreshFails += 1
-      return false
-    }
+    /* cookie may carry refresh even when rt empty */
     try {
       const res = await fetch(`${BASE}/api/v1/auth/refresh`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: rt }),
+        body: JSON.stringify({ refresh_token: rt || undefined }),
       })
       const body: BackendEnvelope = await res.json().catch(() => ({}))
       if (!res.ok || body.success === false) {
@@ -490,10 +583,11 @@ async function tryRefresh(): Promise<boolean> {
       }
       const data = body.data || body
       if ((data as any).access_token) {
-        localStorage.setItem('sc_access', (data as any).access_token)
-        localStorage.setItem('sc_token', (data as any).access_token)
+        memoryAccess = (data as any).access_token
+        kvRemove('sc_access')
+        kvRemove('sc_token')
         if ((data as any).refresh_token) {
-          localStorage.setItem('sc_refresh', (data as any).refresh_token)
+          kvRemove('sc_refresh')
         }
         sessionDead = false
         consecutiveRefreshFails = 0
@@ -520,7 +614,8 @@ let refreshTimer: ReturnType<typeof setInterval> | null = null
 export function startProactiveRefresh() {
   if (refreshTimer) return
   refreshTimer = setInterval(() => {
-    if (sessionDead || !refreshToken()) return
+    if (sessionDead) return
+    // Cookie may hold refresh even when memory is empty
     void tryRefresh()
   }, 12 * 60 * 1000) // every 12 minutes
 }
@@ -564,9 +659,7 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
       throw err
     }
     if (!accessToken() && !refreshToken()) {
-      const err = new Error('Please log in again')
-      ;(err as any).status = 401
-      throw err
+      // Still try — HttpOnly cookie may refresh; only fail if that fails later
     }
     // Refresh early so soft polls rarely hit a raw 401 in the network log
     if (!retried) {
@@ -592,7 +685,11 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
 
   let res: Response
   try {
-    res = await fetch(`${BASE}${path}`, { ...opts, headers })
+    res = await fetch(`${BASE}${path}`, {
+      ...opts,
+      credentials: 'include',
+      headers,
+    })
   } catch (e: any) {
     const msg = networkReachabilityMessage(e)
     const err = new Error(msg)
@@ -696,6 +793,29 @@ function meId(): string {
 }
 
 export const api = {
+  supportTickets: async (page = 1, pageSize = 25) => {
+    const data = await req<{ items: SupportTicketData[]; total: number; page: number; page_size: number }>(
+      `/api/v1/support/tickets?page=${page}&page_size=${pageSize}`,
+    )
+    return {
+      ...data,
+      items: data.items.map(mapSupportTicket),
+    }
+  },
+  createSupportTicket: async (subject: string, body: string) => {
+    const data = await req<SupportTicketData>('/api/v1/support/tickets', {
+      method: 'POST',
+      body: JSON.stringify({ subject, body }),
+    })
+    return mapSupportTicket(data)
+  },
+  replySupportTicket: async (ticketId: string, body: string) => {
+    const data = await req<SupportTicketData>(`/api/v1/support/tickets/${encodeURIComponent(ticketId)}/replies`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    })
+    return mapSupportTicket(data)
+  },
   tictactoeInvite: async (peer_user_id: string) => {
     const data = await req<any>('/api/v1/games/tictactoe/invite', {
       method: 'POST',
@@ -797,6 +917,13 @@ export const api = {
       body: JSON.stringify(payload),
     })
     const user = mapUser(data.user || data)
+    if (data.password_reset_required) {
+      return {
+        password_reset_required: true as const,
+        password_reset_token: String(data.password_reset_token || ''),
+        user,
+      }
+    }
     return {
       access_token: data.access_token as string,
       refresh_token: data.refresh_token as string,
@@ -804,13 +931,37 @@ export const api = {
     }
   },
 
+  requestPasswordReset: async (email: string) =>
+    req<any>('/api/v1/auth/password-reset/request', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  completePasswordReset: async (resetLoginToken: string, newPassword: string) =>
+    req<any>('/api/v1/auth/password-reset/complete', {
+      method: 'POST',
+      body: JSON.stringify({
+        reset_login_token: resetLoginToken,
+        new_password: newPassword,
+      }),
+    }),
+
+  changePassword: async (currentPassword: string, newPassword: string) =>
+    req<any>('/api/v1/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    }),
+
   logout: async () => {
     const rt = refreshToken()
     if (rt) {
       try {
         await req('/api/v1/auth/logout', {
           method: 'POST',
-          body: JSON.stringify({ refresh_token: rt }),
+          body: JSON.stringify({ refresh_token: rt || undefined }),
         })
       } catch { /* */ }
     }
@@ -825,6 +976,8 @@ export const api = {
       chat_accent: 'chatAccent',
       font_size: 'fontSize',
       status_privacy: 'statusPrivacy',
+      status_selected_contacts: 'statusSelectedContacts',
+      status_excluded_contacts: 'statusExcludedContacts',
       status_validity: 'statusValidity',
       msg_notif: 'msgNotif',
       group_notif: 'groupNotif',
@@ -963,8 +1116,25 @@ export const api = {
   },
 
   contacts: async () => {
-    const list = await req<any[]>('/api/v1/contacts')
-    return { contacts: (list || []).map(mapContact) }
+    const data = await req<any>('/api/v1/contacts')
+    const list = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.contacts)
+        ? data.contacts
+        : Array.isArray(data?.items)
+          ? data.items
+          : []
+    return { contacts: list.map(mapContact) }
+  },
+
+  blockedContacts: async () => {
+    const list = await req<any[]>('/api/v1/contacts/blocked')
+    return {
+      blocked: (list || []).map((contact) => ({
+        ...mapContact(contact),
+        isContact: !!contact.is_contact,
+      })),
+    }
   },
 
   searchUsers: async (q: string) => {
@@ -1059,7 +1229,15 @@ export const api = {
     const data = await req<any>(`/api/v1/contacts/requests/${requestId}/accept`, {
       method: 'POST',
     })
-    return { ok: true, data }
+    const contact = data?.contact ? mapContact(data.contact) : null
+    const peerContact = data?.peer_contact ? mapContact(data.peer_contact) : null
+    return {
+      ok: true,
+      mutual: data?.mutual !== false,
+      contact,
+      peerContact,
+      data,
+    }
   },
 
   rejectContactRequest: async (requestId: string) => {
@@ -1116,12 +1294,41 @@ export const api = {
   },
 
   deleteConversation: async (conversationId: string) => {
-    try {
-      await req(`/api/v1/conversations/${conversationId}`, { method: 'DELETE' })
-    } catch {
-      /* optional endpoint */
-    }
+    if (!conversationId) throw new Error('Conversation id required')
+    await req(`/api/v1/conversations/${conversationId}`, { method: 'DELETE' })
     return { ok: true }
+  },
+
+  /** Cross-device notes / checklists / reminders */
+  listNotes: async (kind?: string) => {
+    const q = kind ? `?kind=${encodeURIComponent(kind)}` : ''
+    const data = await req<{ notes: any[] }>(`/api/v1/notes${q}`)
+    return (data?.notes || []).map(mapNote)
+  },
+  createNote: async (note: Record<string, unknown>) => {
+    const data = await req<any>('/api/v1/notes', {
+      method: 'POST',
+      body: JSON.stringify(note),
+    })
+    return mapNote(data)
+  },
+  updateNote: async (id: string, patch: Record<string, unknown>) => {
+    const data = await req<any>(`/api/v1/notes/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    })
+    return mapNote(data)
+  },
+  deleteNote: async (id: string) => {
+    await req(`/api/v1/notes/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    return { ok: true }
+  },
+  syncNotes: async (localNotes: Record<string, unknown>[]) => {
+    const data = await req<{ notes: any[] }>('/api/v1/notes/sync', {
+      method: 'POST',
+      body: JSON.stringify({ notes: localNotes }),
+    })
+    return (data?.notes || []).map(mapNote)
   },
 
   openPrivateChat: async (
@@ -1173,7 +1380,11 @@ export const api = {
     conversationId: string,
     text: string,
     image?: string | null,
-    opts?: { replyToId?: string; statusReply?: { preview: string; time?: string; statusId?: string } },
+    opts?: {
+      clientKey?: string
+      replyToId?: string
+      statusReply?: { preview: string; time?: string; statusId?: string }
+    },
   ) => {
     let content = text || (image ? '' : '')
     if (opts?.statusReply) {
@@ -1184,6 +1395,9 @@ export const api = {
     const payload: Record<string, unknown> = {
       content,
       message_type: image ? 'image' : 'text',
+    }
+    if (opts?.clientKey) {
+      payload.idempotency_key = opts.clientKey
     }
     if (image) {
       payload.media_attachments = [{ type: 'image', url: image }]
@@ -1297,12 +1511,20 @@ export const api = {
     text: string,
     image?: string | null,
     background?: string | null,
-    opts?: { expiresInHours?: number; visibility?: string; video?: string },
+    opts?: {
+      expiresInHours?: number
+      visibility?: string
+      selectedViewerIds?: string[]
+      excludedViewerIds?: string[]
+      video?: string
+    },
   ) => {
     const payload: Record<string, unknown> = {
       content: text || '',
       status_type: opts?.video ? 'video' : image ? 'image' : 'text',
       visibility: opts?.visibility || 'contacts',
+      selected_viewer_ids: opts?.selectedViewerIds || [],
+      excluded_viewer_ids: opts?.excludedViewerIds || [],
       expires_in_hours: opts?.expiresInHours ?? 24,
       background: background || 'theme_purple_grad',
     }
@@ -1431,7 +1653,7 @@ export const api = {
           if (Number.isNaN(d.getTime())) return ''
           const now = new Date()
           const sameDay = d.toDateString() === now.toDateString()
-          if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+          if (sameDay) return formatLocalTime(d)
           return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
         })(),
         ago: c.created_at || c.time,

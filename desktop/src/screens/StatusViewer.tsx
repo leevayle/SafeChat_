@@ -4,9 +4,11 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { X, Volume2, VolumeX, Heart, Trash2, Eye, Download, Repeat2, Copy } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { api } from '../api'
+import { formatLocalTime } from '../time'
 import { useStore } from '../store'
 import { loadCachedViewers, saveCachedViewers } from '../lib/appCache'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 const API_ORIGIN = import.meta.env.VITE_API_URL || ''
 function mediaUrl(path?: string | null) {
   if (!path) return ''
@@ -60,7 +62,7 @@ type Props = {
 
 function loadLikes(): Record<string, boolean> {
   try {
-    return JSON.parse(localStorage.getItem('sc_status_likes') || '{}')
+    return JSON.parse(kvGet('sc_status_likes') || '{}')
   } catch {
     return {}
   }
@@ -68,7 +70,7 @@ function loadLikes(): Record<string, boolean> {
 
 function saveLikes(map: Record<string, boolean>) {
   try {
-    localStorage.setItem('sc_status_likes', JSON.stringify(map))
+    kvSet('sc_status_likes', JSON.stringify(map))
   } catch {
     /* ignore */
   }
@@ -76,7 +78,7 @@ function saveLikes(map: Record<string, boolean>) {
 
 function loadMuted(): string[] {
   try {
-    return JSON.parse(localStorage.getItem('sc_status_muted') || '[]')
+    return JSON.parse(kvGet('sc_status_muted') || '[]')
   } catch {
     return []
   }
@@ -84,7 +86,7 @@ function loadMuted(): string[] {
 
 function saveMuted(ids: string[]) {
   try {
-    localStorage.setItem('sc_status_muted', JSON.stringify(ids))
+    kvSet('sc_status_muted', JSON.stringify(ids))
   } catch {
     /* ignore */
   }
@@ -97,7 +99,7 @@ export function StatusViewer({
   const likeInFlight = useRef(false)
   const lastLikeAt = useRef(0)
   const viewSentRef = useRef<Set<string>>(new Set())
-  const { statusList, refreshStatus, showToast, patchStatusList, me } = useStore()
+  const { statusList, refreshStatus, showToast, patchStatusList, me, settings } = useStore()
   // Only non-expired statuses for this user, oldest first (play order)
   // Treat naive ISO timestamps as UTC (backend sends without Z)
   const parseUtc = (raw?: string | null) => {
@@ -522,7 +524,7 @@ export function StatusViewer({
       if (current?.createdAt) {
         let s = String(current.createdAt)
         if (/^\d{4}-\d{2}-\d{2}T/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z'
-        time = new Date(s).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+        time = formatLocalTime(s)
       }
     } catch { /* */ }
     const payload = {
@@ -549,24 +551,28 @@ export function StatusViewer({
       className="relative flex h-full flex-col select-none text-white"
       style={{ background: bgCss }}
       onContextMenu={(e) => e.preventDefault()}
-      onPointerUp={(e) => onPressEnd(e)}
       onPointerCancel={(e) => onPressEnd(e)}
-      onTouchStart={(e) => {
+      onPointerDown={(e) => {
         if ((e.target as HTMLElement).closest('[data-status-action]')) return
-        swipeStartY.current = e.touches[0].clientY
+        if (e.pointerType === 'mouse' && e.button !== 0) return
+        swipeStartY.current = e.clientY
       }}
-      onTouchMove={(e) => {
+      onPointerMove={(e) => {
+        if (!swipeStartY.current) return
         if ((e.target as HTMLElement).closest('[data-status-action]')) return
-        const dy = swipeStartY.current - e.touches[0].clientY
+        const dy = swipeStartY.current - e.clientY
         if (dy > 0) setSwipeDy(Math.min(80, dy))
       }}
-      onTouchEnd={(e) => {
+      onPointerUp={(e) => {
+        onPressEnd(e)
         if ((e.target as HTMLElement).closest('[data-status-action]')) {
           setSwipeDy(0)
+          swipeStartY.current = 0
           return
         }
         if (swipeDy > 48 && !isOwner) commitStatusReply()
         setSwipeDy(0)
+        swipeStartY.current = 0
       }}
     >
       {/* progress: completed full, current partial, future empty */}
@@ -781,12 +787,18 @@ export function StatusViewer({
             type="button"
             data-status-action
             onClick={(e) => {
+              e.preventDefault()
               e.stopPropagation()
               commitStatusReply()
             }}
-            className="pointer-events-auto rounded-full bg-black/35 px-4 py-1.5 text-xs font-bold text-white/95 backdrop-blur-md transition hover:bg-black/50 active:scale-95"
+            onPointerUp={(e) => {
+              // Tap/click works on phone, tablet, and desktop
+              e.preventDefault()
+              e.stopPropagation()
+            }}
+            className="pointer-events-auto rounded-full bg-black/35 px-4 py-1.5 text-xs font-bold text-white/95 transition hover:bg-black/50 active:scale-95"
           >
-            Swipe up to reply
+            Swipe up or tap to reply
           </button>
         </div>
       )}
@@ -874,11 +886,8 @@ export function StatusViewer({
                     return
                   }
                   try {
-                    const hours = Number(
-                      (typeof localStorage !== 'undefined' &&
-                        JSON.parse(localStorage.getItem('sc_settings') || '{}').statusValidity) ||
-                        24,
-                    ) || 24
+                    const configuredHours = Number.parseInt(settings.statusValidity || '', 10)
+                    const hours = [1, 6, 12, 24].includes(configuredHours) ? configuredHours : 24
                     await api.postStatus(
                       current.text || '',
                       current.image || null,
@@ -912,7 +921,7 @@ export function StatusViewer({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-0 z-40 bg-black/50"
+              className="absolute inset-0 z-40 bg-black/55"
               onClick={closeViewers}
               data-status-action
             />
@@ -921,7 +930,7 @@ export function StatusViewer({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', stiffness: 340, damping: 34 }}
-              className="absolute inset-x-0 bottom-0 z-50 max-h-[70%] overflow-hidden rounded-t-3xl bg-white"
+              className="absolute inset-x-0 bottom-0 z-50 max-h-[55%] overflow-hidden rounded-t-3xl bg-white shadow-[0_-12px_40px_rgba(0,0,0,0.35)] md:inset-x-auto md:left-1/2 md:bottom-[8%] md:max-h-[50vh] md:w-full md:max-w-md md:-translate-x-1/2 md:rounded-3xl"
               data-status-action
             >
               <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3.5">

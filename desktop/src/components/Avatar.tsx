@@ -72,7 +72,7 @@ export function Avatar({
 
   return (
     <span
-      className="relative inline-flex shrink-0"
+      className="relative inline-flex shrink-0 isolate"
       style={{ width: size, height: size }}
     >
       <span
@@ -87,7 +87,7 @@ export function Avatar({
       </span>
       {showBadge && (
         <span
-          className="pointer-events-none absolute z-30 flex items-center justify-center rounded-full bg-[#1DA1F2] text-white shadow-md ring-2 ring-white"
+          className="pointer-events-none absolute z-[1] flex items-center justify-center rounded-full bg-[#1DA1F2] text-white shadow-md ring-2 ring-white"
           style={{
             width: badge,
             height: badge,

@@ -14,15 +14,33 @@ type Props = {
   onCall: (id: string, kind: 'audio' | 'video') => void
 }
 
+function isPhoneSearchInput(value: string) {
+  const trimmed = value.trim()
+  return !!trimmed && /^[+()\d\s-]+$/.test(trimmed)
+}
+
+function normalizeKenyanPhone(value: string) {
+  const digits = value.replace(/\D/g, '')
+  if (digits.startsWith('254')) return `+${digits}`
+  if (/^0[17]\d{8}$/.test(digits)) return `+254${digits.slice(1)}`
+  if (/^[17]\d{8}$/.test(digits)) return `+254${digits}`
+  return value.trim()
+}
+
+function isFullKenyanPhone(value: string) {
+  const digits = value.replace(/\D/g, '')
+  return /^(?:254[17]\d{8}|0[17]\d{8}|[17]\d{8})$/.test(digits)
+}
+
 export function Contacts({ onClose, onChat, onCall }: Props) {
   const { contacts, refreshContacts, showToast } = useStore()
+  const [contactsLoading, setContactsLoading] = useState(!contacts.length)
   const [q, setQ] = useState('')
   const [edit, setEdit] = useState<ApiContact | null>(null)
   const [draft, setDraft] = useState({ savedName: '', note: '', phone: '' })
   const [adding, setAdding] = useState(false)
   const [addForm, setAddForm] = useState({ username: '', phone: '', savedName: '', sharePhone: true })
   const [addMode, setAddMode] = useState<'username' | 'phone'>('username')
-  const [phoneCountry, setPhoneCountry] = useState('+254')
   const [searchHits, setSearchHits] = useState<any[]>([])
   const [searching, setSearching] = useState(false)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -34,6 +52,16 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [notFoundPhone, setNotFoundPhone] = useState<string | null>(null)
   const [identity, setIdentity] = useState('')
+
+  useEffect(() => {
+    let active = true
+    void refreshContacts().finally(() => {
+      if (active) setContactsLoading(false)
+    })
+    return () => {
+      active = false
+    }
+  }, [refreshContacts])
 
   const list = useMemo(() => {
     const qq = q.trim().toLowerCase()
@@ -103,28 +131,25 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
 
   const runSearch = (value: string) => {
     setIdentity(value)
-    // Phone numbers (+...) - no live search; resolve only on Send
-    if (value.trim().startsWith('+')) {
+    const gen = ++searchGen.current
+    const trimmed = value.trim()
+    const phoneMode = isPhoneSearchInput(trimmed)
+    setAddMode(phoneMode ? 'phone' : 'username')
+    setAddForm((f) => ({
+      ...f,
+      username: phoneMode ? '' : trimmed.replace(/^@/, ''),
+      phone: phoneMode ? trimmed : '',
+    }))
+    const searchValue = phoneMode ? trimmed.replace(/\D/g, '') : trimmed.replace(/^@/, '')
+    if (searchValue.length < 2) {
       if (searchTimer.current) clearTimeout(searchTimer.current)
       setSearchHits([])
       setSearching(false)
-      setAddForm((f) => ({ ...f, username: '', phone: value.trim() }))
-      setAddMode('phone')
       return
     }
-    setAddMode('username')
-    setAddForm((f) => ({ ...f, username: value.replace(/^@/, ''), phone: '' }))
-    if (value.trim().length < 2) {
-      if (searchTimer.current) clearTimeout(searchTimer.current)
-      setSearchHits([])
-      setSearching(false)
-      return
-    }
-    // Debounce network search so typing stays snappy
     if (searchTimer.current) clearTimeout(searchTimer.current)
     setSearching(true)
-    const q = value.trim().replace(/^@/, '')
-    const gen = ++searchGen.current
+    const q = trimmed
     searchTimer.current = setTimeout(async () => {
       try {
         const { users } = await api.searchUsers(q)
@@ -146,24 +171,17 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
     if (key) setRequestState((m) => ({ ...m, [key]: 'loading' }))
     try {
       let username = (peer?.username || addForm.username || '').replace(/^@/, '').trim()
-      let phoneFull = (peer?.phone || addForm.phone || identity || '').trim()
-      if (phoneFull && !phoneFull.startsWith('+') && addMode === 'phone') {
-        phoneFull = `${phoneCountry}${phoneFull.replace(/\D/g, '')}`
-      }
-      // Phone path: look up only when Send is pressed
-      if (!peer && (phoneFull.startsWith('+') || addMode === 'phone')) {
-        if (!phoneFull.startsWith('+')) {
-          showToast('Enter a full number starting with +')
+      const rawPhone = (peer?.phone || addForm.phone || identity || '').trim()
+      let phoneFull = addMode === 'phone' ? normalizeKenyanPhone(rawPhone) : rawPhone
+      if (!peer && addMode === 'phone') {
+        if (!isFullKenyanPhone(rawPhone)) {
+          showToast('Choose a matching account from the phone search results.')
           setBusy(false)
           return
         }
         try {
           const { users } = await api.searchUsers(phoneFull)
-          const hit = (users || []).find(
-            (u: any) =>
-              String(u.phone || '').replace(/\s/g, '') === phoneFull.replace(/\s/g, '') ||
-              String(u.phone_number || '').replace(/\s/g, '') === phoneFull.replace(/\s/g, ''),
-          ) || (users || [])[0]
+          const hit = (users || []).find((u) => u.phoneMatch)
           if (!hit) {
             setNotFoundPhone(phoneFull)
             setBusy(false)
@@ -171,7 +189,6 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
           }
           peer = hit
           username = hit.username
-          phoneFull = hit.phone || phoneFull
         } catch {
           setNotFoundPhone(phoneFull)
           setBusy(false)
@@ -179,7 +196,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
         }
       }
       if (!peer && !username) {
-        showToast('Enter a username or phone (+…)')
+        showToast('Enter a username or phone number')
         setBusy(false)
         return
       }
@@ -239,7 +256,20 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 pb-8">
-        {list.length === 0 && (
+        {list.length === 0 && contactsLoading && (
+          <div className="space-y-2 px-3 py-3" aria-label="Loading contacts">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="flex items-center gap-3 rounded-2xl px-3 py-2.5">
+                <div className="sk-shimmer h-12 w-12 shrink-0 rounded-full" />
+                <div className="flex-1 space-y-2">
+                  <div className="sk-shimmer h-3 w-2/5 rounded" />
+                  <div className="sk-shimmer h-2.5 w-1/3 rounded" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {list.length === 0 && !contactsLoading && (
           <p className="px-4 py-10 text-center text-sm font-bold text-gray-400">
             No contacts yet. Tap + to add someone by username or phone.
           </p>
@@ -301,7 +331,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
             }}
             right={
               <span className="rounded-full bg-brand-purple/10 px-2.5 py-1 text-[11px] font-extrabold text-brand-purple">
-                {identity.trim().startsWith('+') ? 'Phone' : 'Username'}
+                {addMode === 'phone' ? 'Phone' : 'Username'}
               </span>
             }
           />
@@ -312,16 +342,16 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
             <input
               value={identity}
               onChange={(e) => runSearch(e.target.value)}
-              placeholder="@username or +2547…"
+              placeholder="@username, +2547… or 07…"
               className="w-full rounded-2xl border border-gray-200 px-4 py-3 font-semibold outline-none focus:border-brand-purple"
-              inputMode={identity.trim().startsWith('+') ? 'tel' : 'text'}
+              inputMode={addMode === 'phone' ? 'tel' : 'text'}
             />
             <p className="text-[11px] font-semibold text-gray-400">
-              {identity.trim().startsWith('+')
-                ? 'Phone numbers are checked only when you send the request.'
-                : 'Type a username to search, or start with + for a phone number.'}
+              {addMode === 'phone'
+                ? 'Search by Kenyan phone prefix; choose the matching account from the results.'
+                : 'Type a username to search, or enter a phone number starting with +254 or 0.'}
             </p>
-            {(searching || searchHits.length > 0) && !identity.trim().startsWith('+') && (
+            {(searching || searchHits.length > 0) && (
               <ul className="rounded-2xl border border-gray-100">
                 {searching &&
                   [0, 1, 2].map((i) => (

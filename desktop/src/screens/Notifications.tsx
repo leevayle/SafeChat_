@@ -15,9 +15,11 @@ import { LogoIcon } from '../components/Logo'
 import { useStore } from '../store'
 import { Avatar } from '../components/Avatar'
 import { api, hasAccessToken } from '../api'
+import { formatLocalTime } from '../time'
 // status_like notifications from server
 import { loadCachedNotifications, saveCachedNotifications } from '../lib/appCache'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 type Props = {
   onBack: () => void
   onOpenChat?: (contactId: string) => void
@@ -53,7 +55,7 @@ function timeLabel(iso?: string) {
     d.getMonth() === now.getMonth() &&
     d.getDate() === now.getDate()
   if (sameDay) {
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+    return formatLocalTime(d)
   }
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
@@ -75,7 +77,7 @@ export function Notifications({
   const [loading, setLoading] = useState(true)
   const [gameDoneIds, setGameDoneIds] = useState<Set<string>>(() => {
     try {
-      const raw = localStorage.getItem('sc_game_invite_done')
+      const raw = kvGet('sc_game_invite_done')
       return new Set(raw ? JSON.parse(raw) : [])
     } catch {
       return new Set()
@@ -87,14 +89,14 @@ export function Notifications({
       next.add(id)
       if (gameId) next.add(`g:${gameId}`)
       try {
-        localStorage.setItem('sc_game_invite_done', JSON.stringify([...next]))
+        kvSet('sc_game_invite_done', JSON.stringify([...next]))
       } catch { /* */ }
       return next
     })
   }
   const [readIds, setReadIds] = useState<Set<string>>(() => {
     try {
-      const raw = localStorage.getItem('sc_notif_read')
+      const raw = kvGet('sc_notif_read')
       return new Set(raw ? JSON.parse(raw) : [])
     } catch {
       return new Set()
@@ -102,46 +104,55 @@ export function Notifications({
   })
 
   useEffect(() => {
-    const onStatusLike = (ev: Event) => {
+    const onRealtimeNotification = (ev: Event) => {
       const d = (ev as CustomEvent).detail || {}
-      const isNew = d.t === 'status_new' || d.type === 'status_new'
-      const optimistic = isNew
-        ? {
-            id: `live-snew-${d.status_id || d.status?.id || Date.now()}`,
-            type: 'status_new',
-            title: d.title || `${d.from_name || d.status?.owner?.display_name || 'Someone'} posted a status`,
-            body: d.body || 'Tap to view',
-            actor_id: d.from || d.status?.owner_user_id,
-            actor_name: d.from_name,
-            status_id: d.status_id || d.status?.id,
-            read: false,
-            created_at: new Date().toISOString(),
-          }
-        : {
-            id: `live-slike-${d.status_id || Date.now()}`,
-            type: 'status_like',
-            title: d.title || `${d.from_name || 'Someone'} liked your status`,
-            body: 'Tap to open',
-            actor_id: d.from,
-            actor_name: d.from_name,
-            status_id: d.status_id,
-            read: false,
-            created_at: new Date().toISOString(),
-          }
+      const type =
+        d.type ||
+        (d.t === 'status_new' || d.status ? 'status_new' : d.t === 'status_like' ? 'status_like' : 'system')
+      const statusId = d.status_id || d.status?.id
+      const actorId = d.actor_id || d.from || d.status?.owner_user_id
+      const optimistic = {
+        id: String(
+          d.notification_id ||
+            `live-${type}-${statusId || actorId || Date.now()}`,
+        ),
+        type,
+        title:
+          d.title ||
+          (type === 'status_new'
+            ? `${d.from_name || d.status?.owner?.display_name || 'Someone'} posted a status`
+            : type === 'status_like'
+              ? `${d.from_name || 'Someone'} liked your status`
+              : 'Save request accepted'),
+        body:
+          d.body ||
+          (type === 'status_new'
+            ? 'Tap to view'
+            : type === 'status_like'
+              ? 'Tap to open'
+              : 'You can now stay in touch.'),
+        actor_id: actorId,
+        actor_name: d.actor_name || d.from_name,
+        actor_photo: d.actor_photo,
+        status_id: statusId,
+        read: false,
+        created_at: new Date().toISOString(),
+      }
       setServerNotifs((prev) => {
         const next = [optimistic, ...(prev || []).filter((n: any) => n.id !== optimistic.id)]
         void saveCachedNotifications(next)
         return next
       })
+      if (type === 'contact_accepted' || type === 'save_request_accepted') {
+        void refreshContacts()
+      }
       void refreshNotifCount?.()
     }
-    window.addEventListener('sc:rt-notif', onStatusLike)
-    window.addEventListener('sc:rt-status-new', onStatusLike)
+    window.addEventListener('sc:rt-notif', onRealtimeNotification)
     return () => {
-      window.removeEventListener('sc:rt-notif', onStatusLike)
-      window.removeEventListener('sc:rt-status-new', onStatusLike)
+      window.removeEventListener('sc:rt-notif', onRealtimeNotification)
     }
-  }, [refreshNotifCount])
+  }, [refreshContacts, refreshNotifCount])
 
   useEffect(() => {
     const onInvite = (ev: Event) => {
@@ -172,11 +183,20 @@ export function Notifications({
 
   useEffect(() => {
     let alive = true
+    const refreshStartedAt = Date.now()
     ;(async () => {
       try {
         const cached = await loadCachedNotifications<any>()
         if (alive && cached?.length) {
-          setServerNotifs(cached)
+          setServerNotifs((current) => {
+            const cachedIds = new Set(cached.map((n: any) => String(n.id)))
+            const recent = current.filter(
+              (n: any) =>
+                !cachedIds.has(String(n.id)) &&
+                Date.parse(String(n.created_at || '')) >= refreshStartedAt,
+            )
+            return [...recent, ...cached]
+          })
           setIncoming(cached)
           setLoading(false)
         }
@@ -206,10 +226,19 @@ export function Notifications({
             }
           })
           ;(window as any).__sc_server_notifs = list
-          void saveCachedNotifications(list)
-          setServerNotifs(list)
+          setServerNotifs((current) => {
+            const serverIds = new Set(list.map((n: any) => String(n.id)))
+            const recent = current.filter(
+              (n: any) =>
+                !serverIds.has(String(n.id)) &&
+                Date.parse(String(n.created_at || '')) >= refreshStartedAt,
+            )
+            const merged = [...recent, ...list]
+            void saveCachedNotifications(merged)
+            return merged
+          })
           void refreshNotifCount?.()
-          if (list.some((n: any) => n.type === 'contact_accepted')) {
+          if (list.some((n: any) => ['contact_accepted', 'save_request_accepted'].includes(n.type))) {
             void refreshContacts()
           }
         })
@@ -228,7 +257,7 @@ export function Notifications({
       const next = new Set(prev)
       next.add(id)
       try {
-        localStorage.setItem('sc_notif_read', JSON.stringify([...next]))
+        kvSet('sc_notif_read', JSON.stringify([...next]))
       } catch {
         /* */
       }
@@ -270,7 +299,7 @@ export function Notifications({
       const next = new Set(prev)
       all.forEach((id) => next.add(id))
       try {
-        localStorage.setItem('sc_notif_read', JSON.stringify([...next]))
+        kvSet('sc_notif_read', JSON.stringify([...next]))
       } catch {
         /* */
       }
@@ -340,7 +369,7 @@ export function Notifications({
         } as any)
         continue
       }
-      if (n.type === 'contact_accepted') {
+      if (n.type === 'contact_accepted' || n.type === 'save_request_accepted') {
         const id = `cacc-${n.id}`
         out.push({
           id,
@@ -397,10 +426,22 @@ export function Notifications({
         } as any)
         continue
       }
+      const id = String(n.id || `system-${out.length}`)
+      out.push({
+        id,
+        kind: 'system',
+        title: n.title || 'Notification',
+        body: n.body || '',
+        when: timeLabel(n.created_at),
+        iso: n.created_at,
+        unread: !n.read && !readIds.has(id),
+        contactId: n.actor_id,
+        photo: n.actor_photo ?? null,
+      })
     }
     // Premium lifecycle (local, once per event)
     try {
-      const raw = localStorage.getItem('sc_local_notifs')
+      const raw = kvGet('sc_local_notifs')
       const local: any[] = raw ? JSON.parse(raw) : []
       for (const n of local) {
         if (!n?.id) continue
@@ -416,15 +457,20 @@ export function Notifications({
         })
       }
     } catch { /* */ }
-    // Lightweight system tips (always available)
-    out.push({
-      id: 'sys-tips',
-      kind: 'system',
-      title: 'Stay private',
-      body: 'You control who sees your phone number when they save you.',
-      when: 'Tips',
-      unread: !readIds.has('sys-tips'),
-    })
+    // Stay private tip — only once ever (set on first signup/login), never again
+    try {
+      const tipState = kvGet('sc_tip_stay_private')
+      if (tipState === 'pending') {
+        out.push({
+          id: 'sys-tips',
+          kind: 'system',
+          title: 'Stay private',
+          body: 'You control who sees your phone number when they save you.',
+          when: 'Tips',
+          unread: !readIds.has('sys-tips'),
+        })
+      }
+    } catch { /* */ }
 
     out.sort((a, b) => {
       const ta = a.iso ? Date.parse(a.iso) : 0
@@ -434,6 +480,16 @@ export function Notifications({
     })
     return out
   }, [incoming, calls, contacts, readIds, serverNotifs, gameDoneIds])
+
+
+  // Consume stay-private tip permanently once seen/read
+  useEffect(() => {
+    try {
+      if (readIds.has('sys-tips') && kvGet('sc_tip_stay_private') === 'pending') {
+        kvSet('sc_tip_stay_private', 'done')
+      }
+    } catch { /* */ }
+  }, [readIds])
 
   itemsRef.current = items
 
@@ -451,10 +507,10 @@ export function Notifications({
       const unread = list.filter((i) => i.unread)
       if (unread.length) {
         try {
-          const raw = localStorage.getItem('sc_notif_read')
+          const raw = kvGet('sc_notif_read')
           const next = new Set(raw ? JSON.parse(raw) : [])
           unread.forEach((i) => next.add(i.id))
-          localStorage.setItem('sc_notif_read', JSON.stringify([...next]))
+          kvSet('sc_notif_read', JSON.stringify([...next]))
         } catch {
           /* */
         }

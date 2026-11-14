@@ -8,6 +8,7 @@ from app.core.security import (
     hash_password,
     verify_password,
     create_access_token,
+    create_password_reset_token,
     create_refresh_token,
     hash_token,
     generate_session_id,
@@ -132,7 +133,7 @@ class AuthService:
     async def login(
         data: LoginRequest,
         request: Optional[Request] = None,
-    ) -> Tuple[dict, str, str]:
+    ) -> Tuple[dict, Optional[str], Optional[str], Optional[str]]:
         db = get_database()
         user = None
         if getattr(data, "username", None):
@@ -143,21 +144,80 @@ class AuthService:
             # also try without leading +
             if user is None and phone.startswith("+"):
                 user = await db.users.find_one({"phone_number": phone[1:]})
-        if not user or not verify_password(data.password, user["password_hash"]):
+        if not user:
+            raise UnauthorizedError("Invalid username or password")
+
+        if not verify_password(data.password, user["password_hash"]):
+            reset_hash = user.get("password_reset_token_hash")
+            reset_nonce = user.get("password_reset_nonce")
+            reset_expires = user.get("password_reset_expires_at")
+            if isinstance(reset_expires, datetime) and reset_hash and reset_nonce:
+                if reset_expires.tzinfo is None:
+                    reset_expires = reset_expires.replace(tzinfo=timezone.utc)
+                if (
+                    reset_expires > datetime.now(timezone.utc)
+                    and verify_password(data.password, reset_hash)
+                ):
+                    status = user.get(
+                        "account_status", AccountStatus.ACTIVE.value
+                    )
+                    if status != AccountStatus.ACTIVE.value:
+                        if status == AccountStatus.DEACTIVATED.value:
+                            raise AccountRestrictedError("Account is deactivated")
+                        raise AccountRestrictedError(
+                            f"Account is {status}",
+                            details={"status": status},
+                        )
+                    user_id = str(user["_id"])
+                    await db.user_activity_logs.insert_one(
+                        {
+                            "user_id": user_id,
+                            "event_type": "auth",
+                            "action": "password_reset_token_login",
+                            "resource_type": "user",
+                            "resource_id": user_id,
+                            "timestamp": datetime.now(timezone.utc),
+                            "metadata": {},
+                            "ip_address": request.client.host
+                            if request and request.client
+                            else None,
+                        }
+                    )
+                    reset_login_token = create_password_reset_token(
+                        user_id,
+                        str(reset_nonce),
+                        int(user.get("auth_version", 0)),
+                    )
+                    return (
+                        {
+                            "id": user_id,
+                            "username": user["username"],
+                            "display_name": user.get("display_name")
+                            or user["username"],
+                            "account_status": user.get(
+                                "account_status", AccountStatus.ACTIVE.value
+                            ),
+                        },
+                        None,
+                        None,
+                        reset_login_token,
+                    )
+
             # Log failed attempt
-            if user:
-                await db.user_activity_logs.insert_one(
-                    {
-                        "user_id": str(user["_id"]),
-                        "event_type": "auth",
-                        "action": "login_failed",
-                        "resource_type": "user",
-                        "resource_id": str(user["_id"]),
-                        "timestamp": datetime.now(timezone.utc),
-                        "metadata": {},
-                        "ip_address": request.client.host if request and request.client else None,
-                    }
-                )
+            await db.user_activity_logs.insert_one(
+                {
+                    "user_id": str(user["_id"]),
+                    "event_type": "auth",
+                    "action": "login_failed",
+                    "resource_type": "user",
+                    "resource_id": str(user["_id"]),
+                    "timestamp": datetime.now(timezone.utc),
+                    "metadata": {},
+                    "ip_address": request.client.host
+                    if request and request.client
+                    else None,
+                }
+            )
             raise UnauthorizedError("Invalid username or password")
 
         status = user.get("account_status", AccountStatus.ACTIVE.value)
@@ -173,6 +233,24 @@ class AuthService:
         if status == AccountStatus.DEACTIVATED.value:
             raise AccountRestrictedError("Account is deactivated")
 
+        reset_hash = user.get("password_reset_token_hash")
+        reset_nonce = user.get("password_reset_nonce")
+        if reset_hash and reset_nonce:
+            await db.users.update_one(
+                {
+                    "_id": user["_id"],
+                    "password_reset_token_hash": reset_hash,
+                    "password_reset_nonce": reset_nonce,
+                },
+                {
+                    "$unset": {
+                        "password_reset_token_hash": "",
+                        "password_reset_nonce": "",
+                        "password_reset_expires_at": "",
+                    }
+                },
+            )
+
         user_id = str(user["_id"])
         session_id = generate_session_id()
         now = datetime.now(timezone.utc)
@@ -183,6 +261,7 @@ class AuthService:
             extra_claims={
                 "role": user.get("account_role", Role.USER.value),
                 "username": user["username"],
+                "auth_version": user.get("auth_version", 0),
             },
         )
         refresh_token = create_refresh_token(subject=user_id, session_id=session_id)
@@ -190,6 +269,7 @@ class AuthService:
         session_doc = {
             "user_id": user_id,
             "token_hash": hash_token(refresh_token),
+            "auth_version": user.get("auth_version", 0),
             "device_id": data.device_id,
             "device_name": data.device_name,
             "user_agent": request.headers.get("user-agent") if request else None,
@@ -250,7 +330,7 @@ class AuthService:
             "email": user.get("email"),
             "phone_number": user.get("phone_number"),
         }
-        return user_public, access_token, refresh_token
+        return user_public, access_token, refresh_token, None
 
     @staticmethod
     async def refresh(refresh_token: str) -> Tuple[str, str]:
@@ -281,6 +361,8 @@ class AuthService:
         user = await db.users.find_one({"_id": ObjectId(user_id)})
         if not user:
             raise UnauthorizedError("User not found")
+        if session.get("auth_version", 0) != user.get("auth_version", 0):
+            raise UnauthorizedError("Session was revoked after a password change")
 
         status = user.get("account_status", AccountStatus.ACTIVE.value)
         if status not in (AccountStatus.ACTIVE.value,):
@@ -300,6 +382,7 @@ class AuthService:
             extra_claims={
                 "role": user.get("account_role", Role.USER.value),
                 "username": user["username"],
+                "auth_version": user.get("auth_version", 0),
             },
         )
         new_refresh = create_refresh_token(subject=user_id, session_id=new_session_id)
@@ -308,6 +391,7 @@ class AuthService:
             {
                 "user_id": user_id,
                 "token_hash": hash_token(new_refresh),
+                "auth_version": user.get("auth_version", 0),
                 "device_id": session.get("device_id"),
                 "device_name": session.get("device_name"),
                 "user_agent": session.get("user_agent"),
@@ -352,6 +436,9 @@ class AuthService:
         user = await db.users.find_one({"_id": ObjectId(user_id)})
         if not user:
             raise UnauthorizedError("User not found")
+
+        if payload.get("auth_version", 0) != user.get("auth_version", 0):
+            raise UnauthorizedError("Password was reset. Sign in again")
 
         status = user.get("account_status", AccountStatus.ACTIVE.value)
         if status not in (AccountStatus.ACTIVE.value,):

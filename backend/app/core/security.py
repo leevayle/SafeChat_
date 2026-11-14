@@ -46,6 +46,30 @@ def create_access_token(
     return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
 
 
+def create_password_reset_token(
+    subject: str,
+    reset_nonce: str,
+    auth_version: int,
+    expires_delta: Optional[timedelta] = None,
+) -> str:
+    if expires_delta is None:
+        expires_delta = timedelta(minutes=10)
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {
+            "sub": str(subject),
+            "type": "password_reset",
+            "reset_nonce": reset_nonce,
+            "auth_version": auth_version,
+            "exp": now + expires_delta,
+            "iat": now,
+            "jti": secrets.token_urlsafe(16),
+        },
+        settings.SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+
+
 def create_refresh_token(
     subject: str,
     session_id: str,

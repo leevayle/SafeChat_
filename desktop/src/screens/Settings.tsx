@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, type ReactNode } from 'react'
+import { useCallback, useRef, useState, useEffect, type ReactNode } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   User, Lock, Bell, MessageSquare, Database, Shield, Globe, HelpCircle, LogOut,
@@ -21,7 +21,9 @@ import { api } from '../api'
 import { ImageCropper } from '../components/ImageCropper'
 import { LogoIcon, Wordmark } from '../components/Logo'
 import { fileToDataUrl } from '../lib/imageProcess'
+import { StatusAudiencePicker } from '../components/StatusAudiencePicker'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 const WHO = ['Everyone', 'My contacts', 'Nobody']
 const themeLabelFromId = (id: string) =>
   THEMES[id as keyof typeof THEMES]?.label || THEMES.purple.label
@@ -97,12 +99,14 @@ export function Settings({
   onBack,
   onLogout,
   onSupport,
+  onPasswordChanged,
 }: {
   onBack: () => void
   onLogout: () => void
   onSupport?: () => void
+  onPasswordChanged: () => Promise<void>
 }) {
-  const { settings: s, setSetting, saveProfile, contacts, me , syncSubscription } = useStore()
+  const { settings: s, setSetting, saveProfile, contacts, me, syncSubscription, refreshContacts } = useStore()
   useEffect(() => {
     void syncSubscription?.()
   }, [syncSubscription])
@@ -124,6 +128,18 @@ export function Settings({
   const [deletePhrase, setDeletePhrase] = useState('')
   const [deletingAccount, setDeletingAccount] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [blockedContacts, setBlockedContacts] = useState<any[]>([])
+  const [blockedLoading, setBlockedLoading] = useState(false)
+  const [blockedBusyId, setBlockedBusyId] = useState<string | null>(null)
+  const [blockedDeleteTarget, setBlockedDeleteTarget] = useState<any | null>(null)
+  const [passwordChangeOpen, setPasswordChangeOpen] = useState(false)
+  const [passwordChangeBusy, setPasswordChangeBusy] = useState(false)
+  const [passwordChangeError, setPasswordChangeError] = useState('')
+  const [passwordChange, setPasswordChange] = useState({
+    current: '',
+    next: '',
+    confirm: '',
+  })
   const [chatPinStep, setChatPinStep] = useState<'idle' | 'warn' | 'set' | 'confirm' | 'change' | 'disable' | 'forgot' | 'forgot_confirm' | 'forgot_list'>('idle')
   const [chatPinDraft, setChatPinDraft] = useState('')
   const [chatPinConfirm, setChatPinConfirm] = useState('')
@@ -132,8 +148,80 @@ export function Settings({
   const [lockedChatPreview, setLockedChatPreview] = useState<{ id: string; name: string }[]>([])
   const [deletingLocks, setDeletingLocks] = useState(false)
   const [hasChatPin, setHasChatPin] = useState(() => {
-    try { return !!localStorage.getItem('sc_chat_lock_pin') } catch { return false }
+    try { return !!kvGet('sc_chat_lock_pin') } catch { return false }
   })
+
+  const loadBlockedContacts = useCallback(async () => {
+    setBlockedLoading(true)
+    try {
+      const { blocked } = await api.blockedContacts()
+      setBlockedContacts(blocked)
+      return true
+    } catch (e: any) {
+      setToast(e?.message || 'Could not load blocked contacts')
+      return false
+    } finally {
+      setBlockedLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (page === 'blocked') void loadBlockedContacts()
+  }, [page, loadBlockedContacts])
+
+  const unblockContact = async (contact: any) => {
+    setBlockedBusyId(contact.id)
+    try {
+      await api.unblockUser(contact.id)
+      await refreshContacts()
+      if (await loadBlockedContacts()) setToast('User unblocked')
+    } catch (e: any) {
+      setToast(e?.message || 'Could not unblock user')
+    } finally {
+      setBlockedBusyId(null)
+    }
+  }
+
+  const deleteBlockedContact = async (contact: any) => {
+    setBlockedBusyId(contact.id)
+    try {
+      await api.deleteContact(contact.id)
+      setBlockedDeleteTarget(null)
+      await refreshContacts()
+      if (await loadBlockedContacts()) {
+        setToast('Contact deleted. Unblock them before sending a new save request.')
+      }
+    } catch (e: any) {
+      setToast(e?.message || 'Could not delete contact')
+    } finally {
+      setBlockedBusyId(null)
+    }
+  }
+
+  const changeAccountPassword = async () => {
+    if (!passwordChange.current) {
+      setPasswordChangeError('Enter your current password')
+      return
+    }
+    if (passwordChange.next.length < 8) {
+      setPasswordChangeError('Your new password must be at least 8 characters')
+      return
+    }
+    if (passwordChange.next !== passwordChange.confirm) {
+      setPasswordChangeError('The new passwords do not match')
+      return
+    }
+    setPasswordChangeBusy(true)
+    setPasswordChangeError('')
+    try {
+      await api.changePassword(passwordChange.current, passwordChange.next)
+      await onPasswordChanged()
+    } catch (e: unknown) {
+      setPasswordChangeError(e instanceof Error ? e.message : 'Could not change your password')
+    } finally {
+      setPasswordChangeBusy(false)
+    }
+  }
 
   const [savingProfile, setSavingProfile] = useState(false)
   const [busyUpdating, setBusyUpdating] = useState(false)
@@ -560,6 +648,31 @@ export function Settings({
                     'Only share with…',
                   ])}
                 />
+                {s.statusPrivacy !== 'My contacts' && (
+                  <div className="space-y-2 px-4 pb-4">
+                    <p className="text-xs font-semibold text-gray-500">
+                      {s.statusPrivacy === 'Only share with…'
+                        ? 'Only selected contacts can view your status.'
+                        : 'Selected contacts will not see your status.'}
+                    </p>
+                    <StatusAudiencePicker
+                      contacts={contacts}
+                      selectedIds={
+                        s.statusPrivacy === 'Only share with…'
+                          ? s.statusSelectedContacts || []
+                          : s.statusExcludedContacts || []
+                      }
+                      onChange={(ids) =>
+                        setSetting(
+                          s.statusPrivacy === 'Only share with…'
+                            ? 'statusSelectedContacts'
+                            : 'statusExcludedContacts',
+                          ids,
+                        )
+                      }
+                    />
+                  </div>
+                )}
               </Card>
               <Card>
                 <Row
@@ -877,6 +990,79 @@ export function Settings({
               <Card>
                 <div className="space-y-3 px-3 py-3">
                   <div>
+                    <p className="text-sm font-extrabold text-ink">Account password</p>
+                    <p className="mt-1 text-xs font-semibold leading-relaxed text-gray-400">
+                      Changing your password signs out every active device.
+                    </p>
+                  </div>
+                  {!passwordChangeOpen ? (
+                    <button
+                      type="button"
+                      className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
+                      onClick={() => {
+                        setPasswordChangeError('')
+                        setPasswordChange({ current: '', next: '', confirm: '' })
+                        setPasswordChangeOpen(true)
+                      }}
+                    >
+                      Change password
+                    </button>
+                  ) : (
+                    <div className="space-y-3">
+                      <input
+                        type="password"
+                        autoComplete="current-password"
+                        value={passwordChange.current}
+                        onChange={(event) => setPasswordChange((value) => ({ ...value, current: event.target.value }))}
+                        placeholder="Current password"
+                        className="h-12 w-full rounded-2xl bg-gray-100 px-4 font-semibold outline-none focus:ring-2 focus:ring-brand-purple/25"
+                      />
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        value={passwordChange.next}
+                        onChange={(event) => setPasswordChange((value) => ({ ...value, next: event.target.value }))}
+                        placeholder="New password (at least 8 characters)"
+                        className="h-12 w-full rounded-2xl bg-gray-100 px-4 font-semibold outline-none focus:ring-2 focus:ring-brand-purple/25"
+                      />
+                      <input
+                        type="password"
+                        autoComplete="new-password"
+                        value={passwordChange.confirm}
+                        onChange={(event) => setPasswordChange((value) => ({ ...value, confirm: event.target.value }))}
+                        placeholder="Confirm new password"
+                        className="h-12 w-full rounded-2xl bg-gray-100 px-4 font-semibold outline-none focus:ring-2 focus:ring-brand-purple/25"
+                        onKeyDown={(event) => event.key === 'Enter' && void changeAccountPassword()}
+                      />
+                      {passwordChangeError && (
+                        <p className="text-sm font-bold text-brand-red">{passwordChangeError}</p>
+                      )}
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          disabled={passwordChangeBusy}
+                          onClick={() => setPasswordChangeOpen(false)}
+                          className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-600 disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={passwordChangeBusy}
+                          onClick={() => void changeAccountPassword()}
+                          className="flex-1 rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white disabled:opacity-50"
+                        >
+                          {passwordChangeBusy ? 'Updating…' : 'Update password'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Card>
+
+              <Card>
+                <div className="space-y-3 px-3 py-3">
+                  <div>
                     <p className="text-sm font-extrabold text-ink">Chat lock PIN</p>
                     <p className="mt-1 text-xs font-semibold leading-relaxed text-gray-400">
                       Used to lock individual chats from the chat menu. Keep this PIN safe.
@@ -1026,7 +1212,7 @@ export function Settings({
                           return
                         }
                         try {
-                          localStorage.setItem('sc_chat_lock_pin', chatPinDraft)
+                          kvSet('sc_chat_lock_pin', chatPinDraft)
                           setHasChatPin(true)
                           setChatPinStep('idle')
                           setChatPinDraft('')
@@ -1082,7 +1268,7 @@ export function Settings({
                       className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
                       onClick={() => {
                         try {
-                          const cur = localStorage.getItem('sc_chat_lock_pin') || ''
+                          const cur = kvGet('sc_chat_lock_pin') || ''
                           if (chatPinDraft !== cur) {
                             setChatPinError('Current PIN is wrong')
                             return
@@ -1091,7 +1277,7 @@ export function Settings({
                             setChatPinError('New PIN must be at least 4 digits')
                             return
                           }
-                          localStorage.setItem('sc_chat_lock_pin', chatPinConfirm)
+                          kvSet('sc_chat_lock_pin', chatPinConfirm)
                           setChatPinStep('idle')
                           setChatPinDraft('')
                           setChatPinConfirm('')
@@ -1134,14 +1320,14 @@ export function Settings({
                       className="mt-4 w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white"
                       onClick={() => {
                         try {
-                          const cur = localStorage.getItem('sc_chat_lock_pin') || ''
+                          const cur = kvGet('sc_chat_lock_pin') || ''
                           if (chatPinDraft !== cur) {
                             setChatPinError('Wrong PIN')
                             return
                           }
-                          localStorage.removeItem('sc_chat_lock_pin')
-                          localStorage.removeItem('sc_chat_locks')
-                          localStorage.removeItem('sc_chats_locked')
+                          kvRemove('sc_chat_lock_pin')
+                          kvRemove('sc_chat_locks')
+                          kvRemove('sc_chats_locked')
                           setHasChatPin(false)
                           setChatPinStep('idle')
                           setChatPinDraft('')
@@ -1214,7 +1400,7 @@ export function Settings({
                         // Build list of locked chats for final screen
                         let locks: Record<string, unknown> = {}
                         try {
-                          locks = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+                          locks = JSON.parse(kvGet('sc_chat_locks') || '{}')
                         } catch { /* */ }
                         const ids = Object.keys(locks).filter((k) => locks[k])
                         const chats = (typeof window !== 'undefined' && (window as any).__sc_chats_snap) || []
@@ -1262,16 +1448,11 @@ export function Settings({
                         const ids = lockedChatPreview.map((c) => c.id)
                         const n = ids.length
                         try {
+                          // Store handles server delete → cache clear → home feed remove
                           window.dispatchEvent(new CustomEvent('sc:delete-locked-chats', { detail: { ids } }))
-                          // Best-effort server delete per conversation if API exists
-                          for (const id of ids) {
-                            try {
-                              await (api as any).deleteConversation(id)
-                            } catch { /* */ }
-                          }
-                          localStorage.removeItem('sc_chat_lock_pin')
-                          localStorage.removeItem('sc_chat_locks')
-                          localStorage.removeItem('sc_chats_locked')
+                          kvRemove('sc_chat_lock_pin')
+                          kvRemove('sc_chat_locks')
+                          kvRemove('sc_chats_locked')
                           setHasChatPin(false)
                           setChatPinStep('idle')
                           setForgotPhrase('')
@@ -1940,13 +2121,46 @@ export function Settings({
 
           {page === 'blocked' && (
             <motion.div key="blocked" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }}>
-              <Card>
-                {(contacts || []).filter((c: any) => c.blocked).length === 0 ? (
+              <Card className="divide-y-0">
+                {blockedLoading ? (
+                  <p className="px-5 py-8 text-center text-sm font-bold text-gray-400">Loading blocked contacts…</p>
+                ) : blockedContacts.length === 0 ? (
                   <p className="px-5 py-8 text-center text-sm font-bold text-gray-400">No blocked contacts</p>
                 ) : (
-                  (contacts || [])
-                    .filter((c: any) => c.blocked)
-                    .map((c: any) => <Row key={c.id} label={c.name} value={c.username ? `@${c.username}` : undefined} />)
+                  <div className="divide-y divide-black/[0.06] dark:divide-white/[0.06]">
+                    {blockedContacts.map((contact: any) => (
+                      <div key={contact.id} className="flex items-center gap-3 px-4 py-3.5">
+                        <Avatar contact={contact} size={44} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-extrabold text-ink">{contact.name}</p>
+                          <p className="truncate text-xs font-semibold text-gray-400">
+                            {contact.username ? `@${contact.username}` : 'Blocked user'}
+                            {contact.isContact ? ' · Saved contact' : ''}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                          <button
+                            type="button"
+                            disabled={blockedBusyId === contact.id}
+                            onClick={() => void unblockContact(contact)}
+                            className="rounded-full bg-brand-purple/10 px-3 py-2 text-xs font-extrabold text-brand-purple disabled:opacity-50"
+                          >
+                            {blockedBusyId === contact.id ? 'Working…' : 'Unblock'}
+                          </button>
+                          {contact.isContact && (
+                            <button
+                              type="button"
+                              disabled={blockedBusyId === contact.id}
+                              onClick={() => setBlockedDeleteTarget(contact)}
+                              className="rounded-full bg-red-50 px-3 py-2 text-xs font-extrabold text-brand-red disabled:opacity-50"
+                            >
+                              Delete contact
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </Card>
             </motion.div>
@@ -1989,6 +2203,34 @@ export function Settings({
               setPicker(null)
             }}
           />
+        )}
+      </Sheet>
+
+      <Sheet
+        open={!!blockedDeleteTarget}
+        onClose={() => setBlockedDeleteTarget(null)}
+        title="Delete saved contact?"
+      >
+        {blockedDeleteTarget && (
+          <div className="space-y-4 pb-2">
+            <p className="text-sm font-semibold text-gray-500">
+              This removes the accepted save request and contact from both accounts. They will need to send a new save request to chat again. The block stays in place until you unblock them.
+            </p>
+            <PrimaryButton
+              danger
+              disabled={blockedBusyId === blockedDeleteTarget.id}
+              onClick={() => void deleteBlockedContact(blockedDeleteTarget)}
+            >
+              {blockedBusyId === blockedDeleteTarget.id ? 'Deleting…' : 'Delete contact'}
+            </PrimaryButton>
+            <button
+              type="button"
+              onClick={() => setBlockedDeleteTarget(null)}
+              className="w-full rounded-full bg-gray-100 py-3.5 text-sm font-extrabold text-gray-600"
+            >
+              Cancel
+            </button>
+          </div>
         )}
       </Sheet>
 

@@ -1,7 +1,8 @@
 """User profile endpoints."""
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+import re
 from bson import ObjectId
 from datetime import datetime, timezone
 from app.api.deps import get_current_user
@@ -53,6 +54,8 @@ class PreferencesUpdate(BaseModel):
     font_size: Optional[str] = None
     language: Optional[str] = None
     status_privacy: Optional[str] = None
+    status_selected_contacts: Optional[List[str]] = None
+    status_excluded_contacts: Optional[List[str]] = None
     status_validity: Optional[str] = None
     msg_notif: Optional[bool] = None
     group_notif: Optional[bool] = None
@@ -356,14 +359,39 @@ async def search_users(
     if len(query.strip()) < 2:
         raise ValidationError("Query must be at least 2 characters")
     db = get_database()
-    q = query.strip().lower()
+    q = query.strip()
+    digits = re.sub(r"\D", "", q)
+    phone_query = bool(digits) and bool(re.fullmatch(r"[+\d\s()-]+", q))
+    if phone_query:
+        prefixes = {digits}
+        if digits.startswith("254"):
+            prefixes.add("0" + digits[3:])
+        elif digits.startswith("0"):
+            prefixes.add("254" + digits[1:])
+        elif digits.startswith(("7", "1")):
+            prefixes.add("254" + digits)
+        phone_filters = []
+        for prefix in prefixes:
+            pattern = f"^\\+?{re.escape(prefix)}"
+            phone_filters.extend(
+                [
+                    {"phone_number": {"$regex": pattern, "$options": "i"}},
+                    {"phone": {"$regex": pattern, "$options": "i"}},
+                ]
+            )
+        search_filter = {"$or": phone_filters}
+    else:
+        escaped_query = re.escape(q)
+        search_filter = {
+            "$or": [
+                {"username": {"$regex": f"^{escaped_query}", "$options": "i"}},
+                {"display_name": {"$regex": escaped_query, "$options": "i"}},
+            ]
+        }
     cursor = (
         db.users.find(
             {
-                "$or": [
-                    {"username": {"$regex": f"^{q}", "$options": "i"}},
-                    {"display_name": {"$regex": q, "$options": "i"}},
-                ],
+                **search_filter,
                 "account_status": "active",
                 "_id": {"$ne": ObjectId(user["id"])},
             }
@@ -372,12 +400,25 @@ async def search_users(
     )
     results = []
     async for u in cursor:
+        user_phone = re.sub(r"\D", "", str(u.get("phone_number") or u.get("phone") or ""))
+        if user_phone.startswith("0") and len(user_phone) == 10:
+            user_phone = "254" + user_phone[1:]
+        elif len(user_phone) == 9 and user_phone.startswith(("7", "1")):
+            user_phone = "254" + user_phone
+        query_phone = digits
+        if query_phone.startswith("0") and len(query_phone) == 10:
+            query_phone = "254" + query_phone[1:]
+        elif len(query_phone) == 9 and query_phone.startswith(("7", "1")):
+            query_phone = "254" + query_phone
         results.append(
             {
                 "id": str(u["_id"]),
                 "username": u["username"],
                 "display_name": u["display_name"],
                 "profile_photo": u.get("profile_photo"),
+                "phone_match": phone_query
+                and len(query_phone) >= 9
+                and user_phone == query_phone,
             }
         )
     return success_response("Search results", results)

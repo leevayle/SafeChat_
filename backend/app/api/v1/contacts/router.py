@@ -14,6 +14,12 @@ async def list_contacts(user: dict = Depends(get_current_user)):
     return success_response("Contacts", contacts)
 
 
+@router.get("/blocked")
+async def list_blocked_contacts(user: dict = Depends(get_current_user)):
+    contacts = await ContactService.list_blocked_users(user["id"])
+    return success_response("Blocked contacts", contacts)
+
+
 @router.post("/requests", status_code=status.HTTP_201_CREATED)
 async def send_contact_request(
     body: ContactRequestCreate,

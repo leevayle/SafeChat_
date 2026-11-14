@@ -5,6 +5,7 @@ import { Avatar } from '../components/Avatar'
 import { api } from '../api'
 import { FONT_SIZES, resolveWallpaper, useStore } from '../store'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 const EMOJIS = [
   '😀','😁','😂','🤣','😃','😄','😅','😆','😉','😊','😋','😎','😍','😘','🥰','😗','😙','😚',
   '🙂','🤗','🤩','🤔','🤨','😐','😑','😶','🙄','😏','😣','😥','😮','🤐','😯','😪','😫','🥱',
@@ -79,7 +80,7 @@ export function GroupChat({
       from: me?.id || '',
       text: t,
       time: new Date().toISOString(),
-      timeLabel: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
+      timeLabel: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: (kvGet('sc_settings') ? (() => { try { return JSON.parse(kvGet('sc_settings') || '{}')?.timeFormat === '12h' } catch { return false } })() : false) }),
       state: 'pending' as const,
       mine: true,
     }

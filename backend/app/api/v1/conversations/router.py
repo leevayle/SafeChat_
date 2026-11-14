@@ -49,12 +49,31 @@ async def get_conversation(
 
 @router.delete("/{conversation_id}")
 async def delete_conversation(conversation_id: str, user: dict = Depends(get_current_user)):
-    """Remove membership / hide conversation for current user (best-effort)."""
+    """Delete the whole conversation thread for the current user.
+
+    Marks membership hidden and hard-deletes messages + receipts for private
+    chats so the thread is gone from the database.
+    """
+    await MessagingService.delete_conversation(conversation_id, user["id"])
+    return success_response("Conversation deleted")
+
+
+@router.patch("/{conversation_id}/pin")
+async def pin_conversation(conversation_id: str, body: dict, user: dict = Depends(get_current_user)):
+    from bson import ObjectId
     db = get_database()
     uid = user["id"]
+    pinned = bool(body.get("pinned", True))
+    now = datetime.now(timezone.utc)
     await db.conversation_members.update_one(
         {"conversation_id": conversation_id, "user_id": uid},
-        {"$set": {"hidden": True, "deleted_at": datetime.now(timezone.utc)}},
-        upsert=False,
+        {"$set": {"pinned": pinned, "pinned_at": now if pinned else None, "updated_at": now},
+         "$setOnInsert": {"conversation_id": conversation_id, "user_id": uid, "created_at": now, "hidden": False}},
+        upsert=True,
     )
-    return success_response("Conversation removed")
+    if ObjectId.is_valid(conversation_id):
+        await db.conversations.update_one(
+            {"_id": ObjectId(conversation_id)},
+            {"$set": {f"conversation_settings.{uid}.pinned": pinned, "updated_at": now}},
+        )
+    return success_response("Pin updated", {"conversation_id": conversation_id, "pinned": pinned})

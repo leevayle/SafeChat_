@@ -3,6 +3,7 @@ import { NavRail, type RailItem } from './NavRail'
 import { EmptyChatPane } from './EmptyChatPane'
 import { BottomNav, type Tab } from '../BottomNav'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../../lib/kv'
 const SIDEBAR_KEY = 'sc_sidebar_width'
 const RIGHT_KEY = 'sc_right_width_v2'
 const DEFAULT_SIDEBAR = 360
@@ -55,7 +56,7 @@ export function DesktopShell({
 }: Props) {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     try {
-      const n = Number(localStorage.getItem(SIDEBAR_KEY))
+      const n = Number(kvGet(SIDEBAR_KEY))
       if (n >= MIN_SIDEBAR && n <= MAX_SIDEBAR) return n
     } catch {
       /* */
@@ -64,7 +65,7 @@ export function DesktopShell({
   })
   const [rightWidth, setRightWidth] = useState(() => {
     try {
-      const n = Number(localStorage.getItem(RIGHT_KEY))
+      const n = Number(kvGet(RIGHT_KEY))
       if (n >= MIN_RIGHT && n <= MAX_RIGHT) return n
     } catch {
       /* */
@@ -79,7 +80,7 @@ export function DesktopShell({
   useEffect(() => {
     if (compact) return
     try {
-      localStorage.setItem(SIDEBAR_KEY, String(sidebarWidth))
+      kvSet(SIDEBAR_KEY, String(sidebarWidth))
     } catch {
       /* */
     }
@@ -87,7 +88,7 @@ export function DesktopShell({
 
   useEffect(() => {
     try {
-      localStorage.setItem(RIGHT_KEY, String(rightWidth))
+      kvSet(RIGHT_KEY, String(rightWidth))
     } catch {
       /* */
     }

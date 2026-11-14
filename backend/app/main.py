@@ -3,6 +3,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from app.core.limiter import limiter
 from app.core.config import settings
 from app.core.database import connect_to_mongo, close_mongo_connection
 from app.core.logging import setup_logging, print_boot_dots
@@ -19,14 +23,14 @@ from app.api.v1.notifications.router import router as notifications_router
 from app.api.v1.games.router import router as games_router
 from app.api.v1.payments.router import router as payments_router
 from app.api.v1.admin.router import router as admin_router
+from app.api.v1.support.router import router as support_router
+from app.api.v1.notes.router import router as notes_router
 from app.websocket.router import router as ws_router
 import logging
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-
-@asynccontextmanager
 
 def _print_ready_banner() -> None:
     """CLI banner: continuous SafeChat. with blue ellipsis."""
@@ -67,6 +71,7 @@ def _print_ready_banner() -> None:
 _boot_done = False
 
 
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     global _boot_done
     # Three brand dots down the CLI before any work
@@ -104,6 +109,10 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -167,6 +176,8 @@ app.include_router(notifications_router, prefix=settings.API_V1_PREFIX)
 app.include_router(games_router, prefix=settings.API_V1_PREFIX)
 app.include_router(payments_router, prefix=settings.API_V1_PREFIX)
 app.include_router(admin_router, prefix=settings.API_V1_PREFIX)
+app.include_router(support_router, prefix=settings.API_V1_PREFIX)
+app.include_router(notes_router, prefix=settings.API_V1_PREFIX)
 app.include_router(ws_router, prefix=settings.API_V1_PREFIX)
 
 

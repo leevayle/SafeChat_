@@ -61,6 +61,15 @@ class Settings(BaseSettings):
     LOGIN_RATE_LIMIT: str = "5/minute"
     API_RATE_LIMIT: str = "100/minute"
 
+    # Email
+    SMTP_HOST: Optional[str] = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_FROM_EMAIL: Optional[str] = None
+    SMTP_USE_TLS: bool = True
+    PASSWORD_RESET_TOKEN_EXPIRE_MINUTES: int = 30
+
     # Logging & archives
     LOG_LEVEL: str = "INFO"
     ARCHIVE_RETENTION_DAYS: int = 365

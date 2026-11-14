@@ -1,8 +1,9 @@
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/kv'
 /** UTC helpers — store/transmit UTC, display local. */
 
 function getHour12(): boolean {
   try {
-    const raw = localStorage.getItem('sc_settings')
+    const raw = kvGet('sc_settings')
     if (!raw) return false
     const s = JSON.parse(raw)
     return s?.timeFormat === '12h'

@@ -127,21 +127,30 @@ async function idbClear(store: StoreName) {
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
-const USER_KEY = 'sc_cache_owner'
+/** Cache owner — stored in IDB meta (same DB as chats/contacts/messages). */
+let _ownerMem: string | null | undefined
+
+const OWNER_META_ID = 'cache_owner'
 
 export function cacheOwnerId(): string | null {
-  try {
-    return localStorage.getItem(USER_KEY)
-  } catch {
-    return null
-  }
+  if (_ownerMem !== undefined) return _ownerMem
+  return null
 }
 
 export function setCacheOwner(userId: string) {
+  _ownerMem = userId || null
+  void idbPut('meta', { id: OWNER_META_ID, userId })
+}
+
+/** Call on boot so sync cacheOwnerId() works after reload. */
+export async function hydrateCacheOwner(): Promise<string | null> {
   try {
-    localStorage.setItem(USER_KEY, userId)
+    const row = await idbGet<{ id: string; userId?: string }>('meta', OWNER_META_ID)
+    _ownerMem = (row?.userId as string) || null
+    return _ownerMem
   } catch {
-    /* */
+    _ownerMem = null
+    return null
   }
 }
 
@@ -198,6 +207,12 @@ export async function saveCachedThread<T>(conversationId: string, items: T[]) {
   })
 }
 
+/** Remove one conversation thread from IndexedDB (after server delete succeeds). */
+export async function removeCachedThread(conversationId: string) {
+  if (!conversationId) return
+  await idbDelete('messages', conversationId)
+}
+
 // Statuses
 export async function loadCachedStatuses<T>(): Promise<T[]> {
   const row = await idbGet<{ id: string; items: T[] }>('statuses', 'list')
@@ -238,7 +253,7 @@ export async function saveCachedViewers<T>(statusId: string, items: T[]) {
   await idbPut('statusViewers', { id: statusId, items, updatedAt: Date.now() })
 }
 
-// Outbox — unsent / pending messages
+// Outbox — ordered unsent / pending messages with backoff
 export type OutboxItem = {
   id: string
   conversationId: string
@@ -247,18 +262,61 @@ export type OutboxItem = {
   image?: string | null
   createdAt: string
   payload?: Record<string, unknown>
+  /** send attempts so far */
+  attempts?: number
+  /** earliest time this item may be retried (ms epoch) */
+  nextAttemptAt?: number
+  status?: 'queued' | 'sending' | 'failed'
+  replyToId?: string
 }
 
 export async function loadOutbox(): Promise<OutboxItem[]> {
-  return idbGetAll<OutboxItem>('outbox')
+  const items = await idbGetAll<OutboxItem>('outbox')
+  return items.sort((a, b) => {
+    const ta = Date.parse(a.createdAt) || 0
+    const tb = Date.parse(b.createdAt) || 0
+    if (ta !== tb) return ta - tb
+    return String(a.id).localeCompare(String(b.id))
+  })
 }
 
 export async function putOutbox(item: OutboxItem) {
-  await idbPut('outbox', item)
+  await idbPut('outbox', {
+    ...item,
+    attempts: item.attempts ?? 0,
+    status: item.status || 'queued',
+    nextAttemptAt: item.nextAttemptAt ?? 0,
+  })
 }
 
 export async function removeOutbox(id: string) {
   await idbDelete('outbox', id)
+}
+
+/** Exponential backoff: 2s, 4s, 8s … capped at 5 min */
+export function outboxBackoffMs(attempts: number): number {
+  const base = 2000
+  const ms = Math.min(5 * 60 * 1000, base * Math.pow(2, Math.max(0, attempts - 1)))
+  const jitter = Math.floor(Math.random() * 400)
+  return ms + jitter
+}
+
+export async function markOutboxAttempt(id: string, failed: boolean) {
+  const items = await loadOutbox()
+  const item = items.find((x) => x.id === id)
+  if (!item) return
+  const attempts = (item.attempts || 0) + 1
+  await putOutbox({
+    ...item,
+    attempts,
+    status: failed ? 'failed' : 'sending',
+    nextAttemptAt: failed ? Date.now() + outboxBackoffMs(attempts) : 0,
+  })
+}
+
+export async function loadDueOutbox(now = Date.now()): Promise<OutboxItem[]> {
+  const items = await loadOutbox()
+  return items.filter((item) => (item.nextAttemptAt || 0) <= now)
 }
 
 // Meta timestamps for incremental sync hints

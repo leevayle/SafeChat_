@@ -13,6 +13,7 @@ class StatusType(str, Enum):
 
 class StatusVisibility(str, Enum):
     CONTACTS = "contacts"
+    CONTACTS_EXCEPT = "contacts_except"
     CLOSE_FRIENDS = "close_friends"
     EVERYONE = "everyone"
     SELECTED = "selected"
@@ -25,6 +26,7 @@ class StatusInDB(BaseModel):
     media_attachments: List[Dict[str, Any]] = Field(default_factory=list)
     visibility: StatusVisibility = StatusVisibility.CONTACTS
     selected_viewer_ids: List[str] = Field(default_factory=list)
+    excluded_viewer_ids: List[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc) + timedelta(hours=24)

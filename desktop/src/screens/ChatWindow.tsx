@@ -14,10 +14,16 @@ import { isRealtimeOpen, wsSendMessage, wsReceipt, wsLiveTyping, wsTyping } from
 import { FONT_SIZES, resolveWallpaper, useStore } from '../store'
 import { playInboxLandingChime } from '../lib/sounds'
 import { compressForWeb } from '../lib/imageProcess'
-import { getCachedMessages, setCachedMessages, hydrateThreadFromDisk } from '../lib/messageCache'
+import {
+  getCachedMessages,
+  mergeCachedMessages,
+  mergeMessageLists,
+  hydrateThreadFromDisk,
+} from '../lib/messageCache'
 import { warmPhoto } from '../lib/photoCache'
 import { putOutbox, removeOutbox } from '../lib/appCache'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 type Props = { contactId: string; onBack: () => void; onCall: (kind: 'audio' | 'video') => void; onOpenCalls?: () => void; onOpenStatus?: (userId: string, statusId?: string) => void }
 
 const REACT_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const
@@ -60,6 +66,14 @@ function pickState(a?: string, b?: string): ApiMsg['state'] | undefined {
   if (!a) return b as ApiMsg['state']
   if (!b) return a as ApiMsg['state']
   return rankState(a) >= rankState(b) ? (a as ApiMsg['state']) : (b as ApiMsg['state'])
+}
+
+function newClientMessageKey() {
+  const randomId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return `local-${randomId}`
 }
 
 function sameMsgList(a: ApiMsg[], b: ApiMsg[]) {
@@ -221,11 +235,12 @@ const MessageBubble = memo(function MessageBubble({
       }}
       className={`group/bubble relative flex ${mine ? 'justify-end' : 'justify-start'} ${highlight ? 'z-10' : ''}`}
     >
+      <div className="relative inline-flex max-w-[85%] items-start">
       {/* Desktop: hover actions */}
       {!m.deleted && (
         <div
-          className={`pointer-events-none absolute z-20 hidden items-center gap-0.5 rounded-full border border-black/5 bg-white px-0.5 py-0.5 shadow-md dark:border-white/10 dark:bg-[#1a222d] md:pointer-events-auto md:group-hover/bubble:flex ${
-            mine ? '-left-1 -top-1' : '-right-1 -top-1'
+          className={`pointer-events-none absolute top-1/2 z-20 hidden -translate-y-1/2 items-center gap-0.5 rounded-full border border-black/5 bg-white px-0.5 py-0.5 shadow-md dark:border-white/10 dark:bg-[#1a222d] md:pointer-events-auto md:group-hover/bubble:flex ${
+            mine ? 'right-full mr-1' : 'left-full ml-1'
           }`}
           onMouseLeave={() => setHoverReact(false)}
         >
@@ -440,12 +455,14 @@ const MessageBubble = memo(function MessageBubble({
           ))}
         </div>
       )}
+      </div>
     </motion.div>
   )
 })
 
 function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus }: Props) {
-  const { settings, contacts, chats, me, showToast, upsertChatPreview, statusList, setActiveConversationId, busyMap, presenceMap } = useStore()
+  const sendingKeysRef = useRef<Set<string>>(new Set())
+  const { settings, contacts, chats, me, showToast, upsertChatPreview, statusList, setActiveConversationId, busyMap, presenceMap, refreshContacts } = useStore()
   // Resolve peer from contacts, or from an existing chat preview (notifications may pass contactId)
   const chatPreview =
     chats.find(
@@ -498,11 +515,31 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     if (c?.photo) warmPhoto(String(c.id || peerId), c.photo, API_ORIGIN)
   }, [peerId, c?.photo, c?.id])
 
+  useEffect(() => {
+    let active = true
+    setPeerBlocked(null)
+    if (isSelfChat) {
+      setPeerBlocked(false)
+      return
+    }
+    void api
+      .blockedContacts()
+      .then(({ blocked }) => {
+        if (active) setPeerBlocked(blocked.some((contact) => contact.id === peerId))
+      })
+      .catch(() => {
+        if (active) setPeerBlocked(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [isSelfChat, peerId])
+
   const [conversationId, setConversationId] = useState<string | null>(knownConv)
   const [msgs, setMsgs] = useState<ApiMsg[]>([])
   const [text, setText] = useState(() => {
     try {
-      const map = JSON.parse(localStorage.getItem('sc_composer_drafts') || '{}')
+      const map = JSON.parse(kvGet('sc_composer_drafts') || '{}')
       return typeof map[contactId] === 'string' ? map[contactId] : ''
     } catch { return '' }
   })
@@ -518,12 +555,13 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
   const [blockOpen, setBlockOpen] = useState(false)
+  const [peerBlocked, setPeerBlocked] = useState<boolean | null>(null)
   const [lockPrompt, setLockPrompt] = useState(false)
   const [lockPinDraft, setLockPinDraft] = useState('')
   const [lockPinError, setLockPinError] = useState('')
   const [chatLocked, setChatLocked] = useState(() => {
     try {
-      const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+      const map = JSON.parse(kvGet('sc_chat_locks') || '{}')
       return !!(map[contactId])
     } catch { return false }
   })
@@ -582,7 +620,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [chatMenu, setChatMenu] = useState(false)
   const [chatMuted, setChatMuted] = useState(() => {
     try {
-      const map = JSON.parse(localStorage.getItem('sc_chat_muted') || '{}')
+      const map = JSON.parse(kvGet('sc_chat_muted') || '{}')
       return !!map[contactId]
     } catch {
       return false
@@ -726,7 +764,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                 (p.mine ?? true) &&
                 (p.text === sm.text ||
                   (!!p.image && !!sm.image && p.image === sm.image)) &&
-                (!!p.image === !!sm.image),
+                (!!p.image === !!sm.image) &&
+                Math.abs((Date.parse(p.time) || 0) - (Date.parse(sm.time) || 0)) < 120000,
             )
           if (match) {
             if (match.clientKey) claimedKeys.add(match.clientKey)
@@ -783,7 +822,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         )
         if (sameMsgList(prev, stable)) return prev
         if (!stable.length && prev.length) return prev
-        setCachedMessages(cid, stable)
+        void mergeCachedMessages(cid, stable)
         return stable
       })
       api.markRead(cid).catch(() => {})
@@ -841,7 +880,11 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         void hydrateThreadFromDisk(knownConv).then((disk) => {
           if (disk?.length && convRef.current === knownConv) {
             seedKeys(disk)
-            setMsgs(disk)
+            setMsgs((prev) => {
+              const merged = mergeMessageLists(disk, prev)
+              void mergeCachedMessages(knownConv, merged)
+              return merged
+            })
             setLoading(false)
             requestAnimationFrame(() => {
               end.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
@@ -943,33 +986,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               : x,
           )
         }
-        // Match optimistic local-* or near-duplicate body
-        const near = prev.find((x) => {
-          if ((x.mine ?? false) !== mine) return false
-          if (String(x.id).startsWith('local-') || String(x.clientKey || '').startsWith('local-')) {
-            if ((x.text || '') === (incoming.text || '') && !!x.image === !!incoming.image) return true
-          }
-          if ((x.text || '') !== (incoming.text || '')) return false
-          if (!!x.image !== !!incoming.image) return false
-          const dt = Math.abs((Date.parse(x.time) || 0) - (Date.parse(incoming.time) || 0))
-          return dt < 30000
-        })
-        if (near) {
-          return prev.map((x) =>
-            x === near || x.id === near.id || (near.clientKey && x.clientKey === near.clientKey)
-              ? {
-                  ...x,
-                  id: incoming.id || x.id,
-                  clientKey: x.clientKey || near.clientKey || incoming.id,
-                  state: rankState(incoming.state) >= rankState(x.state) ? (incoming.state as any) : x.state,
-                  time: incoming.time || x.time,
-                  replyToId: incoming.replyToId || x.replyToId,
-                  replyToText: incoming.replyToText || x.replyToText,
-                }
-              : x,
-          )
-        }
-        return [...prev, incoming as any]
+        // A distinct server id is a distinct message, even when text is identical.
+        return [...prev, incoming as any].sort(
+          (a, b) => (Date.parse(a.time) || 0) - (Date.parse(b.time) || 0),
+        )
       })
       if (!mine && openCid) {
         void api.markRead(openCid).catch(() => {})
@@ -996,6 +1016,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           changed = true
           return { ...x, state: nextState }
         })
+        if (changed && openCid) {
+          void mergeCachedMessages(openCid, next)
+        }
         return changed ? next : prev
       })
     }
@@ -1009,12 +1032,34 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       }
       if (!detail?.ck) return
       if (!detail.ok) {
+        const openCid = convRef.current
+        const cached = getCachedMessages(openCid)?.find(
+          (message) => message.id === detail.ck || message.clientKey === detail.ck,
+        )
+        if (cached && openCid) {
+          void mergeCachedMessages(openCid, [{ ...cached, state: 'failed' }])
+        }
         setMsgs((prev) =>
           prev.map((x) =>
             x.clientKey === detail.ck || x.id === detail.ck ? { ...x, state: 'failed' } : x,
           ),
         )
         return
+      }
+      const openCid = convRef.current
+      const cached = getCachedMessages(openCid)?.find(
+        (message) => message.id === detail.ck || message.clientKey === detail.ck,
+      )
+      if (cached && openCid) {
+        void mergeCachedMessages(openCid, [
+          {
+            ...cached,
+            id: detail.id || cached.id,
+            state: pickState((detail.s as any) || 'sent', cached.state),
+            time: detail.ts || cached.time,
+            timeLabel: detail.ts ? formatLocalTime(detail.ts) : cached.timeLabel,
+          },
+        ])
       }
       setMsgs((prev) =>
         prev.map((x) =>
@@ -1272,8 +1317,14 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     localId: string,
     body: string,
     img: string | null,
-    opts?: { replyToId?: string; statusReply?: { preview: string; time?: string; statusId?: string } },
+    opts?: {
+      replyToId?: string
+      statusReply?: { preview: string; time?: string; statusId?: string }
+    },
+    optimistic?: ApiMsg,
   ) => {
+    if (sendingKeysRef.current.has(localId)) return
+    sendingKeysRef.current.add(localId)
     try {
       const cid = await ensureConversation()
       if (!cid) {
@@ -1295,6 +1346,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         setConversationId(cid)
         convRef.current = cid
       }
+      if (optimistic) {
+        await mergeCachedMessages(cid, [{ ...optimistic, conversationId: cid }])
+      }
       // Prefer persistent WebSocket (no new HTTP handshake)
       let wsText = body || ''
       if (opts?.statusReply) {
@@ -1309,11 +1363,19 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         replyToId: opts?.replyToId || undefined,
       })
       if (usedWs) {
+        // Prevent outbox flush from re-sending the same message
+        void removeOutbox(localId)
+        sendingKeysRef.current.delete(localId)
         // Ack arrives via sc:rt-ack / store onAck → updates ticks to sent
-        // Optimistic already shows pending; WS ack will flip to sent
         return
       }
-      const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img, opts)
+      const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img, {
+        clientKey: localId,
+        ...opts,
+      })
+      await mergeCachedMessages(cid, [
+        { ...message, clientKey: message.clientKey || localId, conversationId: cid },
+      ])
       // In-place receipt update only - never replace/remove the printed bubble
       setMsgs((m) =>
         m.map((x) =>
@@ -1336,6 +1398,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         ),
       )
       void removeOutbox(localId)
+      sendingKeysRef.current.delete(localId)
       upsertChatPreview({
         contactId: (c as any).peerId || contactId,
         conversationId: cid,
@@ -1349,6 +1412,14 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         time: message.timeLabel,
       })
     } catch (e: any) {
+      sendingKeysRef.current.delete(localId)
+      const failedCid = convRef.current || conversationId || knownConv
+      const cached = getCachedMessages(failedCid)?.find(
+        (message) => message.id === localId || message.clientKey === localId,
+      )
+      if (cached && failedCid) {
+        void mergeCachedMessages(failedCid, [{ ...cached, state: 'failed' }])
+      }
       setMsgs((m) => m.map((x) => (x.id === localId ? { ...x, state: 'failed' } : x)))
       upsertChatPreview({
         contactId: (c as any).peerId || contactId,
@@ -1379,12 +1450,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     // Stop live preview on peer as soon as we send
     pushLiveDraft('')
     try {
-      const map = JSON.parse(localStorage.getItem('sc_composer_drafts') || '{}')
+      const map = JSON.parse(kvGet('sc_composer_drafts') || '{}')
       delete map[contactId]
-      localStorage.setItem('sc_composer_drafts', JSON.stringify(map))
+      kvSet('sc_composer_drafts', JSON.stringify(map))
     } catch { /* */ }
 
-    const localId = `local-${Date.now()}`
+    const localId = newClientMessageKey()
     const nowIso = utcNowIso()
     const timeLabel = formatLocalTime(nowIso)
     const previewText = statusSnap
@@ -1433,7 +1504,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     void deliverMessage(localId, body, img, {
       replyToId: replySnap?.id,
       statusReply: statusSnap || undefined,
-    })
+    }, optimistic)
   }
 
   const retryFailed = (m: ApiMsg) => {
@@ -1443,7 +1514,13 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       list.map((x) => (x.id === m.id || x.clientKey === key ? { ...x, state: 'pending' } : x)),
     )
     showToast('Retrying…')
-    void deliverMessage(key, m.text === '📷 Photo' ? '' : m.text, m.image || null)
+    void deliverMessage(
+      key,
+      m.text === '📷 Photo' ? '' : m.text,
+      m.image || null,
+      undefined,
+      { ...m, state: 'pending' },
+    )
   }
 
   const onPickImage = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -1596,25 +1673,27 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const applyReact = async (emoji: string) => {
     if (!actionMsg) return
     const id = actionMsg.id
+    if (!id || String(id).startsWith('local-')) {
+      showToast('Wait for the message to send')
+      return
+    }
     const meId = me?.id
+    const minePrev = (actionMsg.reactions || []).find((r: any) => !r.user_id || (meId && r.user_id === meId))
+    const same = minePrev && minePrev.emoji === emoji
     setMsgs((list) =>
       list.map((m) => {
         if (m.id !== id) return m
-        // One reaction per user: drop my previous, set new (or clear if same)
         const others = (m.reactions || []).filter((r: any) => r.user_id && meId && r.user_id !== meId)
-        const minePrev = (m.reactions || []).find((r: any) => !r.user_id || (meId && r.user_id === meId))
-        const same = minePrev && (minePrev.emoji === emoji)
-        const reactions = same
-          ? others
-          : [...others, { emoji, user_id: meId }]
+        const reactions = same ? others : [...others, { emoji, user_id: meId }]
         return { ...m, reactions }
       }),
     )
     setActionMsg(null)
     try {
-      await api.reactMessage(id, emoji)
+      if (same) await api.removeReaction(id, emoji)
+      else await api.reactMessage(id, emoji)
     } catch {
-      /* */
+      showToast('Could not update reaction')
     }
   }
 
@@ -1730,23 +1809,65 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }, [contactId])
 
-  // Load self notes into timeline when self chat
+  // Load self notes into timeline when self chat (local cache + server sync)
   useEffect(() => {
     if (!isSelfChat || !me?.id) return
     try {
-      const raw = localStorage.getItem(`sc_notes_${me.id}`)
+      const raw = kvGet(`sc_notes_${me.id}`)
       setSelfNoteItems(raw ? JSON.parse(raw) : [])
     } catch {
       setSelfNoteItems([])
     }
+    let cancelled = false
+    void (async () => {
+      try {
+        const localRaw = kvGet(`sc_notes_${me.id}`)
+        const local = localRaw ? JSON.parse(localRaw) : []
+        const localOnly = (local as any[]).filter(
+          (n) => !n?.id || !/^[a-f0-9]{24}$/i.test(String(n.id)),
+        )
+        const remote = localOnly.length
+          ? await api.syncNotes(
+              localOnly.map((n: any) => ({
+                id: n.id,
+                kind: n.kind,
+                title: n.title,
+                body: n.body,
+                items: n.items || [],
+                remind_at: n.remindAt || null,
+                pinned: !!n.pinned,
+              })),
+            )
+          : await api.listNotes()
+        if (cancelled) return
+        const mapped = remote.map((n) => ({
+          id: n.id,
+          kind: n.kind,
+          title: n.title,
+          body: n.body,
+          items: n.items,
+          remindAt: n.remindAt,
+          pinned: n.pinned,
+          createdAt: n.createdAt,
+          updatedAt: n.updatedAt,
+        }))
+        kvSet(`sc_notes_${me.id}`, JSON.stringify(mapped))
+        setSelfNoteItems(mapped)
+      } catch {
+        /* keep local */
+      }
+    })()
     const onStorage = () => {
       try {
-        const raw = localStorage.getItem(`sc_notes_${me.id}`)
+        const raw = kvGet(`sc_notes_${me.id}`)
         setSelfNoteItems(raw ? JSON.parse(raw) : [])
       } catch { /* */ }
     }
     window.addEventListener('sc_notes_preview', onStorage)
-    return () => window.removeEventListener('sc_notes_preview', onStorage)
+    return () => {
+      cancelled = true
+      window.removeEventListener('sc_notes_preview', onStorage)
+    }
   }, [isSelfChat, me?.id])
 
   useEffect(() => {
@@ -1792,7 +1913,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return
             try {
-              const pin = localStorage.getItem('sc_chat_lock_pin') || ''
+              const pin = kvGet('sc_chat_lock_pin') || ''
               if (pin && lockPinDraft === pin) {
                 setUnlockedThisSession(true)
                 setLockPinDraft('')
@@ -1812,7 +1933,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           className="mt-4 w-full max-w-xs rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
           onClick={() => {
             try {
-              const pin = localStorage.getItem('sc_chat_lock_pin') || ''
+              const pin = kvGet('sc_chat_lock_pin') || ''
               if (pin && lockPinDraft === pin) {
                 setUnlockedThisSession(true)
                 setLockPinDraft('')
@@ -1980,9 +2101,9 @@ return (
                     setChatMuted((m) => {
                       const next = !m
                       try {
-                        const map = JSON.parse(localStorage.getItem('sc_chat_muted') || '{}')
+                        const map = JSON.parse(kvGet('sc_chat_muted') || '{}')
                         map[contactId] = next
-                        localStorage.setItem('sc_chat_muted', JSON.stringify(map))
+                        kvSet('sc_chat_muted', JSON.stringify(map))
                       } catch { /* ignore */ }
                       return next
                     })
@@ -2014,14 +2135,21 @@ return (
                 </button>
                 <button
                   type="button"
-                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold text-brand-red hover:bg-red-50"
+                  disabled={peerBlocked === null}
+                  className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold disabled:opacity-50 ${
+                    peerBlocked ? 'text-brand-purple hover:bg-brand-purple/5' : 'text-brand-red hover:bg-red-50'
+                  }`}
                   onClick={() => {
                     setChatMenu(false)
                     setBlockOpen(true)
                   }}
                 >
-                  <Ban size={18} />
-                  Block
+                  {peerBlocked ? (
+                    <Unlock size={18} className="text-brand-purple" />
+                  ) : (
+                    <Ban size={18} />
+                  )}
+                  {peerBlocked === null ? 'Checking…' : peerBlocked ? 'Unblock' : 'Block'}
                 </button>
                 <button
                   type="button"
@@ -2029,7 +2157,7 @@ return (
                   onClick={() => {
                     setChatMenu(false)
                     let pin = ''
-                    try { pin = localStorage.getItem('sc_chat_lock_pin') || '' } catch { /* */ }
+                    try { pin = kvGet('sc_chat_lock_pin') || '' } catch { /* */ }
                     if (!pin) {
                       showToast?.('Set a chat lock PIN in Settings → Security')
                       try {
@@ -2144,18 +2272,59 @@ return (
                 const saved = { ...selfEditor, updatedAt: now, _isNew: undefined }
                 try {
                   const key = `sc_notes_${me.id}`
-                  const prev = JSON.parse(localStorage.getItem(key) || '[]') as any[]
+                  const prev = JSON.parse(kvGet(key) || '[]') as any[]
                   const idx = prev.findIndex((x) => x.id === saved.id)
                   let next: any[]
                   if (idx >= 0) next = prev.map((x, i) => (i === idx ? saved : x))
                   else next = [saved, ...prev]
                   next.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0))
-                  localStorage.setItem(key, JSON.stringify(next))
+                  kvSet(key, JSON.stringify(next))
                   setSelfNoteItems(next)
                   window.dispatchEvent(new CustomEvent('sc_notes_preview'))
                 } catch { /* */ }
                 setSelfEditor(null)
-                showToast?.('Saved')
+                // Sync to server so notes follow the user across devices
+                void (async () => {
+                  try {
+                    const payload = {
+                      id: saved.id,
+                      kind: saved.kind,
+                      title: saved.title || '',
+                      body: saved.body || '',
+                      items: saved.items || [],
+                      remind_at: saved.remindAt || null,
+                      pinned: !!saved.pinned,
+                    }
+                    const isMongo = /^[a-f0-9]{24}$/i.test(String(saved.id || ''))
+                    const remote = isMongo
+                      ? await api.updateNote(String(saved.id), payload)
+                      : await api.createNote(payload)
+                    if (remote?.id && me?.id) {
+                      try {
+                        const key = `sc_notes_${me.id}`
+                        const prev = JSON.parse(kvGet(key) || '[]') as any[]
+                        const mapped = {
+                          id: remote.id,
+                          kind: remote.kind,
+                          title: remote.title,
+                          body: remote.body,
+                          items: remote.items,
+                          remindAt: remote.remindAt,
+                          pinned: remote.pinned,
+                          createdAt: remote.createdAt,
+                          updatedAt: remote.updatedAt,
+                        }
+                        const without = prev.filter((x) => x.id !== saved.id && x.id !== remote.id)
+                        const next = [mapped, ...without]
+                        kvSet(key, JSON.stringify(next))
+                        setSelfNoteItems(next)
+                      } catch { /* */ }
+                    }
+                    showToast?.('Saved · syncs across devices')
+                  } catch {
+                    showToast?.('Saved on this device')
+                  }
+                })()
               }}
             >
               Save
@@ -2332,25 +2501,28 @@ return (
                   animateIn={animateIn}
                   onRetry={retryFailed}
                   onReactEmoji={(msg, emoji) => {
-                    setActionMsg(msg)
-                    // apply after state — use direct call path
                     void (async () => {
                       const id = msg.id
+                      if (!id || String(id).startsWith('local-')) {
+                        showToast('Wait for the message to send')
+                        return
+                      }
                       const meId = me?.id
+                      const minePrev = (msg.reactions || []).find((r: any) => !r.user_id || (meId && r.user_id === meId))
+                      const same = !!(minePrev && minePrev.emoji === emoji)
                       setMsgs((list) =>
                         list.map((x) => {
                           if (x.id !== id) return x
                           const others = (x.reactions || []).filter((r: any) => r.user_id && meId && r.user_id !== meId)
-                          const minePrev = (x.reactions || []).find((r: any) => !r.user_id || (meId && r.user_id === meId))
-                          const same = minePrev && minePrev.emoji === emoji
                           const reactions = same ? others : [...others, { emoji, user_id: meId }]
                           return { ...x, reactions }
                         }),
                       )
                       try {
-                        await api.reactMessage(id, emoji)
+                        if (same) await api.removeReaction(id, emoji)
+                        else await api.reactMessage(id, emoji)
                       } catch {
-                        /* */
+                        showToast('Could not update reaction')
                       }
                     })()
                   }}
@@ -2457,7 +2629,7 @@ return (
 
       
       {actionMsg && !editing && !forwardOpen && (
-        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40" onClick={() => setActionMsg(null)}>
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45 md:items-center md:justify-center" onClick={() => setActionMsg(null)}>
           <div className="rounded-t-3xl bg-white px-4 pb-8 pt-3" onClick={(e) => e.stopPropagation()}>
             <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gray-200" />
             <div className="mb-3 flex justify-center gap-2">
@@ -2498,8 +2670,8 @@ return (
       )}
 
       {editing && actionMsg && (
-        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/40">
-          <div className="rounded-t-3xl bg-white p-4 pb-8">
+        <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45 md:items-center md:justify-center">
+          <div className="rounded-t-3xl bg-white p-4 pb-8 shadow-[0_-12px_40px_rgba(0,0,0,0.25)] md:w-full md:max-w-md md:rounded-3xl">
             <p className="mb-2 text-sm font-extrabold text-gray-500">Edit message</p>
             <textarea value={editText} onChange={(e) => setEditText(e.target.value)} className="min-h-[80px] w-full rounded-2xl bg-gray-100 p-3 font-semibold outline-none" />
             <div className="mt-3 flex gap-2">
@@ -2557,11 +2729,8 @@ return (
                 />
               </div>
             </div>
-            <h2 className="mt-4 flex items-center justify-center gap-1.5 text-2xl font-black text-ink">
+            <h2 className="mt-4 text-2xl font-black text-ink">
               {isSelfChat ? `Me (${me?.name || (c as any).publicName || c.name || 'You'})` : c.name}
-              {(!!(c as any).verifiedBadge || !!(c as any).premium) && (
-                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-brand-purple text-[10px] font-black text-white" title="Premium">✓</span>
-              )}
             </h2>
             {(c as any).publicName && (c as any).publicName !== c.name ? (
               <p className="mt-1 text-sm font-semibold text-gray-500">
@@ -2643,7 +2812,7 @@ return (
               <div className="rounded-2xl bg-gray-50 px-4 py-3">
                 <p className="text-[11px] font-black uppercase tracking-wide text-gray-400">Bio</p>
                 <p className="mt-1 text-sm font-semibold text-ink">
-                  {(c as any).bio || c.bio || 'No bio yet'}
+                  {(c as any).bio || c.bio || contactHit?.bio || 'No bio yet'}
                 </p>
               </div>
               {c.phone ? (
@@ -2776,10 +2945,10 @@ return (
                   // Live typing for all users - stream each change (type + delete)
                   pushLiveDraft(val)
                   try {
-                    const map = JSON.parse(localStorage.getItem('sc_composer_drafts') || '{}')
+                    const map = JSON.parse(kvGet('sc_composer_drafts') || '{}')
                     if (val) map[contactId] = val
                     else delete map[contactId]
-                    localStorage.setItem('sc_composer_drafts', JSON.stringify(map))
+                    kvSet('sc_composer_drafts', JSON.stringify(map))
                   } catch { /* */ }
                 }}
                 onKeyDown={(e) => {
@@ -2970,12 +3139,12 @@ return (
               onKeyDown={(e) => {
                 if (e.key !== 'Enter') return
                 try {
-                  const pin = localStorage.getItem('sc_chat_lock_pin') || ''
+                  const pin = kvGet('sc_chat_lock_pin') || ''
                   if (!pin || lockPinDraft !== pin) {
                     setLockPinError('Wrong PIN')
                     return
                   }
-                  const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+                  const map = JSON.parse(kvGet('sc_chat_locks') || '{}')
                   if (chatLocked) {
                     delete map[contactId]
                     setChatLocked(false)
@@ -2987,7 +3156,7 @@ return (
                     setUnlockedThisSession(false)
                     showToast?.('Chat locked')
                   }
-                  localStorage.setItem('sc_chat_locks', JSON.stringify(map))
+                  kvSet('sc_chat_locks', JSON.stringify(map))
                   setLockPrompt(false)
                   setLockPinDraft('')
                 } catch {
@@ -3003,12 +3172,12 @@ return (
               className="mt-4 w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
               onClick={() => {
                 try {
-                  const pin = localStorage.getItem('sc_chat_lock_pin') || ''
+                  const pin = kvGet('sc_chat_lock_pin') || ''
                   if (!pin || lockPinDraft !== pin) {
                     setLockPinError('Wrong PIN')
                     return
                   }
-                  const map = JSON.parse(localStorage.getItem('sc_chat_locks') || '{}')
+                  const map = JSON.parse(kvGet('sc_chat_locks') || '{}')
                   if (chatLocked) {
                     delete map[contactId]
                     setChatLocked(false)
@@ -3020,7 +3189,7 @@ return (
                     setUnlockedThisSession(false)
                     showToast?.('Chat locked')
                   }
-                  localStorage.setItem('sc_chat_locks', JSON.stringify(map))
+                  kvSet('sc_chat_locks', JSON.stringify(map))
                   setLockPrompt(false)
                   setLockPinDraft('')
                 } catch {
@@ -3039,32 +3208,49 @@ return (
 
       
       {blockOpen && (
-        <div className="absolute inset-0 z-[55] flex flex-col justify-end bg-black/40" onClick={() => setBlockOpen(false)}>
-          <div className="rounded-t-3xl bg-white px-5 pb-8 pt-4" onClick={(e) => e.stopPropagation()}>
+        <div className="absolute inset-0 z-[55] flex flex-col justify-end bg-black/45 md:items-center md:justify-center" onClick={() => setBlockOpen(false)}>
+          <div className="rounded-t-3xl bg-white px-5 pb-8 pt-4 shadow-[0_-12px_40px_rgba(0,0,0,0.25)] md:w-full md:max-w-md md:rounded-3xl" onClick={(e) => e.stopPropagation()}>
             <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-gray-200" />
-            <p className="text-lg font-black">Block {c.name.split(' ')[0]}?</p>
+            <p className="text-lg font-black">{peerBlocked ? 'Unblock' : 'Block'} {c.name.split(' ')[0]}?</p>
             <p className="mt-2 text-sm font-semibold text-gray-500">
-              They won&apos;t be able to message or call you. Existing chats stay on your device but they can&apos;t reach you until you unblock.
+              {peerBlocked
+                ? 'They will be able to message and call you again.'
+                : 'They won’t be able to message or call you. You can unblock them at any time.'}
             </p>
             <button
               type="button"
               disabled={blocking}
-              className="mt-5 w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white disabled:opacity-50"
+              className={`mt-5 w-full rounded-full py-3.5 text-sm font-extrabold text-white disabled:opacity-50 ${
+                peerBlocked ? 'bg-brand-purple' : 'bg-brand-red'
+              }`}
               onClick={async () => {
                 setBlocking(true)
                 try {
-                  await api.blockUser(peerId || contactId)
-                  showToast('User blocked')
+                  if (peerBlocked) {
+                    await api.unblockUser(peerId || contactId)
+                    setPeerBlocked(false)
+                    showToast('User unblocked')
+                  } else {
+                    await api.blockUser(peerId || contactId)
+                    setPeerBlocked(true)
+                    showToast('User blocked')
+                  }
+                  await refreshContacts()
                   setBlockOpen(false)
-                  onBack()
                 } catch (e: any) {
-                  showToast(e?.message || 'Could not block')
+                  showToast(e?.message || `Could not ${peerBlocked ? 'unblock' : 'block'}`)
                 } finally {
                   setBlocking(false)
                 }
               }}
             >
-              {blocking ? 'Blocking…' : 'Block'}
+              {blocking
+                ? peerBlocked
+                  ? 'Unblocking…'
+                  : 'Blocking…'
+                : peerBlocked
+                  ? 'Unblock'
+                  : 'Block'}
             </button>
             <button
               type="button"

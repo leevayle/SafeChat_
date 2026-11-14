@@ -77,6 +77,8 @@ docker compose up -d --build
 | POST | `/api/v1/auth/logout` | Revoke session |
 | GET | `/api/v1/auth/me` | Current user (Bearer) |
 | POST | `/api/v1/auth/change-password` | Change password |
+| POST | `/api/v1/auth/password-reset/request` | Email a one-time temporary password |
+| POST | `/api/v1/auth/password-reset/complete` | Set a new password after reset-token login |
 
 All responses follow:
 
@@ -158,3 +160,10 @@ Registration endpoints:
 - `POST /api/v1/auth/register` requires the `registration_token` returned by verification.
 
 Codes expire after five minutes by default, have a 60-second resend cooldown and five verification attempts. OTP values are stored as keyed hashes. Existing users sign in with their phone number and password.
+
+Password reset emails require SMTP settings in `.env` (`SMTP_HOST`, `SMTP_PORT`,
+`SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`, and `SMTP_USE_TLS`). Reset
+credentials expire after `PASSWORD_RESET_TOKEN_EXPIRE_MINUTES` (30 by default).
+Signing in with the existing password cancels a pending credential; signing in
+with the temporary credential starts a restricted flow that requires a new
+password. Completing a reset revokes all active sessions.

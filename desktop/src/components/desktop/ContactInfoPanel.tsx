@@ -3,6 +3,7 @@ import { Avatar } from '../Avatar'
 import { useStore } from '../../store'
 import { useState } from 'react'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../../lib/kv'
 type Props = {
   contactId: string
   onCall?: (kind: 'audio' | 'video') => void
@@ -48,7 +49,7 @@ export function ContactInfoPanel({ contactId, onCall, onChat }: Props) {
 
   const [muted, setMuted] = useState(() => {
     try {
-      const map = JSON.parse(localStorage.getItem('sc_chat_muted') || '{}')
+      const map = JSON.parse(kvGet('sc_chat_muted') || '{}')
       return !!map[contactId]
     } catch {
       return false
@@ -91,9 +92,9 @@ export function ContactInfoPanel({ contactId, onCall, onChat }: Props) {
     setMuted((m) => {
       const next = !m
       try {
-        const map = JSON.parse(localStorage.getItem('sc_chat_muted') || '{}')
+        const map = JSON.parse(kvGet('sc_chat_muted') || '{}')
         map[contactId] = next
-        localStorage.setItem('sc_chat_muted', JSON.stringify(map))
+        kvSet('sc_chat_muted', JSON.stringify(map))
       } catch {
         /* */
       }
@@ -182,7 +183,7 @@ export function ContactInfoPanel({ contactId, onCall, onChat }: Props) {
           <div className="rounded-2xl bg-gray-50 px-4 py-3 dark:bg-white/5">
             <p className="text-[11px] font-black uppercase tracking-wide text-gray-400">Bio</p>
             <p className="mt-1 text-sm font-semibold text-ink dark:text-gray-200">
-              {(c as any).bio || 'No bio yet'}
+              {((c as any).bio || '').trim() || 'No bio yet'}
             </p>
           </div>
           {c.phone ? (

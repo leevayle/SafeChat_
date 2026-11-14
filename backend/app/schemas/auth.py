@@ -47,11 +47,20 @@ class LoginRequest(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: Optional[str] = None
 
 
 class PasswordChangeRequest(BaseModel):
     current_password: str
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetCompletionRequest(BaseModel):
+    reset_login_token: str = Field(..., min_length=20, max_length=4096)
     new_password: str = Field(..., min_length=8, max_length=128)
 
 

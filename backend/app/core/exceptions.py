@@ -61,6 +61,13 @@ class AccountRestrictedError(AppException):
         )
 
 
+class ServiceUnavailableError(AppException):
+    def __init__(self, message: str = "Service temporarily unavailable"):
+        super().__init__(
+            message, "SERVICE_UNAVAILABLE", status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+
+
 def error_response(
     message: str,
     error_code: str = "ERROR",

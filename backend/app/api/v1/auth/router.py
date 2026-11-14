@@ -1,21 +1,50 @@
 """Authentication endpoints."""
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, status, Response
+from fastapi.responses import JSONResponse
 from app.schemas.auth import (
     RegisterRequest,
     LoginRequest,
     RefreshRequest,
     PasswordChangeRequest,
+    PasswordResetRequest,
+    PasswordResetCompletionRequest,
 )
 from app.services.auth_service import AuthService
-from app.core.exceptions import success_response, UnauthorizedError
+from app.core.exceptions import (
+    success_response,
+    UnauthorizedError,
+)
 from app.core.config import settings
 from app.api.deps import get_current_user
-from app.core.security import hash_password, verify_password
+from app.core.security import hash_password, verify_password, decode_token
 from app.core.database import get_database
+from app.services.email_service import EmailService
+from app.services.password_reset_service import PasswordResetService
 from bson import ObjectId
 from datetime import datetime, timezone
+from app.core.limiter import limiter
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+def _attach_refresh_cookie(response: Response, refresh: str) -> None:
+    """HttpOnly refresh cookie (cross-site friendly for Pages ↔ Render)."""
+    from app.core.config import settings
+    max_age = int(settings.REFRESH_TOKEN_EXPIRE_DAYS) * 86400
+    response.set_cookie(
+        key="sc_refresh",
+        value=refresh,
+        httponly=True,
+        secure=True,  # required with SameSite=None
+        samesite="none",
+        max_age=max_age,
+        path="/",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(key="sc_refresh", path="/", samesite="none", secure=True)
+
+
 
 
 @router.get("/username/check")
@@ -127,16 +156,34 @@ async def verify_phone_code(body: dict):
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED)
-async def register(body: RegisterRequest):
+@limiter.limit(settings.LOGIN_RATE_LIMIT)
+async def register(request: Request, body: RegisterRequest):
     # Let AppException bubble to global handler so status codes are correct
     user = await AuthService.register(body)
     return success_response("Registration successful", user)
 
 
 @router.post("/login")
-async def login(body: LoginRequest, request: Request):
-    user, access, refresh = await AuthService.login(body, request)
-    return success_response(
+@limiter.limit(settings.LOGIN_RATE_LIMIT)
+async def login(request: Request, body: LoginRequest):
+    user, access, refresh, reset_login_token = await AuthService.login(body, request)
+    if reset_login_token:
+        response = JSONResponse(
+            content=success_response(
+                "Password reset required",
+                {
+                    "user": user,
+                    "password_reset_required": True,
+                    "password_reset_token": reset_login_token,
+                },
+            )
+        )
+        _clear_refresh_cookie(response)
+        return response
+    if not access or not refresh:
+        raise UnauthorizedError("Login did not create an authenticated session")
+
+    payload = success_response(
         "Login successful",
         {
             "user": user,
@@ -146,12 +193,123 @@ async def login(body: LoginRequest, request: Request):
             "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         },
     )
+    resp = JSONResponse(content=payload)
+    _attach_refresh_cookie(resp, refresh)
+    return resp
+
+
+@router.post("/password-reset/request")
+@limiter.limit("5/hour")
+async def request_password_reset(
+    request: Request,
+    body: PasswordResetRequest,
+):
+    EmailService.ensure_configured()
+    db = get_database()
+    email = str(body.email).strip().lower()
+    user = await db.users.find_one(
+        {"email": email, "account_status": "active"},
+        {"_id": 1, "username": 1, "email": 1},
+    )
+    if user:
+        await PasswordResetService.issue_token(
+            user,
+            invalidate_sessions=False,
+        )
+    return success_response(
+        "If an active account uses that email, a temporary password has been sent."
+    )
+
+
+@router.post("/password-reset/complete")
+@limiter.limit("10/minute")
+async def complete_password_reset(
+    request: Request,
+    body: PasswordResetCompletionRequest,
+):
+    try:
+        payload = decode_token(body.reset_login_token)
+    except ValueError as exc:
+        raise UnauthorizedError("Invalid password reset session") from exc
+    if payload.get("type") != "password_reset":
+        raise UnauthorizedError("Invalid password reset session")
+    user_id = payload.get("sub")
+    reset_nonce = payload.get("reset_nonce")
+    if not user_id or not reset_nonce or not ObjectId.is_valid(user_id):
+        raise UnauthorizedError("Invalid password reset session")
+
+    db = get_database()
+    user_oid = ObjectId(user_id)
+    user = await db.users.find_one({"_id": user_oid})
+    if not user or user.get("password_reset_nonce") != reset_nonce:
+        raise UnauthorizedError("Password reset credential is expired or already used")
+    if int(user.get("auth_version", 0)) != int(payload.get("auth_version", -1)):
+        raise UnauthorizedError("Password reset credential is expired or already used")
+    expires_at = user.get("password_reset_expires_at")
+    if not expires_at:
+        raise UnauthorizedError("Password reset credential is expired or already used")
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if expires_at <= now:
+        raise UnauthorizedError("Password reset credential is expired or already used")
+
+    result = await db.users.update_one(
+        {
+            "_id": user_oid,
+            "password_reset_nonce": reset_nonce,
+        },
+        {
+            "$set": {
+                "password_hash": hash_password(body.new_password),
+                "updated_at": now,
+            },
+            "$inc": {"auth_version": 1},
+            "$unset": {
+                "password_reset_token_hash": "",
+                "password_reset_nonce": "",
+                "password_reset_expires_at": "",
+            },
+        },
+    )
+    if result.modified_count != 1:
+        raise UnauthorizedError("Password reset credential is expired or already used")
+
+    sessions = await db.sessions.update_many(
+        {"user_id": user_id, "revoked": False},
+        {"$set": {"revoked": True, "revoked_at": now}},
+    )
+    await db.user_activity_logs.insert_one(
+        {
+            "user_id": user_id,
+            "event_type": "auth",
+            "action": "password_reset",
+            "resource_type": "user",
+            "resource_id": user_id,
+            "timestamp": now,
+            "metadata": {"revoked_sessions": sessions.modified_count},
+        }
+    )
+    return success_response(
+        "Password updated. Sign in again with your new password.",
+        {"revoked_sessions": sessions.modified_count},
+    )
 
 
 @router.post("/refresh")
-async def refresh_token(body: RefreshRequest):
-    access, refresh = await AuthService.refresh(body.refresh_token)
-    return success_response(
+@limiter.limit("30/minute")
+async def refresh_token(request: Request, body: RefreshRequest = RefreshRequest()):
+    # Prefer HttpOnly cookie; fall back to body for older clients
+    token = None
+    if body and getattr(body, "refresh_token", None):
+        token = body.refresh_token
+    if not token:
+        token = request.cookies.get("sc_refresh")
+    if not token:
+        from app.core.exceptions import UnauthorizedError
+        raise UnauthorizedError("Missing refresh token")
+    access, refresh = await AuthService.refresh(token)
+    payload = success_response(
         "Token refreshed",
         {
             "access_token": access,
@@ -160,12 +318,24 @@ async def refresh_token(body: RefreshRequest):
             "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         },
     )
+    resp = JSONResponse(content=payload)
+    _attach_refresh_cookie(resp, refresh)
+    return resp
 
 
 @router.post("/logout")
-async def logout(body: RefreshRequest):
-    await AuthService.logout(body.refresh_token)
-    return success_response("Logged out successfully")
+async def logout(request: Request, body: RefreshRequest = RefreshRequest()):
+    token = None
+    if body and getattr(body, "refresh_token", None):
+        token = body.refresh_token
+    if not token:
+        token = request.cookies.get("sc_refresh")
+    if token:
+        await AuthService.logout(token)
+    payload = success_response("Logged out successfully")
+    resp = JSONResponse(content=payload)
+    _clear_refresh_cookie(resp)
+    return resp
 
 
 @router.get("/me")
@@ -278,14 +448,29 @@ async def change_password(
 
     db = get_database()
     now = datetime.now(timezone.utc)
-    await db.users.update_one(
-        {"_id": ObjectId(user["id"])},
+    updated = await db.users.update_one(
+        {
+            "_id": ObjectId(user["id"]),
+            "password_hash": user["password_hash"],
+        },
         {
             "$set": {
                 "password_hash": hash_password(body.new_password),
                 "updated_at": now,
-            }
+            },
+            "$inc": {"auth_version": 1},
+            "$unset": {
+                "password_reset_token_hash": "",
+                "password_reset_nonce": "",
+                "password_reset_expires_at": "",
+            },
         },
+    )
+    if updated.modified_count != 1:
+        raise UnauthorizedError("Password changed in another session. Sign in again.")
+    sessions = await db.sessions.update_many(
+        {"user_id": user["id"], "revoked": False},
+        {"$set": {"revoked": True, "revoked_at": now}},
     )
     await db.user_activity_logs.insert_one(
         {
@@ -295,7 +480,10 @@ async def change_password(
             "resource_type": "user",
             "resource_id": user["id"],
             "timestamp": now,
-            "metadata": {},
+            "metadata": {"revoked_sessions": sessions.modified_count},
         }
     )
-    return success_response("Password changed successfully")
+    return success_response(
+        "Password changed. Sign in again with your new password.",
+        {"revoked_sessions": sessions.modified_count},
+    )

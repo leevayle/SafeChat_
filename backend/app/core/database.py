@@ -211,6 +211,21 @@ async def create_indexes() -> None:
     await database.system_audit_logs.create_index("timestamp")
     await database.system_audit_logs.create_index("actor_id")
 
+    # admin_role_requests - one pending or processing request per target
+    await database.admin_role_requests.create_index(
+        "pending_target_user_id", unique=True, sparse=True
+    )
+
+    # Admin portal presence expires shortly after heartbeats stop.
+    await database.admin_presence.create_index("last_seen", expireAfterSeconds=120)
+
+    # support_tickets
+    await database.support_tickets.create_index([("user_id", 1), ("updated_at", -1)])
+    await database.support_tickets.create_index([("status", 1), ("updated_at", -1)])
+    await database.support_tickets.create_index(
+        [("assigned_admin_id", 1), ("status", 1), ("updated_at", -1)]
+    )
+
     logger.info("All MongoDB indexes created/verified")
 
     after_total = 0

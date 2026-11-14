@@ -17,6 +17,7 @@
  */
 import { hasAccessToken, isSessionDead, markSessionDead } from './api'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/kv'
 export type RtMsg = {
   id: string
   from: string
@@ -239,7 +240,7 @@ export function connectRealtime(handlers?: RtHandlers) {
   }
 
   state.intentionalClose = false
-  const token = localStorage.getItem('sc_access') || localStorage.getItem('sc_token') || ''
+  const token = kvGet('sc_access') || kvGet('sc_token') || ''
   if (!token) return
 
   let ws: WebSocket
@@ -392,7 +393,14 @@ export function connectRealtime(handlers?: RtHandlers) {
       } catch { /* */ }
       return
     }
+    if (t === 'contact') {
+      try {
+        window.dispatchEvent(new CustomEvent('sc:rt-contact', { detail: data }))
+      } catch { /* */ }
+    }
+
     if (t === 'status_like' || t === 'notif') {
+
       try {
         window.dispatchEvent(new CustomEvent('sc:rt-notif', { detail: data }))
       } catch { /* */ }
@@ -404,7 +412,7 @@ export function connectRealtime(handlers?: RtHandlers) {
         const to = data?.to ? String(data.to) : ''
         const my = (() => {
           try {
-            const u = JSON.parse(localStorage.getItem('sc_user') || 'null')
+            const u = JSON.parse(kvGet('sc_user') || 'null')
             return u?.id ? String(u.id) : ''
           } catch {
             return ''

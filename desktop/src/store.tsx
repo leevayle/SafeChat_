@@ -37,9 +37,15 @@ import {
   loadOutbox,
   removeOutbox,
 } from './lib/appCache'
-import { setCachedMessages, getCachedMessages, clearMessageCache } from './lib/messageCache'
+import {
+  getCachedMessages,
+  mergeCachedMessages,
+  clearMessageCache,
+  removeConversationCache,
+} from './lib/messageCache'
 import { warmPhoto } from './lib/photoCache'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/kv'
 const LS_OWNER_KEY = 'sc_user_id'
 
 function wipeForeignLocalState() {
@@ -55,11 +61,8 @@ function wipeForeignLocalState() {
       'sc_has_logged_in',
     ])
     const keys: string[] = []
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i)
-      if (k && (k.startsWith('sc_') || k.startsWith('safechat')) && !keep.has(k)) keys.push(k)
-    }
-    keys.forEach((k) => localStorage.removeItem(k))
+    /* prefs live in IndexedDB via kv */
+    keys.forEach((k) => kvRemove(k))
   } catch {
     /* ignore */
   }
@@ -74,7 +77,7 @@ function pushLocalNotif(item: {
   action?: string
 }) {
   try {
-    const raw = localStorage.getItem('sc_local_notifs')
+    const raw = kvGet('sc_local_notifs')
     const list: any[] = raw ? JSON.parse(raw) : []
     if (list.some((n) => n.id === item.id)) return // once only
     const row = {
@@ -83,7 +86,7 @@ function pushLocalNotif(item: {
       unread: true,
     }
     const next = [row, ...list].slice(0, 40)
-    localStorage.setItem('sc_local_notifs', JSON.stringify(next))
+    kvSet('sc_local_notifs', JSON.stringify(next))
     try {
       window.dispatchEvent(new CustomEvent('sc:local-notif', { detail: row }))
     } catch { /* */ }
@@ -156,6 +159,8 @@ export type Settings = {
   disappearing: string
   statusValidity: string
   statusPrivacy: string
+  statusSelectedContacts: string[]
+  statusExcludedContacts: string[]
   email: string
   subscriptionPlan: string // pro | premium
   premiumExpiresAt?: string | null
@@ -381,7 +386,7 @@ export function applyAppearance(a: Partial<Appearance> | null | undefined) {
 
 function readAppearanceMap(): Record<string, Appearance> {
   try {
-    const raw = localStorage.getItem(APPEARANCE_MAP_KEY)
+    const raw = kvGet(APPEARANCE_MAP_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     return parsed && typeof parsed === 'object' ? parsed : {}
@@ -415,7 +420,7 @@ export function saveUserAppearance(userId: string | null | undefined, a: Partial
       colorMode: String(a.colorMode ?? prev.colorMode),
       liquidGlass: !!(a.liquidGlass ?? prev.liquidGlass),
     }
-    localStorage.setItem(APPEARANCE_MAP_KEY, JSON.stringify(map))
+    kvSet(APPEARANCE_MAP_KEY, JSON.stringify(map))
   } catch {
     /* ignore */
   }
@@ -455,6 +460,8 @@ const defaultSettings: Settings = {
   disappearing: 'Off',
   statusValidity: '24 hours',
   statusPrivacy: 'My contacts',
+  statusSelectedContacts: [],
+  statusExcludedContacts: [],
   forceReadReceipts: false,
   liveTyping: true,
   hideLiveTyping: false,
@@ -509,6 +516,7 @@ type Store = {
   saveRequestPending: number
   notifUnreadCount: number
   refreshChats: () => Promise<void>
+  refreshAll: () => Promise<void>
   /** Pull latest plan/premium flags from server (other-device upgrades). */
   syncSubscription: () => Promise<void>
   refreshContacts: () => Promise<void>
@@ -530,7 +538,10 @@ type Store = {
   busyMap: Record<string, { message?: string; until?: string | null }>
   activeConversationId: string | null
   setActiveConversationId: (id: string | null) => void
-  login: (phone: string, password: string) => Promise<ApiUser>
+  login: (
+    phone: string,
+    password: string,
+  ) => Promise<ApiUser | { passwordResetRequired: true; passwordResetToken: string }>
   register: (data: {
     phone: string
     countryCode: string
@@ -548,13 +559,15 @@ type Store = {
   joinGroup: (code: string) => Promise<string>
   patchGroup: (id: string, fn: (g: any) => any) => void
   removeGroup: (id: string) => Promise<void>
+  /** Delete chat(s) on server, then clear cache + home feed. Returns how many succeeded. */
+  deleteChats: (ids: string[]) => Promise<{ deleted: number; failed: number }>
 }
 
 const Ctx = createContext<Store>(null!)
 export const useStore = () => useContext(Ctx)
 
 export function stamp() {
-  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+  return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: (kvGet('sc_settings') ? (() => { try { return JSON.parse(kvGet('sc_settings') || '{}')?.timeFormat === '12h' } catch { return false } })() : false) })
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
@@ -567,7 +580,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const settingsRef = useRef<Settings>(defaultSettings)
   const [settings, setSettings] = useState<Settings>(() => {
     try {
-      const owner = localStorage.getItem(LS_OWNER_KEY)
+      const owner = kvGet(LS_OWNER_KEY)
       const storedUser = hasAccessToken() ? getStoredUser() : null
       // Only restore palette when we know who owns this device session
       const ownerId = storedUser?.id || owner || null
@@ -577,7 +590,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return defaultSettings
       }
       const cached = ownerId ? loadUserAppearance(ownerId) : null
-      const raw = localStorage.getItem('sc_settings')
+      const raw = kvGet('sc_settings')
       if (raw) {
         const parsed = JSON.parse(raw)
         const merged = {
@@ -644,13 +657,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const applyUser = useCallback((user: ApiUser, s?: Record<string, unknown>) => {
     // If stored prefs belong to another account, wipe immediately — first thing after auth
     try {
-      const prevOwner = localStorage.getItem(LS_OWNER_KEY)
+      const prevOwner = kvGet(LS_OWNER_KEY)
       if (prevOwner && prevOwner !== user.id) {
         wipeForeignLocalState()
         void clearAllCaches()
         clearMessageCache()
       }
-      localStorage.setItem(LS_OWNER_KEY, user.id)
+      kvSet(LS_OWNER_KEY, user.id)
       setCacheOwner(user.id)
     } catch {
       /* ignore */
@@ -704,9 +717,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         liquidGlass: appearance.liquidGlass,
       } as Settings
       try {
-        localStorage.setItem('sc_settings', JSON.stringify(next))
-        localStorage.setItem('sc_has_logged_in', '1')
-        localStorage.setItem(LS_OWNER_KEY, user.id)
+        kvSet('sc_settings', JSON.stringify(next))
+        kvSet('sc_has_logged_in', '1')
+        kvSet(LS_OWNER_KEY, user.id)
       } catch {
         /* ignore */
       }
@@ -772,7 +785,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         fontSize: prev.fontSize || defaultSettings.fontSize,
       }
       try {
-        localStorage.setItem('sc_settings', JSON.stringify(next))
+        kvSet('sc_settings', JSON.stringify(next))
       } catch { /* ignore */ }
       return next
     })
@@ -879,6 +892,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!hasAccessToken() || isSessionDead()) return
     try {
       const { contacts: c } = await api.contacts()
+      // Cache FIRST so other devices/tabs and next paint see the same data
+      await saveCachedContacts(c)
       // Seed presence map from contact.online flags
       setPresenceMap((prev) => {
         const next = { ...prev }
@@ -903,32 +918,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         return next
       })
-      setContacts((prev) => {
-        if (prev.length === c.length) {
-          let same = true
-          for (let i = 0; i < prev.length; i++) {
-            const a = prev[i] as any
-            const b = c[i] as any
-            if (
-              a.id !== b.id ||
-              a.name !== b.name ||
-              a.photo !== b.photo ||
-              a.phone_number !== b.phone_number ||
-              a.username !== b.username ||
-              a.busy !== b.busy ||
-              a.busyMessage !== b.busyMessage
-            ) {
-              same = false
-              break
-            }
-          }
-          if (same) return prev
-        }
-        void saveCachedContacts(c)
-        return c
-      })
+      // UI follows cache
+      setContacts(c)
     } catch {
-      /* */
+      /* keep existing cache / UI on network failure */
     }
   }, [])
 
@@ -1066,15 +1059,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // When someone accepted our request, pull contacts so messaging works immediately
       const newlyAccepted = (outRes.requests || []).some((r: any) => r.status === 'accepted')
       if (newlyAccepted) {
-        try {
-          const { contacts: list } = await api.contacts()
-          setContacts(list || [])
-        } catch { /* */ }
+        await refreshContacts()
       }
     } catch (e: any) {
       if ((e as any)?.status === 401 && !(e as any)?.soft) wipeSession()
     }
-  }, [wipeSession])
+  }, [refreshContacts, wipeSession])
 
   const patchStatusList = useCallback((fn: (list: any[]) => any[]) => {
     setStatusList((prev) => {
@@ -1099,7 +1089,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           new Date(nowIso).toLocaleTimeString([], {
             hour: '2-digit',
             minute: '2-digit',
-            hour12: false,
+            hour12: (typeof window !== 'undefined' && (() => { try { const s = JSON.parse(kvGet('sc_settings') || '{}'); return s?.timeFormat === '12h' } catch { return false } })()),
           })
         let nextList: ChatPreview[]
         if (idx >= 0) {
@@ -1125,7 +1115,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           } else {
             if (updated.mine === false) {
               try {
-                const mutedMap = JSON.parse(localStorage.getItem('sc_chat_muted') || '{}')
+                const mutedMap = JSON.parse(kvGet('sc_chat_muted') || '{}')
                 if (!mutedMap[updated.contactId]) playIncomingMessageChime()
               } catch {
                 playIncomingMessageChime()
@@ -1171,6 +1161,82 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [wipeSession])
 
+  const refreshRecentMessages = useCallback(async (force: boolean) => {
+    if (!hasAccessToken() || isSessionDead()) return
+    const snapshot = await new Promise<ChatPreview[]>((resolve) => {
+      setChats((current) => {
+        resolve(current)
+        return current
+      })
+    })
+    const targets = snapshot.filter((chat) => chat.conversationId).slice(0, 20)
+    const concurrency = 4
+    for (let i = 0; i < targets.length; i += concurrency) {
+      if (isSessionDead()) break
+      await Promise.all(
+        targets.slice(i, i + concurrency).map(async (chat) => {
+          const conversationId = chat.conversationId!
+          if (!force) {
+            const cached = getCachedMessages(conversationId)
+            if (cached && cached.length >= 15) return
+          }
+          try {
+            const { messages } = await api.messages(conversationId, { limit: 50 })
+            await mergeCachedMessages(conversationId, messages)
+          } catch {
+            /* A thread can be refreshed when it is opened. */
+          }
+        }),
+      )
+    }
+  }, [])
+
+  const refreshAll = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
+    try {
+      const { loadOutbox, removeOutbox } = await import('./lib/appCache')
+      const items = await loadOutbox()
+      for (const item of items) {
+        if (!item.conversationId) continue
+        try {
+          const { message } = await api.send(item.conversationId, item.text, item.image, {
+            clientKey: item.id,
+          })
+          await mergeCachedMessages(item.conversationId, [
+            { ...message, clientKey: message.clientKey || item.id },
+          ])
+          await removeOutbox(item.id)
+        } catch {
+          // Leave failed sends in the outbox for the next retry.
+        }
+      }
+    } catch {
+      // Outbox storage is optional; still refresh server data.
+    }
+
+    await Promise.all([
+      refreshChats(),
+      refreshCalls(),
+      refreshStatus(),
+      refreshContacts(),
+      refreshGroups(),
+      refreshSaveRequests(),
+      refreshNotifCount(),
+      refreshSubscription(),
+    ])
+    await refreshRecentMessages(true)
+  }, [
+    refreshChats,
+    refreshCalls,
+    refreshStatus,
+    refreshContacts,
+    refreshGroups,
+    refreshSaveRequests,
+    refreshNotifCount,
+    refreshSubscription,
+    refreshRecentMessages,
+  ])
+
   /**
    * Phased hydrate (stale-while-revalidate):
    *  0. Cached chats already painted on boot (if any)
@@ -1185,8 +1251,39 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    // Phase 1 — lean inbox (fast, low traffic)
-    await refreshChats({ lean: true })
+    // Phase 0 — paint IndexedDB cache immediately (no network wait)
+    // Only fetch from API when cache is empty or to merge updates afterward.
+    try {
+      const uid = meRef.current?.id || getStoredUser()?.id || ''
+      const owner = cacheOwnerId()
+      if (uid && (!owner || owner === uid)) {
+        const [cachedChats, cachedContacts, cachedStatuses] = await Promise.all([
+          loadCachedChats<ChatPreview>(),
+          loadCachedContacts<ApiContact>(),
+          loadCachedStatuses<any>(),
+        ])
+        if (cachedChats.length) {
+          setChats((prev) => (prev.length ? prev : cachedChats))
+          setListsReady(true) // home can render from cache right away
+        }
+        if (cachedContacts.length) {
+          setContacts((prev) => (prev.length ? prev : cachedContacts))
+        }
+        if (cachedStatuses.length) {
+          setStatusList((prev: any[]) => (prev?.length ? prev : cachedStatuses))
+        }
+        setCacheOwner(uid)
+      } else if (uid && owner && owner !== uid) {
+        // Different account — drop previous user's disk cache
+        await clearAllCaches()
+        setCacheOwner(uid)
+      }
+    } catch {
+      /* cache optional */
+    }
+
+    // Phase 1 — network lean inbox (merge into UI + write back to IDB)
+    await Promise.all([refreshChats({ lean: true }), refreshContacts()])
     if (isSessionDead()) {
       setListsReady(true)
       return
@@ -1198,36 +1295,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (isSessionDead()) return
     void refreshChats({ lean: false })
 
-    const snapshot = await (async () => {
-      // Read current chats from state via a one-shot promise
-      return new Promise<ChatPreview[]>((resolve) => {
-        setChats((cur) => {
-          resolve(cur)
-          return cur
-        })
-      })
-    })()
-
-    const toPrefetch = (snapshot || [])
-      .filter((c) => c.conversationId)
-      .slice(0, 20)
-
-    const CONCURRENCY = 4
-    for (let i = 0; i < toPrefetch.length; i += CONCURRENCY) {
-      if (isSessionDead()) break
-      const batch = toPrefetch.slice(i, i + CONCURRENCY)
-      await Promise.all(
-        batch.map(async (ch) => {
-          const cid = ch.conversationId!
-          try {
-            const { messages } = await api.messages(cid, { limit: 50 })
-            setCachedMessages(cid, messages)
-          } catch {
-            /* soft */
-          }
-        }),
-      )
-    }
+    await refreshRecentMessages(false)
 
     // Phase 3 — secondary lists
     if (isSessionDead()) return
@@ -1236,7 +1304,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshStatus(),
       refreshGroups(),
       refreshSaveRequests(),
-      refreshContacts(),
       refreshNotifCount(),
     ])
 
@@ -1258,73 +1325,95 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     } catch {
       /* */
     }
-  }, [refreshChats, refreshCalls, refreshStatus, refreshGroups, refreshSaveRequests, refreshContacts, refreshNotifCount])
+  }, [refreshChats, refreshCalls, refreshStatus, refreshGroups, refreshSaveRequests, refreshNotifCount, refreshContacts, refreshRecentMessages])
 
   const bootStarted = useRef(false)
   useEffect(() => {
     if (bootStarted.current) return
     bootStarted.current = true
     const boot = async () => {
-      const token = hasAccessToken()
-      const stored = token ? getStoredUser() : null
+      // Access token is memory-only — after a full page reload it is gone.
+      // Restore session via HttpOnly refresh cookie (and/or silent refresh).
+      let token = hasAccessToken()
+      const stored = getStoredUser()
+      const hadDeviceLogin = kvGet('sc_has_logged_in') === '1'
 
-      // Stale user blob without tokens → clean slate
-      if (!token) {
-        if (getStoredUser()) clearSession()
-        setMe(null)
-        setSessionOk(false)
-        setReady(true)
-        setListsReady(true)
-        return
+      // Paint cached user + inbox immediately (even before refresh completes)
+      if (stored) {
+        applyUser(stored)
+        try {
+          const owner = cacheOwnerId()
+          if (!owner || owner === stored.id) {
+            const [cachedChats, cachedContacts, cachedStatuses] = await Promise.all([
+              loadCachedChats<ChatPreview>(),
+              loadCachedContacts<ApiContact>(),
+              loadCachedStatuses<any>(),
+            ])
+            if (cachedChats.length) {
+              setChats(cachedChats)
+              setListsReady(true)
+            }
+            if (cachedContacts.length) setContacts(cachedContacts)
+            if (cachedStatuses.length) setStatusList(cachedStatuses)
+            setCacheOwner(stored.id)
+          }
+        } catch {
+          /* */
+        }
       }
 
-      if (stored) applyUser(stored)
-
-      // Paint cached inbox / contacts / statuses BEFORE network (stale-while-revalidate)
-      try {
-        const owner = cacheOwnerId()
-        if (stored?.id && (!owner || owner === stored.id)) {
-          const [cachedChats, cachedContacts, cachedStatuses] = await Promise.all([
-            loadCachedChats<ChatPreview>(),
-            loadCachedContacts<ApiContact>(),
-            loadCachedStatuses<any>(),
-          ])
-          if (cachedChats.length) {
-            setChats(cachedChats)
+      // Silent refresh: cookie carries refresh token across reloads
+      if (!token) {
+        try {
+          const { forceRefreshSession, ensureSessionFresh } = await import('./api') as any
+          const ok =
+            (typeof forceRefreshSession === 'function' && (await forceRefreshSession())) ||
+            (typeof ensureSessionFresh === 'function' && (await ensureSessionFresh()))
+          token = hasAccessToken()
+          if (!ok && !token) {
+            // No cookie / expired refresh → login, but keep device cache
+            if (!hadDeviceLogin) {
+              clearSession()
+              setMe(null)
+            }
+            setSessionOk(false)
+            setReady(true)
             setListsReady(true)
+            return
           }
-          if (cachedContacts.length) setContacts(cachedContacts)
-          if (cachedStatuses.length) setStatusList(cachedStatuses)
-          setCacheOwner(stored.id)
+        } catch {
+          if (!hadDeviceLogin) {
+            clearSession()
+            setMe(null)
+          }
+          setSessionOk(false)
+          setReady(true)
+          setListsReady(true)
+          return
         }
-      } catch {
-        /* */
+      } else {
+        try {
+          const { ensureSessionFresh } = await import('./api') as any
+          if (typeof ensureSessionFresh === 'function') await ensureSessionFresh()
+        } catch { /* */ }
       }
 
       setReady(true)
+      setSessionOk(true)
 
-      // Ensure access token is valid/fresh before any protected hydrate calls
-      try {
-        const { ensureSessionFresh } = await import('./api') as any
-        if (typeof ensureSessionFresh === 'function') {
-          await ensureSessionFresh()
-        }
-      } catch { /* */ }
-
-      // /auth/me + ordered hydrate — boot is authoritative: hard 401 means re-login
+      // /auth/me + hydrate
       void (async () => {
         try {
           const { user, settings: s } = await api.me()
           if (isSessionDead()) return
-          const access = localStorage.getItem('sc_access') || localStorage.getItem('sc_token') || ''
-          const refresh = localStorage.getItem('sc_refresh') || ''
-          setSession(access, refresh, user)
           applyUser(user, s as Record<string, unknown>)
+          if (user) kvSet('sc_user', JSON.stringify(user))
           setSessionOk(true)
         } catch (e: any) {
-          // On cold boot a 401 (even "soft") means tokens are dead — send to login
           if ((e as any)?.status === 401) {
-            wipeSession()
+            // Refresh cookie failed hard — require login again
+            setSessionOk(false)
+            setMe(null)
           }
         }
       })()
@@ -1415,14 +1504,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           void loadOutbox().then(async (items) => {
             for (const item of items) {
               if (!item.conversationId) continue
+              // Avoid triple-send: only flush items older than 8s (live send may still be in flight)
+              const age = Date.now() - Date.parse(item.createdAt || '')
+              if (Number.isFinite(age) && age < 8000) continue
               try {
-                await api.send(item.conversationId, item.text, item.image)
+                const { message } = await api.send(item.conversationId, item.text, item.image, {
+                  clientKey: item.id,
+                })
+                await mergeCachedMessages(item.conversationId, [
+                  { ...message, clientKey: message.clientKey || item.id },
+                ])
                 await removeOutbox(item.id)
               } catch { /* retry next open */ }
             }
           })
         },
-        onMessage: (cid, m) => {
+        onMessage: async (cid, m) => {
           if (!m?.id) return
           const mid = String(m.id)
           const ck = String(m.client_key || m.clientKey || mid)
@@ -1441,7 +1538,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             timeLabel = new Date(iso).toLocaleTimeString([], {
               hour: '2-digit',
               minute: '2-digit',
-              hour12: false,
+              hour12: (typeof window !== 'undefined' && (() => { try { const s = JSON.parse(kvGet('sc_settings') || '{}'); return s?.timeFormat === '12h' } catch { return false } })()),
             })
           } catch {
             timeLabel = ''
@@ -1449,6 +1546,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const mapped: any = {
             id: mid,
             clientKey: ck,
+            conversationId: cid,
             from: String(m.from || ''),
             text: m.text || '',
             time: iso,
@@ -1461,30 +1559,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             reactions: m.reactions || [],
           }
 
-          // 2) Cache first — UI only sees the message after cache is updated
-          try {
-            const prev = getCachedMessages(cid) || []
-            const exists = prev.some(
-              (x: any) => x.id === mid || x.clientKey === ck || (x.clientKey && x.clientKey === mid),
-            )
-            if (!exists) {
-              // Insert by timestamp so order is stable when opening the thread
-              const next = [...prev, mapped].sort(
-                (a: any, b: any) => (Date.parse(a.time) || 0) - (Date.parse(b.time) || 0),
-              )
-              setCachedMessages(cid, next)
-            } else {
-              // In-place upgrade only — never append a second copy
-              setCachedMessages(
-                cid,
-                prev.map((x: any) =>
-                  x.id === mid || x.clientKey === ck || x.clientKey === mid
-                    ? { ...x, ...mapped, clientKey: x.clientKey || ck }
-                    : x,
-                ),
-              )
-            }
-          } catch { /* */ }
+          // Persist before publishing the new message to the rest of the client.
+          await mergeCachedMessages(cid, [mapped])
 
           // 3) Delivery / read side-effects (no UI)
           if (!mine) {
@@ -1736,6 +1812,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
       }
     }
+    if ('password_reset_required' in session) {
+      if (!session.password_reset_token) {
+        throw new Error('Password reset login could not be verified. Request a new reset email.')
+      }
+      return {
+        passwordResetRequired: true as const,
+        passwordResetToken: session.password_reset_token,
+      }
+    }
     const { access_token, refresh_token, user } = session
     if (!access_token || !user?.id) {
       throw new Error('Login succeeded but session was incomplete — try again')
@@ -1743,7 +1828,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     // Account switch: clear foreign prefs BEFORE writing new tokens
     try {
-      const prevOwner = localStorage.getItem(LS_OWNER_KEY)
+      const prevOwner = kvGet(LS_OWNER_KEY)
       if (prevOwner && prevOwner !== user.id) {
         wipeForeignLocalState()
         void clearAllCaches()
@@ -1770,11 +1855,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       ...(loginAccent ? { chatAccent: loginAccent } : {}),
     })
 
-    // Inbox immediately with skeleton — hydrate + /me in background (never block navigation)
+    // Inbox immediately — cache paints first inside hydrate; network merges after
     setSessionOk(true)
     setListsReady(false)
     void hydrateAfterAuth().catch(() => {
-      // Safety: never leave the user stuck on skeleton forever
       setListsReady(true)
     })
     void (async () => {
@@ -1819,6 +1903,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         username: data.username,
         password: data.password,
       })
+      if ('password_reset_required' in session) {
+        throw new Error('A newly registered account cannot use a temporary password.')
+      }
       access_token = session.access_token
       refresh_token = session.refresh_token
       user = session.user
@@ -1827,6 +1914,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         phone_number: phoneNumber,
         password: data.password,
       })
+      if ('password_reset_required' in session) {
+        throw new Error('A newly registered account cannot use a temporary password.')
+      }
       access_token = session.access_token
       refresh_token = session.refresh_token
       user = session.user
@@ -1849,10 +1939,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     markSessionAlive()
     setSession(access_token, refresh_token, user)
+    if (!kvGet('sc_tip_stay_private')) kvSet('sc_tip_stay_private', 'pending')
     resolveAndApplyAppearance(user.id, (user as any).theme ? { theme: (user as any).theme } : null)
     applyUser(user)
     setSessionOk(true)
-    setListsReady(false)
     const hydrateP = hydrateAfterAuth()
     void (async () => {
       try {
@@ -1890,9 +1980,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setCalls([])
     setSaveRequestPending(0)
     setListsReady(true)
-    // Reset profile fields in memory; re-load device prefs from localStorage if present
+    // Reset profile fields in memory; re-load device prefs from IndexedDB if present
     try {
-      const raw = localStorage.getItem('sc_settings')
+      const raw = kvGet('sc_settings')
       if (raw) {
         const saved = JSON.parse(raw) as Partial<Settings>
         setSettings({
@@ -1940,7 +2030,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         colorMode: String(next.colorMode),
         liquidGlass: !!next.liquidGlass,
       })
-      const uid = meRef.current?.id || localStorage.getItem(LS_OWNER_KEY)
+      const uid = meRef.current?.id || kvGet(LS_OWNER_KEY)
       saveUserAppearance(uid, {
         theme: String(next.theme),
         chatAccent: String(next.chatAccent),
@@ -1949,7 +2039,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     }
     try {
-      localStorage.setItem('sc_settings', JSON.stringify(next))
+      kvSet('sc_settings', JSON.stringify(next))
     } catch {
       /* ignore storage quota / private browsing errors */
     }
@@ -1971,6 +2061,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       fontSize: 'font_size',
       language: 'language',
       statusPrivacy: 'status_privacy',
+      statusSelectedContacts: 'status_selected_contacts',
+      statusExcludedContacts: 'status_excluded_contacts',
       statusValidity: 'status_validity',
       msgNotif: 'msg_notif',
       groupNotif: 'group_notif',
@@ -2024,7 +2116,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     saveStoredUser(updated)
     const nextSettings = { ...settings, ...profile }
     setSettings(nextSettings)
-    try { localStorage.setItem('sc_settings', JSON.stringify(nextSettings)) } catch { /* ignore */ }
+    try { kvSet('sc_settings', JSON.stringify(nextSettings)) } catch { /* ignore */ }
   }, [settings])
 
   const createGroup = async (name: string, desc: string, memberIds: string[]) => {
@@ -2056,28 +2148,85 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setGroups((gs) => gs.filter((g) => g.id !== id))
   }
 
+  /**
+   * Delete whole conversation thread(s) from the server, then drop local
+   * message cache + chats-home rows. Toast is left to the caller.
+   */
+  const deleteChats = useCallback(
+    async (ids: string[]): Promise<{ deleted: number; failed: number }> => {
+      const unique = Array.from(new Set((ids || []).map(String).filter(Boolean)))
+      if (!unique.length) return { deleted: 0, failed: 0 }
 
+      // Resolve contactId / conversationId → conversationId for the API
+      const snapshot = chats
+      const targets: { key: string; conversationId: string | null }[] = unique.map((id) => {
+        const row = snapshot.find(
+          (c) => String(c.contactId) === id || String(c.conversationId || '') === id,
+        )
+        return {
+          key: id,
+          conversationId: row?.conversationId ? String(row.conversationId) : null,
+        }
+      })
+
+      let deleted = 0
+      let failed = 0
+      const removedKeys = new Set<string>()
+
+      for (const t of targets) {
+        try {
+          if (t.conversationId) {
+            await api.deleteConversation(t.conversationId)
+            await removeConversationCache(t.conversationId)
+          }
+          // Even without a conversationId (stale local-only row), drop local UI
+          removedKeys.add(t.key)
+          if (t.conversationId) removedKeys.add(t.conversationId)
+          const row = snapshot.find(
+            (c) => String(c.contactId) === t.key || String(c.conversationId || '') === t.key,
+          )
+          if (row?.contactId) removedKeys.add(String(row.contactId))
+          deleted += 1
+        } catch {
+          failed += 1
+        }
+      }
+
+      if (removedKeys.size) {
+        setChats((prev) => {
+          const next = prev.filter(
+            (c) =>
+              !removedKeys.has(String(c.contactId)) &&
+              !removedKeys.has(String(c.conversationId || '')),
+          )
+          void saveCachedChats(next)
+          return next
+        })
+      }
+
+      return { deleted, failed }
+    },
+    [chats],
+  )
 
   useEffect(() => {
     const onDelete = (ev: Event) => {
       const ids = ((ev as CustomEvent).detail?.ids || []) as string[]
       if (!ids.length) return
-      const set = new Set(ids.map(String))
-      setChats((prev) => {
-        const next = prev.filter((c) => !set.has(String(c.contactId)) && !set.has(String(c.conversationId)))
-        void saveCachedChats(next)
-        return next
+      void deleteChats(ids).then(({ deleted, failed }) => {
+        if (deleted && !failed) {
+          showToast(deleted > 1 ? 'Chats deleted' : 'Chat deleted')
+        } else if (deleted && failed) {
+          showToast(`Deleted ${deleted}, ${failed} failed`)
+        } else if (failed) {
+          showToast('Could not delete chat')
+        }
       })
     }
     const onDeleteLocked = (ev: Event) => {
       const ids = ((ev as CustomEvent).detail?.ids || []) as string[]
       if (!ids.length) return
-      const set = new Set(ids.map(String))
-      setChats((prev) => {
-        const next = prev.filter((c) => !set.has(String(c.contactId)) && !set.has(String(c.conversationId)))
-        void saveCachedChats(next)
-        return next
-      })
+      void deleteChats(ids)
     }
     window.addEventListener('sc:delete-chats', onDelete)
     const onGameInvite = (ev: Event) => {
@@ -2110,17 +2259,33 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const onNotif = (ev: Event) => {
       setNotifUnreadCount((n) => n + 1)
       const d = (ev as CustomEvent).detail || {}
+      const ntype = String(d.type || d.t || '')
+      if (ntype === 'save_request_accepted' || ntype === 'contact_accepted') {
+        void refreshContacts()
+        void refreshSaveRequests()
+      }
       void (async () => {
         try {
           const { loadCachedNotifications, saveCachedNotifications } = await import('./lib/appCache')
           const prev = (await loadCachedNotifications<any>()) || []
+          const type =
+            d.type ||
+            (d.t === 'status_like'
+              ? 'status_like'
+              : d.t === 'status_new'
+                ? 'status_new'
+                : 'system')
           const row = {
-            id: `live-${d.status_id || d.game_id || Date.now()}`,
-            type: d.t === 'status_like' ? 'status_like' : d.type || 'system',
+            id: String(
+              d.notification_id ||
+                `live-${type}-${d.status_id || d.status?.id || d.game_id || d.actor_id || d.from || Date.now()}`,
+            ),
+            type,
             title: d.title || 'Notification',
             body: d.body || '',
-            actor_id: d.from,
-            actor_name: d.from_name,
+            actor_id: d.actor_id || d.from,
+            actor_name: d.actor_name || d.from_name,
+            actor_photo: d.actor_photo,
             status_id: d.status_id,
             game_id: d.game_id,
             read: false,
@@ -2132,6 +2297,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })()
     }
     window.addEventListener('sc:rt-notif', onNotif)
+    const onContactEvt = (ev: Event) => {
+      const d = (ev as CustomEvent).detail || {}
+      if (d.action === 'accepted' || d.t === 'contact') {
+        void refreshContacts()
+        void refreshSaveRequests()
+      }
+    }
+    window.addEventListener('sc:rt-contact', onContactEvt)
     const onDeleteCalls = (ev: Event) => {
       const ids = new Set((((ev as CustomEvent).detail?.ids || []) as string[]).map(String))
       if (!ids.size) return
@@ -2150,10 +2323,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('sc:rt-game-invite', onGameInvite)
       window.removeEventListener('sc:notifs-cleared', onNotifsCleared)
       window.removeEventListener('sc:rt-notif', onNotif)
+      window.removeEventListener('sc:rt-contact', onContactEvt)
       window.removeEventListener('sc:delete-calls', onDeleteCalls)
       window.removeEventListener('sc:delete-locked-chats', onDeleteLocked)
     }
-  }, [])
+  }, [deleteChats, showToast, refreshContacts, refreshSaveRequests])
 
   // Live status: new posts, deletes, views/likes — full WS maximization
   useEffect(() => {
@@ -2299,6 +2473,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           (a: any, b: any) => (Date.parse(a.createdAt) || 0) - (Date.parse(b.createdAt) || 0),
         )
       })
+      void refreshStatus()
     }
 
     const onDel = (ev: Event) => {
@@ -2315,7 +2490,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       window.removeEventListener('sc:rt-status-new', onNew)
       window.removeEventListener('sc:rt-status-delete', onDel)
     }
-  }, [patchStatusList])
+  }, [patchStatusList, refreshStatus])
 
   const value = useMemo(
     () => ({
@@ -2339,6 +2514,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       saveRequestPending,
       notifUnreadCount,
       refreshChats,
+      refreshAll,
       syncSubscription,
       refreshContacts,
       toast,
@@ -2360,6 +2536,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       joinGroup,
       patchGroup,
       removeGroup,
+      deleteChats,
     }),
     [
       ready,
@@ -2382,6 +2559,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setSetting,
       saveProfile,
       refreshChats,
+      refreshAll,
       syncSubscription,
       refreshContacts,
       toast,
@@ -2403,6 +2581,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       joinGroup,
       patchGroup,
       removeGroup,
+      deleteChats,
     ],
   )
 

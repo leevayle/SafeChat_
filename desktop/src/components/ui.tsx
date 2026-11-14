@@ -19,7 +19,7 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
       {open && (
         <>
           <motion.div
-            className="fixed inset-0 z-[100] bg-ink/40"
+            className="fixed inset-0 z-[100] bg-ink/45"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -27,7 +27,7 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
             onClick={onClose}
           />
           <motion.div
-            className="fixed inset-x-0 bottom-0 z-[110] max-h-[85%] overflow-y-auto rounded-t-[2rem] bg-white p-6 pb-8 shadow-2xl dark:bg-[#121821] dark:text-white"
+            className="fixed inset-x-0 bottom-0 z-[110] max-h-[55%] overflow-y-auto rounded-t-[2rem] bg-white p-6 pb-8 shadow-[0_-16px_48px_rgba(0,0,0,0.28)] dark:bg-[#121821] dark:text-white md:inset-x-auto md:left-1/2 md:bottom-[10%] md:max-h-[50vh] md:w-full md:max-w-md md:-translate-x-1/2 md:rounded-[1.75rem]"
             initial={{ y: '100%' }}
             animate={{ y: 0 }}
             exit={{ y: '100%' }}

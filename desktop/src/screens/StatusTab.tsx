@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, ImagePlus, X, Settings as SettingsIcon, Eye, Camera } from 'lucide-react'
 import { BrandMark } from '../components/AppHeaderLogo'
@@ -10,7 +10,9 @@ import { useStore } from '../store'
 import { PillButton } from '../components/PillButton'
 import { parseUtc } from '../time'
 import { compressForWeb } from '../lib/imageProcess'
+import { StatusAudiencePicker } from '../components/StatusAudiencePicker'
 
+import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 const API_ORIGIN = import.meta.env.VITE_API_URL || ''
 function mediaUrl(path?: string | null) {
   if (!path) return ''
@@ -22,16 +24,21 @@ const VALIDITY = ['1 hour', '6 hours', '12 hours', '24 hours'] as const
 const PRIVACY = ['My contacts', 'Contacts except…', 'Only share with…'] as const
 
 type Props = {
+  active?: boolean
   onOpenStatus?: (userId: string, statusId?: string) => void
 }
 
-export function StatusTab({ onOpenStatus }: Props) {
-  const { statusList, me, refreshStatus, settings, setSetting, showToast, patchStatusList } = useStore()
+export function StatusTab({ active = true, onOpenStatus }: Props) {
+  const { statusList, me, contacts, refreshStatus, settings, setSetting, showToast, patchStatusList } = useStore()
   const isPremium = ((settings as any)?.subscriptionPlan || me?.subscriptionPlan) === 'premium'
+
+  useEffect(() => {
+    if (active) void refreshStatus()
+  }, [active, refreshStatus])
 
   const [bgCode, setBgCode] = useState(() => {
     try {
-      const raw = localStorage.getItem('sc_settings')
+      const raw = kvGet('sc_settings')
       const theme = raw ? (JSON.parse(raw) as any)?.theme : 'purple'
       return themeDefaultStatusBg(theme || 'purple')
     } catch {
@@ -132,12 +139,13 @@ export function StatusTab({ onOpenStatus }: Props) {
   }
   const visibilityFromPrivacy = (v: string) => {
     if (v.startsWith('Only')) return 'selected'
-    if (v.startsWith('Contacts except')) return 'contacts'
+    if (v.startsWith('Contacts except')) return 'contacts_except'
     return 'contacts'
   }
 
   const openComposer = () => {
     setBgCode(themeDefaultStatusBg(settings.theme))
+    setValidity(VALIDITY.find((value) => value === settings.statusValidity) || '24 hours')
     setComposing(true)
   }
 
@@ -189,10 +197,17 @@ export function StatusTab({ onOpenStatus }: Props) {
         video: vid || undefined,
         expiresInHours: hours,
         visibility: visibilityFromPrivacy(
-          (typeof localStorage !== 'undefined' &&
-            (JSON.parse(localStorage.getItem('sc_settings') || '{}').statusPrivacy as string)) ||
+          settings.statusPrivacy ||
             'My contacts',
         ),
+        selectedViewerIds:
+          settings.statusPrivacy === 'Only share with…'
+            ? settings.statusSelectedContacts || []
+            : [],
+        excludedViewerIds:
+          settings.statusPrivacy === 'Contacts except…'
+            ? settings.statusExcludedContacts || []
+            : [],
       })
       // Same list slot, swap id/metadata only so the card never disappears
       patchStatusList((list) =>
@@ -600,6 +615,31 @@ export function StatusTab({ onOpenStatus }: Props) {
                   </button>
                 ))}
               </div>
+              {settings.statusPrivacy !== 'My contacts' && (
+                <div className="mt-4 space-y-2">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">
+                    {settings.statusPrivacy === 'Only share with…'
+                      ? 'Only selected contacts can view your status.'
+                      : 'Selected contacts will not see your status.'}
+                  </p>
+                  <StatusAudiencePicker
+                    contacts={contacts}
+                    selectedIds={
+                      settings.statusPrivacy === 'Only share with…'
+                        ? settings.statusSelectedContacts || []
+                        : settings.statusExcludedContacts || []
+                    }
+                    onChange={(ids) =>
+                      setSetting(
+                        settings.statusPrivacy === 'Only share with…'
+                          ? 'statusSelectedContacts'
+                          : 'statusExcludedContacts',
+                        ids,
+                      )
+                    }
+                  />
+                </div>
+              )}
 
               <button
                 type="button"

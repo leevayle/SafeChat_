@@ -50,6 +50,10 @@ class ConnectionManager:
                 return True
         return False
 
+    @property
+    def online_user_ids(self) -> set[str]:
+        return {str(user_id) for user_id, sockets in self._by_user.items() if sockets}
+
     async def send_user(self, user_id: str, payload: dict) -> int:
         """Fan-out to all of a user's sockets. Returns number of successful sends."""
         uid = str(user_id or "")

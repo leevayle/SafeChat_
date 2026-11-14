@@ -19,37 +19,80 @@ logger = logging.getLogger(__name__)
 class StatusService:
 
     @staticmethod
+    async def _accepted_contact_ids(db, user_id: str) -> List[str]:
+        accepted = [ContactStatus.ACCEPTED.value, ContactStatus.ACCEPTED.value.upper()]
+        peers = set()
+        async for contact in db.contacts.find(
+            {
+                "$or": [
+                    {
+                        "owner_user_id": user_id,
+                        "contact_status": {"$in": accepted},
+                    },
+                    {
+                        "contact_user_id": user_id,
+                        "contact_status": {"$in": accepted},
+                    },
+                    {"owner_user_id": user_id, "status": {"$in": accepted}},
+                    {"contact_user_id": user_id, "status": {"$in": accepted}},
+                ]
+            },
+            {"owner_user_id": 1, "contact_user_id": 1},
+        ):
+            peer_id = (
+                contact.get("contact_user_id")
+                if str(contact.get("owner_user_id")) == str(user_id)
+                else contact.get("owner_user_id")
+            )
+            if peer_id and str(peer_id) != str(user_id):
+                peers.add(str(peer_id))
+
+        async for request in db.contact_requests.find(
+            {
+                "status": {"$in": accepted},
+                "$or": [
+                    {"from_user_id": user_id},
+                    {"to_user_id": user_id},
+                ],
+            },
+            {"from_user_id": 1, "to_user_id": 1},
+        ):
+            from_id = str(request.get("from_user_id") or "")
+            to_id = str(request.get("to_user_id") or "")
+            peer_id = to_id if from_id == str(user_id) else from_id
+            if peer_id and peer_id != str(user_id):
+                peers.add(peer_id)
+        if peers:
+            async for blocked in db.blocked_users.find(
+                {
+                    "$or": [
+                        {"blocker_id": user_id, "blocked_id": {"$in": list(peers)}},
+                        {"blocked_id": user_id, "blocker_id": {"$in": list(peers)}},
+                    ]
+                },
+                {"blocker_id": 1, "blocked_id": 1},
+            ):
+                peer_id = (
+                    blocked.get("blocked_id")
+                    if str(blocked.get("blocker_id")) == str(user_id)
+                    else blocked.get("blocker_id")
+                )
+                if peer_id:
+                    peers.discard(str(peer_id))
+        return list(peers)
+
+    @staticmethod
     async def _eligible_peer_ids(db, owner_id: str, status_doc: dict) -> List[str]:
         """Contacts who should receive a live status_new / status_delete event."""
         vis = (status_doc.get("visibility") or "contacts").lower()
         selected = status_doc.get("selected_viewer_ids") or []
-        if vis in ("selected", "selected_contacts") and selected:
+        if vis in ("selected", "selected_contacts"):
             return [str(x) for x in selected if str(x) != str(owner_id)]
-        # Default: people who have the owner as an accepted contact (they can see the feed)
-        peers: List[str] = []
-        async for c in db.contacts.find(
-            {
-                "contact_user_id": owner_id,
-                "contact_status": ContactStatus.ACCEPTED.value,
-            },
-            {"owner_user_id": 1},
-        ):
-            oid = c.get("owner_user_id")
-            if oid and str(oid) != str(owner_id):
-                peers.append(str(oid))
-        # Also owner side contacts (symmetric apps often store one direction)
-        async for c in db.contacts.find(
-            {
-                "owner_user_id": owner_id,
-                "contact_status": ContactStatus.ACCEPTED.value,
-            },
-            {"contact_user_id": 1},
-        ):
-            cid = c.get("contact_user_id")
-            if cid and str(cid) != str(owner_id):
-                peers.append(str(cid))
-        # Unique
-        return list(dict.fromkeys(peers))
+        peers = await StatusService._accepted_contact_ids(db, owner_id)
+        if vis == StatusVisibility.CONTACTS_EXCEPT.value:
+            excluded = {str(x) for x in status_doc.get("excluded_viewer_ids") or []}
+            return [peer for peer in peers if peer not in excluded]
+        return peers
 
     @staticmethod
     async def _ws_send_users(user_ids: List[str], payload: dict) -> None:
@@ -68,6 +111,7 @@ class StatusService:
         media_attachments: Optional[List[Dict]] = None,
         visibility: str = "contacts",
         selected_viewer_ids: Optional[List[str]] = None,
+        excluded_viewer_ids: Optional[List[str]] = None,
         expires_in_hours: int = 24,
         background: Optional[str] = None,
     ) -> dict:
@@ -83,6 +127,18 @@ class StatusService:
         if st == StatusType.TEXT and not content:
             raise ValidationError("Text status requires content")
 
+        db = get_database()
+        accepted_peers = set(await StatusService._accepted_contact_ids(db, owner_id))
+        selected = [
+            str(peer_id)
+            for peer_id in (selected_viewer_ids or [])
+            if str(peer_id) in accepted_peers and str(peer_id) != str(owner_id)
+        ]
+        excluded = [
+            str(peer_id)
+            for peer_id in (excluded_viewer_ids or [])
+            if str(peer_id) in accepted_peers and str(peer_id) != str(owner_id)
+        ]
         now = datetime.now(timezone.utc)
         expires = now + timedelta(hours=min(max(expires_in_hours, 1), 168))
         doc = {
@@ -90,13 +146,13 @@ class StatusService:
             "content": content,
             "media_attachments": media_attachments or [],
             "visibility": vis.value,
-            "selected_viewer_ids": selected_viewer_ids or [],
+            "selected_viewer_ids": selected,
+            "excluded_viewer_ids": excluded,
             "created_at": now,
             "background": background or "solid_1",
             "expires_at": expires,
             "status_type": st.value,
         }
-        db = get_database()
         result = await db.statuses.insert_one(doc)
         doc["_id"] = result.inserted_id
 
@@ -143,16 +199,7 @@ class StatusService:
 
     @staticmethod
     async def _contact_ids(db, viewer_id: str) -> List[str]:
-        ids: List[str] = []
-        async for c in db.contacts.find(
-            {
-                "owner_user_id": viewer_id,
-                "contact_status": ContactStatus.ACCEPTED.value,
-            },
-            {"contact_user_id": 1},
-        ):
-            ids.append(c["contact_user_id"])
-        return ids
+        return await StatusService._accepted_contact_ids(db, viewer_id)
 
     @staticmethod
     async def get_feed(viewer_id: str) -> List[dict]:
@@ -509,6 +556,11 @@ class StatusService:
             return True
         if vis == StatusVisibility.CONTACTS.value:
             return owner in viewer_contact_ids
+        if vis == StatusVisibility.CONTACTS_EXCEPT.value:
+            return (
+                owner in viewer_contact_ids
+                and viewer_id not in (status.get("excluded_viewer_ids") or [])
+            )
         if vis == StatusVisibility.SELECTED.value:
             return viewer_id in (status.get("selected_viewer_ids") or [])
         if vis == StatusVisibility.CLOSE_FRIENDS.value:
