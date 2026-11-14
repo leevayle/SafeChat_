@@ -383,7 +383,7 @@ function mapContact(c: any): ApiContact {
     id: peerId,
     entryId: String(c.id || peerId),
     peerId,
-    phone: c.phone_number || c.phone || '',
+    phone: c.phone_number || c.phone || c.contact_phone || c.peer_phone || '',
     username: c.username || '',
     name: c.nickname || c.saved_name || c.savedName || c.display_name || c.name || c.username || peerId || 'User',
     savedName: c.nickname || c.saved_name || c.savedName || '',

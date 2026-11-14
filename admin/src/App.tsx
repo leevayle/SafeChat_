@@ -32,10 +32,18 @@ import {
   Users,
   Trash2,
   X,
+  HardDrive,
+  Database,
+  Download,
+  Play,
+  Layers,
+  FolderArchive,
+  Archive,
+  Contact,
 } from 'lucide-react'
 
 type Role = 'ADMIN' | 'SUPER_ADMIN'
-type Section = 'overview' | 'users' | 'payments' | 'access' | 'support' | 'reports' | 'audit' | 'settings'
+type Section = 'overview' | 'users' | 'payments' | 'access' | 'support' | 'reports' | 'audit' | 'backup' | 'settings'
 type ThemePreference = 'system' | 'light' | 'dark'
 type ToastMessage = { message: string; tone: 'success' | 'error' | 'info' }
 type Envelope<T> = { success?: boolean; message?: string; data?: T }
@@ -211,6 +219,7 @@ const navGroups: { label: string; items: { id: Section; label: string; icon: typ
     { id: 'reports', label: 'Reports', icon: LifeBuoy },
     { id: 'audit', label: 'Audit log', icon: FileClock },
   ] },
+  { label: 'Data', items: [{ id: 'backup', label: 'Backup', icon: HardDrive }] },
   { label: 'Preferences', items: [{ id: 'settings', label: 'Settings', icon: Settings }] },
 ]
 const navItems = navGroups.flatMap((group) => group.items)
@@ -374,6 +383,7 @@ export default function App() {
           {section === 'support' && <SupportInbox actorRole={admin.role} />}
           {section === 'reports' && <ReportsPage />}
           {section === 'audit' && <AuditPage />}
+          {section === 'backup' && <BackupPage />}
           {section === 'settings' && <SettingsPage theme={theme} onThemeChange={changeTheme} />}
         </section>
       </main>
@@ -424,7 +434,7 @@ function Login({ onLogin, notice, clearNotice }: {
       <div className="login-decoration login-decoration-two" />
       <form className="login-card" onSubmit={(event) => void submit(event)}>
         <div className="login-brand"><img className="brand-symbol" src="/safechat-mark.svg" alt="" /><div className="brand-copy"><strong className="brand-wordmark"><span className="word-safe">Safe</span><span className="word-chat">Chat</span><i>.</i></strong><small>ADMINISTRATION</small></div></div>
-        
+        <div className="login-icon"><ShieldCheck size={23} /></div>
         <p className="eyebrow">SECURE WORKSPACE</p>
         <h1>Welcome back</h1>
         <p className="login-subtitle">Sign in with an authorized administrator account.</p>
@@ -433,10 +443,10 @@ function Login({ onLogin, notice, clearNotice }: {
         <label className="field-label" htmlFor="password">Password</label>
         <input id="password" className="text-input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
         {error && <div className="error-banner" role="alert">{error}</div>}
-        <button className="primary-button login-submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <ShieldCheck size={17} />}<span>{busy ? 'Authenticating…' : 'Sign in '}</span></button>
-        <div className="login-footer"><Shield size={14} />This system is protected · encrypted sessions</div>
+        <button className="primary-button login-submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <ShieldCheck size={17} />}<span>{busy ? 'Authenticating…' : 'Sign in securely'}</span></button>
+        <div className="login-footer"><Shield size={14} />Role-verified access · encrypted session</div>
       </form>
-      <div className="login-caption">Yor conversations · Your people · Your space</div>
+      <div className="login-caption">SAFECHAT · TRUST & SAFETY OPERATIONS</div>
     </main>
   )
 }
@@ -880,204 +890,164 @@ function SupportInbox({ actorRole }: { actorRole: Role }) {
   }
 
   const pages = Math.max(1, Math.ceil((data?.total || 0) / pageSize))
+  const statusTone = (value?: string) => {
+    if (value === 'closed') return 'closed'
+    if (value === 'pending') return 'pending'
+    if (value === 'in_progress') return 'progress'
+    return 'default'
+  }
   return (
-    <>
+    <div className="tickets-page">
       <PageHeading
         eyebrow="CUSTOMER CARE"
-        title="Support inbox"
+        title="Support tickets"
         subtitle={actorRole === 'SUPER_ADMIN'
-          ? 'Review every ticket, its current owner, and assignment history.'
-          : 'Your assigned tickets appear here. Replies sync to the user’s Support screen.'}
+          ? 'Review every ticket, its owner, and assignment history.'
+          : 'Your assigned tickets. Replies sync to the user’s Support screen.'}
         action={<button className="secondary-button" onClick={() => void load()}><RefreshCw size={14} className={loading ? 'refresh-rotate' : ''} />Refresh</button>}
       />
       {error && <ErrorBanner message={error} />}
-      <div className="support-toolbar">
-        <div className="support-total"><MessageCircle size={16} /><strong>{data?.total ?? '—'}</strong> tickets</div>
-        <select
-          className="select-input"
-          value={status}
-          aria-label="Filter support tickets"
-          onChange={(event) => { setStatus(event.target.value); setPage(1) }}
-        >
-          <option value="">All tickets</option>
-          {actorRole === 'SUPER_ADMIN' && <option value="pending">Pending</option>}
-          <option value="in_progress">In progress</option>
-          <option value="closed">Closed</option>
-        </select>
+
+      <div className="tickets-toolbar">
+        <div className="tickets-toolbar-left">
+          <span className="tickets-count-chip"><MessageCircle size={14} /><strong>{data?.total ?? '—'}</strong> tickets</span>
+        </div>
+        <div className="tickets-toolbar-right">
+          <label className="tickets-filter-label">
+            <span>Status</span>
+            <select
+              className="select-input"
+              value={status}
+              aria-label="Filter support tickets"
+              onChange={(event) => { setStatus(event.target.value); setPage(1) }}
+            >
+              <option value="">All tickets</option>
+              {actorRole === 'SUPER_ADMIN' && <option value="pending">Pending</option>}
+              <option value="in_progress">In progress</option>
+              <option value="closed">Closed</option>
+            </select>
+          </label>
+        </div>
       </div>
-      <section className="support-inbox panel support-inbox-fill">
-        <aside className="support-ticket-list">
-          {loading && !data ? (
-            <div className="support-list-skeleton" aria-hidden="true">
-              {Array.from({ length: 7 }).map((_, index) => (
-                <div className="support-ticket-row skeleton-support-row" key={`sup-sk-${index}`}>
-                  <span className="support-ticket-top">
-                    <span className="skeleton-avatar" />
-                    <span className="support-ticket-user"><span className="skeleton-line skeleton-name" /><span className="skeleton-line skeleton-meta" /></span>
-                    <span className="skeleton-line skeleton-date" />
-                  </span>
-                  <span className="skeleton-line skeleton-name" style={{ width: '70%' }} />
-                  <span className="skeleton-line skeleton-meta" style={{ width: '90%', marginTop: 6 }} />
-                  <span className="skeleton-line skeleton-pill" style={{ marginTop: 8 }} />
-                </div>
-              ))}
-            </div>
-          ) : data?.items.length ? data.items.map((ticket) => (
-              <button
-                type="button"
-                key={ticket.id}
-                className={`support-ticket-row ${selected?.id === ticket.id ? 'support-ticket-selected' : ''}`}
-                onClick={() => setSelectedId(ticket.id)}
-              >
-                <span className="support-ticket-top">
-                  <span className="support-avatar">{initials(ticket.display_name || ticket.username)}</span>
-                  <span className="support-ticket-user"><strong>{ticket.display_name || `@${ticket.username || 'unknown'}`}</strong><small>@{ticket.username || 'unknown'}</small></span>
-                  <span className="support-ticket-date">{dateLabel(ticket.updated_at)}</span>
-                </span>
-                <strong className="support-ticket-subject">{ticket.subject}</strong>
-                <span className="support-ticket-preview">{ticket.replies.at(-1)?.body || ticket.body}</span>
-                <span className="support-ticket-meta"><span className={`status-pill status-${ticket.status}`}>{ticket.status.replace('_', ' ')}</span><small>{ticket.replies.length} replies</small></span>
-                <span className="support-assignee">{ticket.assigned_admin_username ? `Assigned · @${ticket.assigned_admin_username}` : 'Pending assignment'}</span>
-              </button>
-            )) : <div className="support-list-empty"><MessageCircle size={19} />No support tickets found.</div>}
-        </aside>
-        <div className="support-thread">
-          {selected ? (
+
+      <div className={`tickets-layout ${selected ? 'has-detail' : ''}`}>
+        <section className="panel table-panel tickets-table-panel">
+          <div className="table-scroll">
+            <table className="tickets-table">
+              <thead>
+                <tr>
+                  <th>Ticket</th>
+                  <th>User</th>
+                  <th>Subject</th>
+                  <th>Status</th>
+                  <th>Assignee</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && !data ? (
+                  <TableSkeletonRows columns={6} rows={8} />
+                ) : !data?.items.length ? (
+                  <TableMessage columns={6} text="No tickets match this filter." />
+                ) : (
+                  data.items.map((ticket, index) => (
+                    <tr
+                      key={ticket.id}
+                      className={selected?.id === ticket.id ? 'is-selected' : ''}
+                      onClick={() => setSelectedId(ticket.id)}
+                    >
+                      <td>
+                        <span className="ticket-id">#{String((page - 1) * pageSize + index + 1).padStart(2, '0')}</span>
+                      </td>
+                      <td>
+                        <div className="ticket-user-cell">
+                          <span className="avatar avatar-muted">{(ticket.display_name || ticket.username || '?').slice(0, 1).toUpperCase()}</span>
+                          <span>
+                            <strong>{ticket.display_name || ticket.username || 'User'}</strong>
+                            <small>@{ticket.username || 'unknown'}</small>
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="ticket-subject-cell">
+                          <strong>{ticket.subject || 'No subject'}</strong>
+                          <small>{(ticket.body || '').slice(0, 72)}{(ticket.body || '').length > 72 ? '…' : ''}</small>
+                        </div>
+                      </td>
+                      <td>
+                        <span className={`ticket-status-pill tone-${statusTone(ticket.status)}`}>
+                          {(ticket.status || 'open').replace('_', ' ')}
+                        </span>
+                      </td>
+                      <td className="muted">{ticket.assigned_admin_username || '—'}</td>
+                      <td className="muted">{dateLabel(ticket.created_at)}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          <Pagination page={page} pages={pages} total={data?.total || 0} pageSize={pageSize} onPage={setPage} />
+        </section>
+
+        <aside className="panel tickets-detail">
+          {!selected ? (
+            <EmptyState icon={<MessageCircle size={22} />} title="Select a ticket" text="Choose a row to read the thread and reply." />
+          ) : (
             <>
-              <div className="support-thread-header">
-                <div><p className="eyebrow">TICKET · {selected.id.slice(-8).toUpperCase()}</p><h2>{selected.subject}</h2><p>{selected.display_name || `@${selected.username || 'unknown'}`} · Created {dateLabel(selected.created_at)}</p><p className="ticket-owner">Assigned to {selected.assigned_admin_username ? `@${selected.assigned_admin_username}` : 'the next active admin'} · {selected.status.replace('_', ' ')}</p></div>
-                <button className="secondary-button" disabled={sending} onClick={() => void toggleClosed()}>
-                  {selected.status === 'closed' ? 'Reopen ticket' : 'Close ticket'}
+              <div className="tickets-detail-head">
+                <div>
+                  <p className="eyebrow">TICKET</p>
+                  <h2>{selected.subject || 'Support request'}</h2>
+                  <p className="muted">
+                    {(selected.display_name || selected.username || 'User')}
+                    {selected.username ? ` · @${selected.username}` : ''}
+                  </p>
+                </div>
+                <span className={`ticket-status-pill tone-${statusTone(selected.status)}`}>
+                  {(selected.status || 'open').replace('_', ' ')}
+                </span>
+              </div>
+              <div className="tickets-detail-actions">
+                <button type="button" className="secondary-button" disabled={sending} onClick={() => void toggleClosed()}>
+                  {selected.status === 'closed' ? 'Reopen' : 'Close ticket'}
                 </button>
               </div>
-              <div className="support-messages">
-                <article className="support-message support-message-user"><div className="support-message-heading"><strong>{selected.display_name || `@${selected.username || 'user'}`}</strong><time>{dateLabel(selected.created_at)}</time></div><p>{selected.body}</p></article>
-                {selected.replies.map((item) => {
-                  const fromUser = item.author_role === 'USER'
-                  return <article className={`support-message ${fromUser ? 'support-message-user' : 'support-message-admin'}`} key={item.id}>
-                    <div className="support-message-heading"><strong>{fromUser ? selected.display_name || `@${selected.username || 'user'}` : item.author_username ? `@${item.author_username}` : 'SafeChat Support'}</strong><time>{dateLabel(item.created_at)}</time></div>
-                    <p>{item.body}</p>
-                  </article>
-                })}
-                {selected.replies.length === 0 && <div className="support-no-replies">No replies yet. Send a response to update the ticket and notify the user's support page.</div>}
-                {actorRole === 'SUPER_ADMIN' && Boolean(selected.assignment_history?.length) && <div className="assignment-history"><strong>Assignment history</strong>{selected.assignment_history?.map((entry, index) => <span key={`${entry.admin_id}-${entry.assigned_at}-${index}`}>@{entry.username || 'unknown'} · {entry.assigned_by === 'AUTO' ? 'automatic' : entry.assigned_by === 'LEGACY' ? 'previous assignment' : 'superadmin'} · {dateLabel(entry.assigned_at)}</span>)}</div>}
+              <div className="tickets-thread">
+                <div className="tickets-bubble is-user">
+                  <header><strong>{selected.display_name || selected.username || 'User'}</strong><span>{dateLabel(selected.created_at)}</span></header>
+                  <p>{selected.body}</p>
+                </div>
+                {(selected as any).replies?.length
+                  ? (selected as any).replies.map((item: any, i: number) => (
+                      <div key={item.id || i} className={`tickets-bubble ${item.from_admin || item.admin_id ? 'is-admin' : 'is-user'}`}>
+                        <header>
+                          <strong>{item.admin_username || item.username || (item.from_admin ? 'Support' : 'User')}</strong>
+                          <span>{dateLabel(item.created_at)}</span>
+                        </header>
+                        <p>{item.body}</p>
+                      </div>
+                    ))
+                  : null}
               </div>
-              <div className="support-composer">
-                {selected.status === 'closed' ? <div className="support-closed-note">This ticket is closed. Reopen it to send another reply.</div> : <>
-                  <textarea value={reply} onChange={(event) => setReply(event.target.value.slice(0, 2000))} rows={3} placeholder="Write a helpful response…" />
-                  <div className="support-composer-bottom"><span>{reply.length}/2000 · The user will see this in Settings → Support</span><button className="primary-button" disabled={!reply.trim() || sending} onClick={() => void sendReply()}>{sending ? <LoaderCircle className="spin" size={14} /> : <Send size={14} />}Send reply</button></div>
-                </>}
-              </div>
+              {selected.status !== 'closed' && (
+                <div className="tickets-reply">
+                  <textarea
+                    value={reply}
+                    onChange={(e) => setReply(e.target.value)}
+                    placeholder="Write a reply…"
+                    rows={3}
+                  />
+                  <button type="button" className="primary-button" disabled={sending || !reply.trim()} onClick={() => void sendReply()}>
+                    {sending ? 'Sending…' : 'Send reply'}
+                  </button>
+                </div>
+              )}
             </>
-          ) : <div className="support-thread-empty"><MessageCircle size={24} /><strong>Select a ticket</strong><span>Choose a conversation to review and reply.</span></div>}
-        </div>
-      </section>
-      <Pagination page={page} pages={pages} total={data?.total || 0} pageSize={pageSize} onPage={setPage} />
-    </>
-  )
-}
-
-function SettingsPage({
-  theme,
-  onThemeChange,
-}: {
-  theme: ThemePreference
-  onThemeChange: (value: ThemePreference) => void
-}) {
-  const [username, setUsername] = useState('')
-  const [reason, setReason] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const [resetResult, setResetResult] = useState<{
-    username: string
-    temporary_password: string
-    revoked_sessions: number
-  } | null>(null)
-
-  const resetPassword = async (event: FormEvent) => {
-    event.preventDefault()
-    if (busy) return
-    if (!window.confirm(`Reset the password for @${username.trim()} and sign out its existing sessions?`)) return
-    setBusy(true)
-    setError('')
-    setResetResult(null)
-    try {
-      const result = await request<{
-        username: string
-        temporary_password: string
-        revoked_sessions: number
-      }>('/admin/users/reset-password', jsonBody({
-        username: username.trim(),
-        reason: reason.trim(),
-      }))
-      setResetResult(result)
-      setReason('')
-      notifyAdmin(`Password reset for @${result.username}.`)
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : 'Unable to reset the user password.'
-      setError(message)
-      notifyAdmin(message, 'error')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const copyTemporaryPassword = async () => {
-    if (!resetResult) return
-    try {
-      await navigator.clipboard.writeText(resetResult.temporary_password)
-      notifyAdmin('Temporary password copied.')
-    } catch {
-      notifyAdmin('Clipboard access is unavailable; copy the password manually.', 'error')
-    }
-  }
-
-  return (
-    <>
-      <PageHeading eyebrow="ADMIN PREFERENCES" title="Settings" subtitle="Personalize this portal and manage account recovery actions." />
-      <div className="settings-grid">
-        <section className="panel settings-panel">
-          <div className="panel-heading"><div><p className="eyebrow">APPEARANCE</p><h2>Theme</h2></div><Sun size={18} className="panel-heading-icon" /></div>
-          <p className="settings-copy">Choose how the admin workspace appears on this device.</p>
-          <div className="theme-choices" role="group" aria-label="Admin portal theme">
-            {([
-              ['system', 'System', Monitor],
-              ['light', 'Light', Sun],
-              ['dark', 'Dark', Moon],
-            ] as const).map(([value, label, Icon]) => (
-              <button
-                key={value}
-                type="button"
-                className={`theme-choice ${theme === value ? 'theme-choice-active' : ''}`}
-                aria-pressed={theme === value}
-                onClick={() => onThemeChange(value)}
-              >
-                <Icon size={18} /><span>{label}</span>{theme === value && <Check size={15} />}
-              </button>
-            ))}
-          </div>
-          <div className="settings-note"><Monitor size={15} />Theme preference is saved only in this browser.</div>
-        </section>
-
-        <section className="panel settings-panel">
-          <div className="panel-heading"><div><p className="eyebrow">ACCOUNT RECOVERY</p><h2>Reset a user password</h2></div><KeyRound size={18} className="panel-heading-icon" /></div>
-          <p className="settings-copy">Issue a one-time temporary password for an account below your role. Higher-level accounts require superadmin control.</p>
-          {error && <ErrorBanner message={error} />}
-          <form className="reset-password-form" onSubmit={(event) => void resetPassword(event)}>
-            <label className="field-label" htmlFor="reset-username">Username</label>
-            <input id="reset-username" className="text-input" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="off" maxLength={32} required />
-            <label className="field-label" htmlFor="reset-reason">Reason for reset</label>
-            <textarea id="reset-reason" className="settings-textarea" value={reason} onChange={(event) => setReason(event.target.value.slice(0, 500))} rows={3} minLength={3} maxLength={500} required />
-            <button className="primary-button" disabled={busy || !username.trim() || reason.trim().length < 3}>{busy ? <LoaderCircle className="spin" size={15} /> : <KeyRound size={15} />}{busy ? 'Resetting password…' : 'Generate temporary password'}</button>
-          </form>
-          {resetResult && <div className="temporary-password-result" role="status">
-            <div><strong>Temporary password generated</strong><small>@{resetResult.username} · {resetResult.revoked_sessions} sessions revoked</small></div>
-            <div className="temporary-password-copy"><code>{resetResult.temporary_password}</code><button className="secondary-button" type="button" onClick={() => void copyTemporaryPassword()}><Copy size={14} />Copy</button></div>
-            <p>Copy it now and share it only through a trusted channel. This value is not saved in the audit log; ask the user to replace it after signing in.</p>
-          </div>}
-        </section>
+          )}
+        </aside>
       </div>
-    </>
+    </div>
   )
 }
 
@@ -1226,4 +1196,477 @@ function EmptyState({ icon, title, text }: { icon: ReactNode; title: string; tex
 
 function ErrorBanner({ message }: { message: string }) {
   return <div className="error-banner page-error" role="alert"><X size={15} />{message}</div>
+}
+
+function SettingsPage({
+  theme,
+  onThemeChange,
+}: {
+  theme: ThemePreference
+  onThemeChange: (value: ThemePreference) => void
+}) {
+  const [username, setUsername] = useState('')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [resetResult, setResetResult] = useState<{
+    username: string
+    temporary_password: string
+    revoked_sessions: number
+  } | null>(null)
+
+  const resetPassword = async (event: FormEvent) => {
+    event.preventDefault()
+    if (busy) return
+    if (!window.confirm(`Reset the password for @${username.trim()} and sign out its existing sessions?`)) return
+    setBusy(true)
+    setError('')
+    setResetResult(null)
+    try {
+      const result = await request<{
+        username: string
+        temporary_password: string
+        revoked_sessions: number
+      }>('/admin/users/reset-password', jsonBody({
+        username: username.trim(),
+        reason: reason.trim(),
+      }))
+      setResetResult(result)
+      setReason('')
+      notifyAdmin(`Password reset for @${result.username}.`)
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : 'Unable to reset the user password.'
+      setError(message)
+      notifyAdmin(message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const copyTemporaryPassword = async () => {
+    if (!resetResult) return
+    try {
+      await navigator.clipboard.writeText(resetResult.temporary_password)
+      notifyAdmin('Temporary password copied.')
+    } catch {
+      notifyAdmin('Clipboard access is unavailable; copy the password manually.', 'error')
+    }
+  }
+
+  return (
+    <>
+      <PageHeading eyebrow="ADMIN PREFERENCES" title="Settings" subtitle="Personalize this portal and manage account recovery actions." />
+      <div className="settings-grid">
+        <section className="panel settings-panel">
+          <div className="panel-heading"><div><p className="eyebrow">APPEARANCE</p><h2>Theme</h2></div><Sun size={18} className="panel-heading-icon" /></div>
+          <p className="settings-copy">Choose how the admin workspace appears on this device.</p>
+          <div className="theme-choices" role="group" aria-label="Admin portal theme">
+            {([
+              ['system', 'System', Monitor],
+              ['light', 'Light', Sun],
+              ['dark', 'Dark', Moon],
+            ] as const).map(([value, label, Icon]) => (
+              <button
+                key={value}
+                type="button"
+                className={`theme-choice ${theme === value ? 'theme-choice-active' : ''}`}
+                aria-pressed={theme === value}
+                onClick={() => onThemeChange(value)}
+              >
+                <Icon size={18} /><span>{label}</span>{theme === value && <Check size={15} />}
+              </button>
+            ))}
+          </div>
+          <div className="settings-note"><Monitor size={15} />Theme preference is saved only in this browser.</div>
+        </section>
+
+        <section className="panel settings-panel">
+          <div className="panel-heading"><div><p className="eyebrow">ACCOUNT RECOVERY</p><h2>Reset a user password</h2></div><KeyRound size={18} className="panel-heading-icon" /></div>
+          <p className="settings-copy">Issue a one-time temporary password for an account below your role. Higher-level accounts require superadmin control.</p>
+          {error && <ErrorBanner message={error} />}
+          <form className="reset-password-form" onSubmit={(event) => void resetPassword(event)}>
+            <label className="field-label" htmlFor="reset-username">Username</label>
+            <input id="reset-username" className="text-input" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="off" maxLength={32} required />
+            <label className="field-label" htmlFor="reset-reason">Reason for reset</label>
+            <textarea id="reset-reason" className="settings-textarea" value={reason} onChange={(event) => setReason(event.target.value.slice(0, 500))} rows={3} minLength={3} maxLength={500} required />
+            <button className="primary-button" disabled={busy || !username.trim() || reason.trim().length < 3}>{busy ? <LoaderCircle className="spin" size={15} /> : <KeyRound size={15} />}{busy ? 'Resetting password…' : 'Generate temporary password'}</button>
+          </form>
+          {resetResult && <div className="temporary-password-result" role="status">
+            <div><strong>Temporary password generated</strong><small>@{resetResult.username} · {resetResult.revoked_sessions} sessions revoked</small></div>
+            <div className="temporary-password-copy"><code>{resetResult.temporary_password}</code><button className="secondary-button" type="button" onClick={() => void copyTemporaryPassword()}><Copy size={14} />Copy</button></div>
+            <p>Copy it now and share it only through a trusted channel. This value is not saved in the audit log; ask the user to replace it after signing in.</p>
+          </div>}
+        </section>
+      </div>
+    </>
+  )
+}
+
+type BackupScope = {
+  id: string
+  label: string
+  collections: string[]
+}
+type BackupJob = {
+  id: string
+  status: string
+  scope: string
+  until?: string | null
+  filename?: string
+  progress?: number
+  phase?: string
+  message?: string
+  document_count?: number
+  collections_done?: string[]
+  error?: string | null
+  started_at?: string
+  finished_at?: string | null
+  size_bytes?: number | null
+  triggered_by?: string
+}
+type BackupFile = {
+  filename: string
+  size_bytes: number
+  created_at: string
+  scope?: string
+  until?: string | null
+  document_count?: number
+  collections?: Record<string, number>
+}
+
+
+const BACKUP_SCOPE_ICONS: Record<string, typeof Database> = {
+  full: Database,
+  messages: MessageCircle,
+  conversations: Layers,
+  users: Users,
+  contacts: Contact,
+  support: LifeBuoy,
+  payments: CreditCard,
+  status: Activity,
+  groups: Users,
+  audit: FileClock,
+  notes: Archive,
+}
+
+function formatBytes(n?: number | null) {
+  if (n == null || Number.isNaN(n)) return '—'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`
+}
+
+function BackupPage() {
+  const [scopes, setScopes] = useState<BackupScope[]>([])
+  const [files, setFiles] = useState<BackupFile[]>([])
+  const [jobs, setJobs] = useState<BackupJob[]>([])
+  const [scope, setScope] = useState('full')
+  const [untilLocal, setUntilLocal] = useState(() => {
+    const d = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+  })
+  const [activeJobId, setActiveJobId] = useState<string | null>(null)
+  const [activeJob, setActiveJob] = useState<BackupJob | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [starting, setStarting] = useState(false)
+  const [error, setError] = useState('')
+
+  const refresh = useCallback(async () => {
+    try {
+      const data = await request<{ files: BackupFile[]; jobs: BackupJob[] }>('/admin/backups')
+      setFiles(data.files || [])
+      setJobs(data.jobs || [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load backups')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const data = await request<{ scopes: BackupScope[] }>('/admin/backups/scopes')
+        setScopes(data.scopes || [])
+      } catch {
+        /* scopes endpoint optional fallback */
+        setScopes([
+          { id: 'full', label: 'Full', collections: ['*'] },
+          { id: 'messages', label: 'Messages', collections: ['messages'] },
+          { id: 'conversations', label: 'Conversations', collections: ['conversations', 'messages'] },
+          { id: 'users', label: 'Users', collections: ['users'] },
+        ])
+      }
+      await refresh()
+    })()
+  }, [refresh])
+
+  useEffect(() => {
+    if (!activeJobId) return
+    let cancelled = false
+    const tick = async () => {
+      try {
+        const job = await request<BackupJob>(`/admin/backups/jobs/${activeJobId}`)
+        if (cancelled) return
+        setActiveJob(job)
+        if (job.status === 'completed' || job.status === 'failed') {
+          setActiveJobId(null)
+          setStarting(false)
+          await refresh()
+          notifyAdmin(
+            job.status === 'completed' ? 'Backup completed' : `Backup failed: ${job.error || job.message}`,
+            job.status === 'completed' ? 'success' : 'error',
+          )
+          return
+        }
+      } catch {
+        /* keep polling */
+      }
+      if (!cancelled) window.setTimeout(tick, 1200)
+    }
+    void tick()
+    return () => {
+      cancelled = true
+    }
+  }, [activeJobId, refresh])
+
+  const start = async () => {
+    setStarting(true)
+    setError('')
+    try {
+      // datetime-local → ISO (treat as local, send with offset)
+      const local = new Date(untilLocal)
+      const until = Number.isNaN(local.getTime()) ? undefined : local.toISOString()
+      const job = await request<BackupJob>('/admin/backups', {
+        method: 'POST',
+        body: JSON.stringify({ scope, until }),
+      })
+      setActiveJob(job)
+      setActiveJobId(job.id)
+      notifyAdmin('Backup started — users can keep messaging', 'info')
+      await refresh()
+    } catch (e) {
+      setStarting(false)
+      setError(e instanceof Error ? e.message : 'Could not start backup')
+      notifyAdmin('Could not start backup', 'error')
+    }
+  }
+
+  const download = async (filename: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/admin/backups/download/${encodeURIComponent(filename)}`, {
+        headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+        credentials: 'include',
+      })
+      if (!response.ok) throw new Error('Download failed')
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+      notifyAdmin('Download started', 'success')
+    } catch {
+      notifyAdmin('Download failed', 'error')
+    }
+  }
+
+  const remove = async (filename: string) => {
+    if (!window.confirm(`Delete backup ${filename}?`)) return
+    try {
+      await request(`/admin/backups/${encodeURIComponent(filename)}`, { method: 'DELETE' })
+      notifyAdmin('Backup deleted', 'success')
+      await refresh()
+    } catch {
+      notifyAdmin('Could not delete backup', 'error')
+    }
+  }
+
+  const running = activeJob && (activeJob.status === 'running' || activeJob.status === 'queued')
+
+  return (
+    <div className="backup-page">
+      <header className="page-header">
+        <div>
+          <p className="eyebrow">DATA PROTECTION</p>
+          <h1>Database backup</h1>
+          <p className="page-sub">
+            Snapshot collections into a single compressed file. Choose a cutoff time so live traffic can continue while the archive only includes data up to that moment.
+          </p>
+        </div>
+      </header>
+
+      {error ? <ErrorBanner message={error} /> : null}
+
+      <div className="backup-grid">
+        <section className="panel backup-composer">
+          <div className="panel-table-heading">
+            <div>
+              <p className="eyebrow">NEW SNAPSHOT</p>
+              <h2>Create backup</h2>
+            </div>
+            <Database size={18} className="text-muted" />
+          </div>
+
+          <p className="backup-hint">Select what to include and the point-in-time cutoff.</p>
+
+          <div className="backup-scope-grid">
+            {(scopes.length ? scopes : [{ id: 'full', label: 'Full', collections: ['*'] }]).map((s) => {
+              const Icon = BACKUP_SCOPE_ICONS[s.id] || FolderArchive
+              return (
+              <button
+                key={s.id}
+                type="button"
+                className={`backup-scope-card ${scope === s.id ? 'is-active' : ''}`}
+                onClick={() => setScope(s.id)}
+              >
+                <span className="backup-scope-icon"><Icon size={18} strokeWidth={2.2} /></span>
+                <strong>{s.label || s.id}</strong>
+                <span>{(s.collections || []).join(', ')}</span>
+              </button>
+              )
+            })}
+          </div>
+
+          <label className="field-label" htmlFor="backup-until">
+            Include data up to
+          </label>
+          <input
+            id="backup-until"
+            type="datetime-local"
+            className="field-input"
+            value={untilLocal}
+            onChange={(e) => setUntilLocal(e.target.value)}
+          />
+          <p className="backup-hint subtle">
+            Documents newer than this timestamp are skipped. The database stays writable for users.
+          </p>
+
+          <button
+            type="button"
+            className="primary-btn backup-start-btn"
+            disabled={starting || !!running}
+            onClick={() => void start()}
+          >
+            {starting || running ? (
+              <>
+                <LoaderCircle size={16} className="spin" /> Working…
+              </>
+            ) : (
+              <>
+                <Play size={16} /> Start backup
+              </>
+            )}
+          </button>
+
+          {(activeJob || running) && (
+            <div className="backup-progress" role="status">
+              <div className="backup-progress-head">
+                <span className={`backup-status-pill status-${activeJob?.status || 'running'}`}>
+                  {activeJob?.status || 'running'}
+                </span>
+                <span>{activeJob?.progress ?? 0}%</span>
+              </div>
+              <div className="progress-track backup-track">
+                <span className="progress-brand" style={{ width: `${activeJob?.progress ?? 0}%` }} />
+              </div>
+              <p className="backup-progress-msg">{activeJob?.message || 'Starting…'}</p>
+              {activeJob?.document_count != null ? (
+                <p className="backup-progress-meta">{activeJob.document_count.toLocaleString()} documents · scope {activeJob.scope}</p>
+              ) : null}
+            </div>
+          )}
+        </section>
+
+        <section className="panel backup-side">
+          <div className="panel-table-heading">
+            <div>
+              <p className="eyebrow">RECENT JOBS</p>
+              <h2>Activity</h2>
+            </div>
+            <button type="button" className="ghost-btn" onClick={() => void refresh()} aria-label="Refresh">
+              <RefreshCw size={15} />
+            </button>
+          </div>
+          <div className="backup-job-list">
+            {loading && !jobs.length ? (
+              <p className="muted">Loading…</p>
+            ) : !jobs.length ? (
+              <EmptyState icon={<HardDrive size={22} />} title="No jobs yet" text="Start a backup to see progress here." />
+            ) : (
+              jobs.slice(0, 8).map((j) => (
+                <div key={j.id} className="backup-job-row">
+                  <div>
+                    <strong>{j.scope}</strong>
+                    <span className="muted">{j.phase || j.status}</span>
+                  </div>
+                  <div className="backup-job-right">
+                    <span className={`backup-status-pill status-${j.status}`}>{j.status}</span>
+                    <span className="muted">{j.progress ?? 0}%</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+      </div>
+
+      <section className="panel table-panel table-panel-fill backup-files">
+        <div className="table-caption">
+          <span>
+            <strong>{files.length}</strong> archive{files.length === 1 ? '' : 's'} in storage
+          </span>
+          <span className="table-caption-right">Single-file gzip JSON under backend/storage/backups</span>
+        </div>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>FILE</th>
+                <th>SCOPE</th>
+                <th>DOCUMENTS</th>
+                <th>SIZE</th>
+                <th>CREATED</th>
+                <th className="actions-heading">ACTIONS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && !files.length ? (
+                <TableSkeletonRows columns={6} rows={4} />
+              ) : !files.length ? (
+                <TableMessage columns={6} text="No backup files yet. Create your first snapshot above." />
+              ) : (
+                files.map((f) => (
+                  <tr key={f.filename}>
+                    <td>
+                      <strong className="mono-name">{f.filename}</strong>
+                      {f.until ? <div className="muted small">Until {new Date(f.until).toLocaleString()}</div> : null}
+                    </td>
+                    <td>{f.scope || '—'}</td>
+                    <td>{f.document_count != null ? f.document_count.toLocaleString() : '—'}</td>
+                    <td>{formatBytes(f.size_bytes)}</td>
+                    <td>{f.created_at ? new Date(f.created_at).toLocaleString() : '—'}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button type="button" className="backup-action-btn" onClick={() => void download(f.filename)} title="Download">
+                          <Download size={15} />
+                          <span>Download</span>
+                        </button>
+                        <button type="button" className="backup-action-btn danger" onClick={() => void remove(f.filename)} title="Delete">
+                          <Trash2 size={15} />
+                          <span>Delete</span>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  )
 }

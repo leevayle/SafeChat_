@@ -78,7 +78,7 @@ export function ContactInfoPanel({ contactId, onCall, onChat }: Props) {
   const showPremium = !!(c as any).verifiedBadge || !!(c as any).premium
 
   const copyPhone = async () => {
-    const phone = c.phone
+    const phone = c.phone || (c as any).phone_number || ''
     if (!phone) return
     try {
       await navigator.clipboard.writeText(String(phone))

@@ -224,6 +224,8 @@ const MessageBubble = memo(function MessageBubble({
     )
   }
 
+  const hasReactions = !!(m.reactions && m.reactions.length)
+
   return (
     <motion.div
       initial={animateIn ? { opacity: 0, y: 16, scale: 0.92 } : false}
@@ -248,9 +250,9 @@ const MessageBubble = memo(function MessageBubble({
         if (dx > 28) onReply?.(m)
         setDx(0)
       }}
-      className={`group/bubble relative flex w-full ${mine ? 'justify-end' : 'justify-start'} ${highlight ? 'z-10' : ''}`}
+      className={`group/bubble flex w-full ${mine ? 'justify-end' : 'justify-start'} ${highlight ? 'z-10' : ''} ${hasReactions ? 'mb-3' : ''}`}
     >
-      <div className={`relative inline-flex max-w-[85%] items-start ${mine ? 'ml-auto' : 'mr-auto'}`}>
+      <div className="relative max-w-[min(78%,22rem)]">
       {/* Desktop: hover actions */}
       {!m.deleted && (
         <div
@@ -333,7 +335,7 @@ const MessageBubble = memo(function MessageBubble({
         onClick={() => {
           if (mine && m.state === 'failed') onRetry(m)
         }}
-        className={`relative max-w-[76%] ${
+        className={`relative ${
           (() => {
             const letters = String(m.text || '').replace(/[^A-Za-z]/g, '').length
             const shortText = !m.image && !m.statusReply && letters > 0 && letters < 5
@@ -346,7 +348,7 @@ const MessageBubble = memo(function MessageBubble({
             : 'rounded-2xl rounded-bl-sm bg-white text-ink shadow-[0_4px_16px_-8px_rgba(15,23,42,0.18)] ring-1 ring-black/[0.04]'
         } ${mine && m.state === 'failed' ? 'ring-2 ring-red-300/80' : ''} ${
           highlight ? 'ring-2 ring-brand-purple shadow-[0_0_0_6px_rgba(var(--brand-shadow-rgb),0.22)] transition-shadow duration-700' : 'transition-shadow duration-700'
-        } ${m.reactions && m.reactions.length ? 'mb-2' : ''}`}
+        }`}
       >
         {m.statusReply && (
           <button
@@ -450,11 +452,11 @@ const MessageBubble = memo(function MessageBubble({
           <ReceiptTicks state={m.state} readReceipts={readReceipts} mine={mine} />
         </p>
       </div>
-      {/* Reactions: half on bubble, half outside (WhatsApp-style) */}
-      {!!(m.reactions && m.reactions.length) && (
+      {/* Reactions: sit on the bottom edge of the bubble (both sides) */}
+      {hasReactions && (
         <div
-          className={`absolute z-[5] flex flex-wrap gap-0.5 ${
-            mine ? 'bottom-0 left-1 translate-y-1/2' : 'bottom-0 right-1 translate-y-1/2'
+          className={`pointer-events-none absolute z-[5] flex translate-y-[42%] flex-wrap gap-0.5 ${
+            mine ? 'bottom-0 right-2' : 'bottom-0 left-2'
           }`}
         >
           {Object.entries(
@@ -467,7 +469,7 @@ const MessageBubble = memo(function MessageBubble({
           ).map(([emoji, count]) => (
             <span
               key={emoji}
-              className="flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[11px] shadow-sm ring-1 ring-black/10 dark:bg-[#1a222d] dark:ring-white/15"
+              className="pointer-events-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[11px] shadow-sm ring-1 ring-black/10 dark:bg-[#1a222d] dark:ring-white/15"
             >
               {emoji}
               {(count as number) > 1 ? (
@@ -501,6 +503,11 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         ...contactHit,
         photo: contactHit.photo || chatPreview?.photo || null,
         name: contactHit.name || chatPreview?.name || peerId,
+        phone:
+          contactHit.phone ||
+          (contactHit as any).phone_number ||
+          (chatPreview as any)?.phone ||
+          '',
         hue:
           contactHit.hue ||
           (chatPreview?.hue as [string, string]) ||
@@ -511,7 +518,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           id: peerId,
           name: chatPreview.name || peerId,
           username: (chatPreview as any).username || '',
-          phone: '',
+          phone: (chatPreview as any).phone || (chatPreview as any).phone_number || '',
           bio: '',
           photo: chatPreview.photo ?? null,
           online: false,
@@ -2153,10 +2160,18 @@ return (
                 const busyInfo =
                   peerBusy ||
                   busyMap?.[peer] ||
-                  ((c as any).busy ? { message: (c as any).busyMessage || 'busy', until: (c as any).busyUntil } : null)
+                  busyMap?.[peerId] ||
+                  busyMap?.[contactId] ||
+                  ((c as any).busyMessage
+                    ? {
+                        message: (c as any).busyMessage,
+                        until: (c as any).busyUntil || null,
+                      }
+                    : null)
                 const busyActive = !!(
                   busyInfo &&
                   busyInfo.message &&
+                  String(busyInfo.message).trim() &&
                   (!busyInfo.until || Date.parse(String(busyInfo.until)) > Date.now())
                 )
                 const online = !!(
@@ -2167,7 +2182,8 @@ return (
                   c.online
                 )
                 const last = peerLastSeen || (c as any).lastSeen
-                if (busyActive) return busyInfo!.message || 'busy'
+                // Custom status replaces Online while the peer is online (or message still active)
+                if (busyActive && (online || (c as any).busy)) return busyInfo!.message || 'busy'
                 if (online) return 'Online'
                 if (last) {
                   const timeBit = formatLastSeen(last).replace(/^last seen\s*/i, '')
@@ -2651,6 +2667,7 @@ return (
               return (
               <div
                 key={key}
+                className="w-full"
                 ref={(el) => {
                   msgRefs.current[m.id] = el
                   if (m.clientKey) msgRefs.current[m.clientKey] = el
@@ -2904,20 +2921,20 @@ return (
             ) : null}
             {c.username ? <p className="mt-2 font-bold text-brand-purple">@{c.username}</p> : null}
             <p className="mt-1 text-xs font-semibold text-gray-400">
-              {c.phone ? 'Contact shared with you' : 'Contact not shared with you'}
+              {(c.phone || (c as any).phone_number) ? 'Contact shared with you' : 'Contact not shared with you'}
             </p>
-            {c.phone ? (
+            {(c.phone || (c as any).phone_number) ? (
               <button
                 type="button"
                 className="mt-1 text-sm font-semibold text-gray-500 hover:text-brand-purple"
                 onClick={async () => {
                   try {
-                    await navigator.clipboard.writeText(String(c.phone))
+                    await navigator.clipboard.writeText(String(c.phone || (c as any).phone_number || ''))
                     showToast?.('Copied to clipboard')
                   } catch { showToast?.('Could not copy') }
                 }}
               >
-                {c.phone}
+                {c.phone || (c as any).phone_number}
               </button>
             ) : null}
             <p
@@ -2925,19 +2942,33 @@ return (
                 liveDraft || typing || peerOnline || c.online ? 'text-brand-blue' : 'text-gray-400'
               }`}
             >
-              {(c as any).onCall
-                ? 'on a call'
-                : (c as any).busyMessage || ((c as any).busy ? 'busy' : null)
-                  ? (c as any).busyMessage || 'busy'
-                  : liveDraft || typing
-                    ? 'typing…'
-                    : peerOnline || c.online
-                      ? 'Online'
-                      : peerLastSeen || (c as any).lastSeen
-                        ? formatLastSeen(peerLastSeen || (c as any).lastSeen)
-                        : c.username
-                          ? `@${c.username}`
-                          : ''}
+              {(() => {
+                if ((c as any).onCall) return 'on a call'
+                if (liveDraft || typing) return 'typing…'
+                const msg =
+                  peerBusy?.message ||
+                  busyMap?.[peerId || contactId]?.message ||
+                  (c as any).busyMessage ||
+                  ''
+                const until =
+                  peerBusy?.until ||
+                  busyMap?.[peerId || contactId]?.until ||
+                  (c as any).busyUntil
+                const busyOn =
+                  !!msg &&
+                  String(msg).trim() &&
+                  (!until || Date.parse(String(until)) > Date.now())
+                const onlineNow = !!(
+                  peerOnline ||
+                  c.online ||
+                  presenceMap?.[peerId || contactId]
+                )
+                if (busyOn && (onlineNow || (c as any).busy)) return msg
+                if (onlineNow) return 'Online'
+                if (peerLastSeen || (c as any).lastSeen)
+                  return formatLastSeen(peerLastSeen || (c as any).lastSeen)
+                return c.username ? `@${c.username}` : ''
+              })()}
             </p>
 
             <div className="mt-8 grid w-full max-w-sm grid-cols-3 gap-3">
@@ -2980,19 +3011,19 @@ return (
                   {(c as any).bio || c.bio || contactHit?.bio || 'No bio yet'}
                 </p>
               </div>
-              {c.phone ? (
+              {(c.phone || (c as any).phone_number) ? (
                 <button
                   type="button"
                   className="w-full rounded-2xl bg-gray-50 px-4 py-3 text-left transition hover:bg-gray-100"
                   onClick={async () => {
                     try {
-                      await navigator.clipboard.writeText(String(c.phone))
+                      await navigator.clipboard.writeText(String(c.phone || (c as any).phone_number || ''))
                       showToast?.('Copied to clipboard')
                     } catch { showToast?.('Could not copy') }
                   }}
                 >
                   <p className="text-[11px] font-black uppercase tracking-wide text-gray-400">Phone</p>
-                  <p className="mt-1 text-sm font-semibold text-ink">{c.phone}</p>
+                  <p className="mt-1 text-sm font-semibold text-ink">{c.phone || (c as any).phone_number}</p>
                 </button>
               ) : null}
               {c.username ? (

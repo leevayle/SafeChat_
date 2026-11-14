@@ -329,112 +329,6 @@ async def update_user_status(
     return success_response("Account status updated", {"user_id": target_id, "status": status})
 
 
-
-@router.delete("/users/{user_id}/permanent")
-async def delete_user_permanently(
-    user_id: str,
-    body: ReasonBody,
-    user: dict = Depends(require_roles(Role.SUPER_ADMIN)),
-):
-    """Hard-delete a user and all related data. SUPER_ADMIN only.
-
-    Removes the account and associated messages, contacts, notes, requests,
-    sessions, receipts, reactions, and notifications so the phone/username
-    can be reused as a clean new account.
-    """
-    from bson import ObjectId
-
-    db = get_database()
-    target = await _get_managed_user(user_id, user, allow_self=False)
-    target_id = str(target["_id"])
-    role = str(target.get("account_role") or "USER")
-    if role == Role.SUPER_ADMIN.value:
-        raise ForbiddenError("Cannot permanently delete a SUPER_ADMIN")
-
-    # Private / self conversations involving this user — remove entire thread.
-    # Group conversations — only remove the user's membership and their messages.
-    private_conv_ids: list[str] = []
-    group_conv_ids: list[str] = []
-    async for conv in db.conversations.find({"participant_ids": target_id}):
-        cid = str(conv["_id"])
-        ctype = str(conv.get("conversation_type") or "")
-        is_self = bool(conv.get("is_self"))
-        if ctype == "private" or is_self:
-            private_conv_ids.append(cid)
-        else:
-            group_conv_ids.append(cid)
-
-    if private_conv_ids:
-        await db.messages.delete_many({"conversation_id": {"$in": private_conv_ids}})
-        await db.message_receipts.delete_many({"conversation_id": {"$in": private_conv_ids}})
-        oids = [ObjectId(c) for c in private_conv_ids if ObjectId.is_valid(c)]
-        if oids:
-            await db.conversations.delete_many({"_id": {"$in": oids}})
-
-    # User-authored messages everywhere (including groups)
-    await db.messages.delete_many({"sender_id": target_id})
-    await db.message_receipts.delete_many({"user_id": target_id})
-    await db.message_reactions.delete_many({"user_id": target_id})
-
-    if group_conv_ids:
-        oids = [ObjectId(c) for c in group_conv_ids if ObjectId.is_valid(c)]
-        if oids:
-            await db.conversations.update_many(
-                {"_id": {"$in": oids}},
-                {"$pull": {"participant_ids": target_id}},
-            )
-        try:
-            await db.conversation_members.delete_many({"user_id": target_id})
-        except Exception:
-            pass
-
-    # Contacts both directions
-    await db.contacts.delete_many(
-        {"$or": [{"owner_user_id": target_id}, {"contact_user_id": target_id}]}
-    )
-    await db.contact_requests.delete_many(
-        {"$or": [{"from_user_id": target_id}, {"to_user_id": target_id}]}
-    )
-    await db.blocked_users.delete_many(
-        {"$or": [{"blocker_id": target_id}, {"blocked_id": target_id}]}
-    )
-
-    # Notes, statuses, notifications, sessions, presence, support, games
-    await db.user_notes.delete_many({"user_id": target_id})
-    await db.statuses.delete_many({"owner_user_id": target_id})
-    await db.notifications.delete_many({"user_id": target_id})
-    await db.sessions.delete_many({"user_id": target_id})
-    await db.admin_presence.delete_many({"_id": target_id})
-    try:
-        await db.support_tickets.delete_many({"user_id": target_id})
-    except Exception:
-        pass
-    try:
-        await db.group_members.delete_many({"user_id": target_id})
-    except Exception:
-        pass
-
-    # Finally the user document
-    await db.users.delete_one({"_id": target["_id"]})
-
-    await _write_audit(
-        user,
-        "user_permanently_deleted",
-        "user",
-        target_id,
-        {
-            "reason": body.reason,
-            "username": target.get("username"),
-            "phone": target.get("phone_number") or target.get("phone"),
-            "previous_role": role,
-        },
-    )
-    return success_response(
-        "User permanently deleted",
-        {"user_id": target_id, "deleted": True},
-    )
-
-
 @router.patch("/users/{user_id}/subscription")
 async def update_subscription(
     user_id: str,
@@ -1118,3 +1012,112 @@ async def update_report(
         {"status": body.status, "reason": body.reason},
     )
     return success_response("Report updated", {"status": body.status})
+
+
+# ── Database backups ──────────────────────────────────────────────────────────
+
+class BackupStartBody(BaseModel):
+    scope: Literal[
+        "full",
+        "messages",
+        "conversations",
+        "users",
+        "contacts",
+        "support",
+        "payments",
+        "status",
+        "groups",
+        "audit",
+        "notes",
+    ] = "full"
+    until: str | None = Field(
+        default=None,
+        description="ISO-8601 cutoff. Only documents at or before this time are included. Omit for 'now'.",
+    )
+
+
+@router.get("/backups/scopes")
+async def backup_scopes(user: dict = Depends(require_roles(Role.ADMIN))):
+    from app.services.backup_service import BACKUP_SCOPES
+
+    return success_response(
+        "Backup scopes",
+        {
+            "scopes": [
+                {
+                    "id": key,
+                    "collections": value if value is not None else ["*"],
+                    "label": key.replace("_", " ").title(),
+                }
+                for key, value in BACKUP_SCOPES.items()
+            ]
+        },
+    )
+
+
+@router.get("/backups")
+async def list_backups(user: dict = Depends(require_roles(Role.ADMIN))):
+    from app.services.backup_service import list_backup_files, list_jobs
+
+    return success_response(
+        "Backups",
+        {"files": list_backup_files(), "jobs": list_jobs(30)},
+    )
+
+
+@router.get("/backups/jobs/{job_id}")
+async def backup_job_status(job_id: str, user: dict = Depends(require_roles(Role.ADMIN))):
+    from app.services.backup_service import get_job
+
+    job = get_job(job_id)
+    if not job:
+        raise NotFoundError("Backup job not found")
+    return success_response("Backup job", job)
+
+
+@router.post("/backups")
+async def start_backup(body: BackupStartBody, user: dict = Depends(require_roles(Role.ADMIN))):
+    from app.services.backup_service import start_backup as _start
+
+    try:
+        job = await _start(
+            scope=body.scope,
+            until=body.until,
+            triggered_by=user.get("username") or user.get("id") or "admin",
+        )
+    except ValueError as exc:
+        raise ValidationError(str(exc)) from exc
+    await _write_audit(
+        user,
+        "backup_started",
+        "backup",
+        job["id"],
+        {"scope": body.scope, "until": body.until},
+    )
+    return success_response("Backup started", job)
+
+
+@router.get("/backups/download/{filename}")
+async def download_backup(filename: str, user: dict = Depends(require_roles(Role.ADMIN))):
+    from fastapi.responses import FileResponse
+    from app.services.backup_service import backup_file_path
+
+    path = backup_file_path(filename)
+    if not path:
+        raise NotFoundError("Backup file not found")
+    return FileResponse(
+        path,
+        media_type="application/gzip",
+        filename=filename,
+    )
+
+
+@router.delete("/backups/{filename}")
+async def delete_backup(filename: str, user: dict = Depends(require_roles(Role.ADMIN))):
+    from app.services.backup_service import delete_backup_file
+
+    ok = delete_backup_file(filename)
+    if not ok:
+        raise NotFoundError("Backup file not found")
+    await _write_audit(user, "backup_deleted", "backup", filename, {})
+    return success_response("Backup deleted", {"filename": filename})
