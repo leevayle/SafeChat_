@@ -32,6 +32,8 @@ async def _users_by_ids(db, ids: List[str]) -> Dict[str, dict]:
             "bio": 1,
             "subscription_plan": 1,
             "premium_settings": 1,
+            "preferences": 1,
+            "last_seen": 1,
         },
     ):
         out[str(u["_id"])] = u
@@ -505,6 +507,8 @@ class ContactService:
         peer_ids = list(by_peer)
         users = await _users_by_ids(db, peer_ids)
 
+        from app.utils.presence import resolve_busy
+
         results = []
         for c in by_peer.values():
             peer_id = str(c["contact_user_id"])
@@ -513,6 +517,10 @@ class ContactService:
                 continue
             # Phone only if peer shared it on the save request; username is always unique
             phone = (c.get("shared_phone") or "").strip()
+            # Viewer is a contact by definition of this list
+            busy_on, busy_msg, busy_until = resolve_busy(
+                contact_user, is_contact=True
+            )
             results.append(
                 {
                     "id": str(c.get("_id") or peer_id),
@@ -531,6 +539,15 @@ class ContactService:
                         (contact_user.get("premium_settings") or {}).get("verified_badge", True)
                     )
                     and (contact_user.get("subscription_plan") or "pro") == "premium",
+                    "last_seen": _iso(contact_user.get("last_seen")),
+                    "busy": busy_on,
+                    "busy_message": busy_msg if busy_on else "",
+                    "busy_until": busy_until if busy_on else None,
+                    "preferences": {
+                        "busy_enabled": busy_on,
+                        "busy_message": busy_msg if busy_on else "",
+                        "busy_until": busy_until if busy_on else None,
+                    },
                 }
             )
         return results

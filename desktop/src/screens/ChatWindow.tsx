@@ -1674,12 +1674,19 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         break
       }
     }
+    let foundBusy: { message: string; until?: string | null } | null | undefined
     for (const k of keys) {
       const b = busyMap?.[k]
-      if (b && b.message) {
-        setPeerBusy({ message: b.message, until: b.until || null })
+      if (b === undefined) continue
+      if (b && b.message && String(b.message).trim()) {
+        foundBusy = { message: b.message, until: b.until || null }
         break
       }
+      // Explicit empty entry means busy was cleared for this peer
+      foundBusy = null
+    }
+    if (foundBusy !== undefined) {
+      setPeerBusy(foundBusy)
     }
   }, [presenceMap, busyMap, peerId, contactId, c])
 

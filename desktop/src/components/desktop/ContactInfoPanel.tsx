@@ -63,10 +63,10 @@ export function ContactInfoPanel({ contactId, onCall, onChat }: Props) {
       })()
     : (c as any).onCall
       ? 'on a call'
-      : busyActive
-        ? (busyInfo as any).message || 'busy'
-        : typing
-          ? 'typing…'
+      : typing
+        ? 'typing…'
+        : peerOnline && busyActive
+          ? (busyInfo as any).message || 'busy'
           : peerOnline
             ? 'online'
             : 'offline'

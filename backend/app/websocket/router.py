@@ -224,15 +224,45 @@ async def _peer_ids_for(user_id: str) -> list[str]:
     return list(peers)
 
 
+async def _busy_fields_for(user_id: str) -> dict:
+    """Load premium busy status for a user (empty if none / expired / non-premium)."""
+    try:
+        from bson import ObjectId
+        from app.core.database import get_database
+        from app.utils.presence import resolve_busy
+
+        if not ObjectId.is_valid(user_id):
+            return {"busy": False, "busyMessage": "", "busyUntil": None}
+        db = get_database()
+        doc = await db.users.find_one(
+            {"_id": ObjectId(user_id)},
+            {"preferences": 1, "subscription_plan": 1},
+        )
+        enabled, message, until = resolve_busy(doc)
+        return {
+            "busy": enabled,
+            "busyMessage": message if enabled else "",
+            "busyUntil": until if enabled else None,
+        }
+    except Exception:
+        return {"busy": False, "busyMessage": "", "busyUntil": None}
+
+
 async def _broadcast_presence(user_id: str, online: bool) -> None:
     try:
         peer_ids = await _peer_ids_for(user_id)
         last_seen = None if online else _utc_iso()
+        busy = await _busy_fields_for(user_id) if online else {
+            "busy": False,
+            "busyMessage": "",
+            "busyUntil": None,
+        }
         payload = {
             "t": "presence",
             "userId": user_id,
             "online": online,
             "lastSeen": last_seen,
+            **busy,
         }
         for pid in peer_ids:
             await manager.send_user(str(pid), payload)
@@ -245,6 +275,7 @@ async def _send_presence_snapshot(user_id: str) -> None:
         peer_ids = await _peer_ids_for(user_id)
         for pid in peer_ids:
             if manager.is_online(pid):
+                busy = await _busy_fields_for(pid)
                 await manager.send_user(
                     user_id,
                     {
@@ -252,6 +283,7 @@ async def _send_presence_snapshot(user_id: str) -> None:
                         "userId": pid,
                         "online": True,
                         "lastSeen": None,
+                        **busy,
                     },
                 )
     except Exception:

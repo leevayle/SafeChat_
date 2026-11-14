@@ -14,21 +14,64 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 @router.get("/presence/{user_id}")
 async def user_presence(user_id: str, user: dict = Depends(get_current_user)):
-    """Online flag (live WS) + last_seen timestamp."""
+    """Online flag (live WS) + last_seen + premium busy status."""
     from app.websocket.manager import manager
+    from app.utils.presence import busy_payload_from_doc
+
     db = get_database()
     online = manager.is_online(user_id)
     last_seen = None
+    doc = None
     if ObjectId.is_valid(user_id):
-        doc = await db.users.find_one({"_id": ObjectId(user_id)}, {"last_seen": 1})
+        doc = await db.users.find_one(
+            {"_id": ObjectId(user_id)},
+            {
+                "last_seen": 1,
+                "preferences": 1,
+                "subscription_plan": 1,
+            },
+        )
         if doc and doc.get("last_seen"):
             ls = doc["last_seen"]
             last_seen = ls.isoformat() if hasattr(ls, "isoformat") else str(ls)
-            if isinstance(last_seen, str) and "T" in last_seen and not last_seen.endswith("Z") and "+" not in last_seen[10:]:
+            if (
+                isinstance(last_seen, str)
+                and "T" in last_seen
+                and not last_seen.endswith("Z")
+                and "+" not in last_seen[10:]
+            ):
                 last_seen = last_seen + "Z"
+
+    # Scope: contacts-only busy is visible when viewer is a contact of the target.
+    is_contact = None
+    if doc and (doc.get("preferences") or {}).get("busy_scope") == "contacts":
+        edge = await db.contacts.find_one(
+            {
+                "owner_user_id": str(user_id),
+                "contact_user_id": user["id"],
+                "contact_status": "accepted",
+            }
+        )
+        if edge is None:
+            # Also accept the reverse edge / accepted request fallback
+            edge = await db.contacts.find_one(
+                {
+                    "owner_user_id": user["id"],
+                    "contact_user_id": str(user_id),
+                    "contact_status": "accepted",
+                }
+            )
+        is_contact = edge is not None
+
+    busy = busy_payload_from_doc(doc, viewer_id=user["id"], is_contact=is_contact)
     return success_response(
         "Presence",
-        {"user_id": user_id, "online": online, "last_seen": last_seen},
+        {
+            "user_id": user_id,
+            "online": online,
+            "last_seen": last_seen,
+            **busy,
+        },
     )
 
 
@@ -164,6 +207,16 @@ async def update_my_preferences(
     raw = body.model_dump(exclude_unset=True)
     if not raw:
         return success_response("Nothing to update")
+
+    db = get_database()
+    # Busy status is a Premium feature
+    if any(k.startswith("busy") for k in raw.keys()):
+        plan = (user.get("subscription_plan") or "pro").lower()
+        if plan != "premium" and raw.get("busy_enabled") is not False:
+            # Allow turning off even if plan lapsed; block enabling/editing otherwise
+            if raw.get("busy_enabled") is True or raw.get("busy_message") is not None:
+                raise ForbiddenError("Busy status requires Premium")
+
     # Top-level appearance fields for fast login/me reads
     top_keys = {"theme", "chat_accent", "color_mode", "liquid_glass", "wallpaper"}
     set_ops: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
@@ -173,7 +226,6 @@ async def update_my_preferences(
         if k in top_keys:
             set_ops[k] = v
         set_ops[f"preferences.{k}"] = v
-    db = get_database()
     await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
     # Mirror privacy-related prefs into privacy_settings for API consumers
     privacy_map = {
@@ -195,26 +247,20 @@ async def update_my_preferences(
         try:
             from app.websocket.manager import manager
             from app.websocket.router import _peer_ids_for
-            prefs = (await db.users.find_one({"_id": ObjectId(user["id"])}, {"preferences": 1})) or {}
-            p = prefs.get("preferences") or {}
-            enabled = bool(p.get("busy_enabled"))
-            until = p.get("busy_until")
-            # Expired busy = off
-            if enabled and until:
-                try:
-                    exp = datetime.fromisoformat(str(until).replace("Z", "+00:00"))
-                    if exp.tzinfo is None:
-                        exp = exp.replace(tzinfo=timezone.utc)
-                    if exp <= datetime.now(timezone.utc):
-                        enabled = False
-                except Exception:
-                    pass
+            from app.utils.presence import resolve_busy
+
+            full = await db.users.find_one(
+                {"_id": ObjectId(user["id"])},
+                {"preferences": 1, "subscription_plan": 1},
+            )
+            enabled, message, until = resolve_busy(full)
+            online = manager.is_online(user["id"])
             payload = {
                 "t": "presence",
                 "userId": user["id"],
-                "online": True,
+                "online": online,
                 "busy": enabled,
-                "busyMessage": (p.get("busy_message") or "") if enabled else "",
+                "busyMessage": message if enabled else "",
                 "busyUntil": until if enabled else None,
             }
             for pid in await _peer_ids_for(user["id"]):

@@ -434,7 +434,7 @@ function Login({ onLogin, notice, clearNotice }: {
       <div className="login-decoration login-decoration-two" />
       <form className="login-card" onSubmit={(event) => void submit(event)}>
         <div className="login-brand"><img className="brand-symbol" src="/safechat-mark.svg" alt="" /><div className="brand-copy"><strong className="brand-wordmark"><span className="word-safe">Safe</span><span className="word-chat">Chat</span><i>.</i></strong><small>ADMINISTRATION</small></div></div>
-        <div className="login-icon"><ShieldCheck size={23} /></div>
+        {/* <div className="login-icon"><ShieldCheck size={23} /></div> */}
         <p className="eyebrow">SECURE WORKSPACE</p>
         <h1>Welcome back</h1>
         <p className="login-subtitle">Sign in with an authorized administrator account.</p>
@@ -446,7 +446,7 @@ function Login({ onLogin, notice, clearNotice }: {
         <button className="primary-button login-submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <ShieldCheck size={17} />}<span>{busy ? 'Authenticating…' : 'Sign in securely'}</span></button>
         <div className="login-footer"><Shield size={14} />Role-verified access · encrypted session</div>
       </form>
-      <div className="login-caption">SAFECHAT · TRUST & SAFETY OPERATIONS</div>
+      <div className="login-caption">YOUR CHATS · YOUR PEOPLE · YPUR SPACE</div>
     </main>
   )
 }
