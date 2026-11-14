@@ -34,6 +34,7 @@ import { DesktopShell } from './components/desktop/DesktopShell'
 import { EmptyChatPane } from './components/desktop/EmptyChatPane'
 import { ContactInfoPanel } from './components/desktop/ContactInfoPanel'
 import type { RailItem } from './components/desktop/NavRail'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { useMediaQuery, DESKTOP_BREAKPOINT, WIDE_DESKTOP_BREAKPOINT, useFoldableDualPane } from './hooks/useMediaQuery'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/kv'
@@ -449,14 +450,14 @@ function Shell() {
                   return
                 }
 
-                // Returning, app lock off
-                if (me || (hasTokens && ready)) {
+                // Returning, app lock off — enter app immediately; store paints from cache
+                if (me || hasTokens || hasLoggedIn) {
                   restored.current = true
                   setStage('app')
                   return
                 }
 
-                // Tokens / flag present but store still hydrating → loading, then auto-route
+                // Still hydrating with no session signal — brief quiet loader
                 setStage('loading')
               }}
             />
@@ -864,7 +865,9 @@ function Shell() {
         />
       ) : (
         <div className="desktop-chat-list h-full">
-          <ChatsHome {...chatsHomeProps} />
+          <ErrorBoundary label="chats-home-desktop">
+            <ChatsHome {...chatsHomeProps} />
+          </ErrorBoundary>
         </div>
       )
 
@@ -872,16 +875,18 @@ function Shell() {
     let showEmpty = false
     if (chat) {
       mainContent = (
-        <ChatWindow
-          contactId={chat}
-          onBack={() => setChat(null)}
-          onCall={(kind) => placeCall(chat, kind)}
-          onOpenCalls={() => {
-            setChat(null)
-            setTab('calls')
-          }}
-          onOpenStatus={(userId, statusId) => setStatusUser({ userId, statusId })}
-        />
+        <ErrorBoundary label="chat-window">
+          <ChatWindow
+            contactId={chat}
+            onBack={() => setChat(null)}
+            onCall={(kind) => placeCall(chat, kind)}
+            onOpenCalls={() => {
+              setChat(null)
+              setTab('calls')
+            }}
+            onOpenStatus={(userId, statusId) => setStatusUser({ userId, statusId })}
+          />
+        </ErrorBoundary>
       )
     } else if (group) {
       mainContent = (
@@ -1241,16 +1246,18 @@ function Shell() {
       )
     } else if (chat) {
       second = (
-        <ChatWindow
-          contactId={chat}
-          onBack={() => setChat(null)}
-          onCall={(kind) => placeCall(chat, kind)}
-          onOpenCalls={() => {
-            setChat(null)
-            setTab('calls')
-          }}
-          onOpenStatus={(userId, statusId) => setStatusUser({ userId, statusId })}
-        />
+        <ErrorBoundary label="chat-window-foldable">
+          <ChatWindow
+            contactId={chat}
+            onBack={() => setChat(null)}
+            onCall={(kind) => placeCall(chat, kind)}
+            onOpenCalls={() => {
+              setChat(null)
+              setTab('calls')
+            }}
+            onOpenStatus={(userId, statusId) => setStatusUser({ userId, statusId })}
+          />
+        </ErrorBoundary>
       )
     } else if (group) {
       second = (
@@ -1264,7 +1271,9 @@ function Shell() {
         <div className="relative flex h-full min-w-0 w-1/2 flex-col overflow-hidden border-r border-black/[0.06] bg-white dark:border-white/10 dark:bg-[#121821]">
           <div className="relative min-h-0 flex-1 overflow-hidden">
             <div className={tab === 'chats' ? 'h-full' : 'hidden'}>
-              <ChatsHome {...chatsHomeProps} />
+              <ErrorBoundary label="chats-home-foldable">
+                <ChatsHome {...chatsHomeProps} />
+              </ErrorBoundary>
             </div>
             <div className={tab === 'groups' ? 'h-full' : 'hidden'}>
               <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
@@ -1386,17 +1395,20 @@ function Shell() {
     )
   }
 
-  // Mobile single-column (original behavior)
+  // Mobile single-column — full-bleed on phones / small viewports
+  // (no letterbox gutters). Foldable dual-pane & desktop use other branches.
   return (
-    <div className="flex min-h-dvh justify-center bg-[#f0f2f5]">
-      <main className="relative h-dvh w-full min-h-[568px] max-w-[430px] overflow-hidden bg-white">
+    <div className="flex min-h-dvh w-full justify-center bg-white">
+      <main className="relative h-dvh w-full min-h-[568px] overflow-hidden bg-white">
         <div
           className="relative h-full"
           onTouchStart={onTabTouchStart}
           onTouchEnd={onTabTouchEnd}
         >
           <div className={tab === 'chats' ? 'h-full' : 'hidden'}>
-            <ChatsHome {...chatsHomeProps} />
+            <ErrorBoundary label="chats-home">
+              <ChatsHome {...chatsHomeProps} />
+            </ErrorBoundary>
           </div>
           <div className={tab === 'groups' ? 'h-full' : 'hidden'}>
             <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
@@ -1428,16 +1440,18 @@ function Shell() {
 
         {chat && (
           <div className="absolute inset-0 z-20 bg-white">
-            <ChatWindow
-              contactId={chat}
-              onBack={() => setChat(null)}
-              onCall={(kind) => placeCall(chat, kind)}
-              onOpenCalls={() => {
-                setChat(null)
-                setTab('calls')
-              }}
-              onOpenStatus={(userId, statusId) => setStatusUser({ userId, statusId })}
-            />
+            <ErrorBoundary label="chat-window-mobile">
+              <ChatWindow
+                contactId={chat}
+                onBack={() => setChat(null)}
+                onCall={(kind) => placeCall(chat, kind)}
+                onOpenCalls={() => {
+                  setChat(null)
+                  setTab('calls')
+                }}
+                onOpenStatus={(userId, statusId) => setStatusUser({ userId, statusId })}
+              />
+            </ErrorBoundary>
           </div>
         )}
 

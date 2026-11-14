@@ -176,9 +176,19 @@ export function previewFromThread(conversationId: string | null | undefined): {
   if (!conversationId) return null
   const msgs = getCachedMessages(conversationId)
   if (!msgs?.length) return null
-  const last = msgs[msgs.length - 1]
+  const last = msgs[msgs.length - 1] as any
+  const body = String(last.text ?? last.content ?? '').trim()
+  let lastText = body || (last.image ? '📷 Photo' : '')
+  if (!lastText && last.deleted) lastText = 'Message deleted'
+  if (!lastText) lastText = 'Message'
+  // Strip status-reply envelope for the home row
+  const sr = lastText.match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
+  if (sr) {
+    const replyBody = (sr[4] || '').trim()
+    lastText = replyBody ? `Status reply: ${replyBody}` : 'Status reply'
+  }
   return {
-    last: last.text || (last.image ? '📷 Photo' : ''),
+    last: lastText,
     iso: last.time,
     state: last.state,
     mine: last.mine,

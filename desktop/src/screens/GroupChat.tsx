@@ -6,6 +6,7 @@ import { api } from '../api'
 import { FONT_SIZES, resolveWallpaper, useStore } from '../store'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
+import { linkifyText } from '../lib/linkify'
 const EMOJIS = [
   '😀','😁','😂','🤣','😃','😄','😅','😆','😉','😊','😋','😎','😍','😘','🥰','😗','😙','😚',
   '🙂','🤗','🤩','🤔','🤨','😐','😑','😶','🙄','😏','😣','😥','😮','🤐','😯','😪','😫','🥱',
@@ -151,7 +152,9 @@ export function GroupChat({
                       {who(m.from).name}
                     </p>
                   )}
-                  <p className="font-semibold leading-snug">{m.text}</p>
+                  <p className="whitespace-pre-wrap break-words font-semibold leading-snug">
+                    {linkifyText(m.text, { mine })}
+                  </p>
                   {mine && (
                     <p className="mt-1 flex items-center justify-end gap-1 text-[11px] font-bold text-white/75">
                       {m.timeLabel || ''}

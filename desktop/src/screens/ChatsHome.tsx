@@ -108,12 +108,21 @@ export function ChatsHome({
   }, [contacts])
 
   const contactById = (id: string, fallback?: { name?: string; photo?: string | null; hue?: [string, string] }) => {
-    const hit = contactMap.get(id)
-    const online = !!(presenceMap?.[id] ?? hit?.online)
-    if (hit) return { ...hit, online }
+    const key = String(id || '')
+    const hit = key ? contactMap.get(key) : undefined
+    const online = !!(presenceMap?.[key] ?? hit?.online)
+    if (hit) {
+      return {
+        ...hit,
+        id: String(hit.id || key),
+        name: String(hit.name || fallback?.name || key || 'Chat'),
+        username: String(hit.username || ''),
+        online,
+      }
+    }
     return {
-      id,
-      name: fallback?.name || id,
+      id: key || 'unknown',
+      name: String(fallback?.name || key || 'Chat'),
       username: '',
       phone: '',
       bio: '',
@@ -141,40 +150,54 @@ export function ChatsHome({
   }, [statusList, me])
 
   const list = useMemo(() => {
-    // Dedupe by peer so one person never appears twice
-    const byPeer = new Map<string, (typeof chats)[0]>()
-    for (const c of chats) {
-      const key = c.contactId
-      const prev = byPeer.get(key)
-      if (!prev) {
-        byPeer.set(key, c)
-        continue
+    try {
+      const source = Array.isArray(chats) ? chats : []
+      // Dedupe by peer so one person never appears twice
+      const byPeer = new Map<string, (typeof chats)[0]>()
+      for (const c of source) {
+        if (!c || typeof c !== 'object') continue
+        const key = String(c.contactId || '').trim()
+        if (!key) continue
+        const prev = byPeer.get(key)
+        if (!prev) {
+          byPeer.set(key, c)
+          continue
+        }
+        const prevT = prev.iso ? Date.parse(String(prev.iso)) : 0
+        const nextT = c.iso ? Date.parse(String(c.iso)) : 0
+        if (nextT >= prevT) byPeer.set(key, c)
       }
-      const prevT = prev.iso ? Date.parse(prev.iso) : 0
-      const nextT = c.iso ? Date.parse(c.iso) : 0
-      if (nextT >= prevT) byPeer.set(key, c)
+      const qLower = q ? q.toLowerCase() : ''
+      const filtered = Array.from(byPeer.values()).filter((c) => {
+        const ct = contactById(String(c.contactId), {
+          name: c.name,
+          photo: c.photo,
+          hue: c.hue,
+        })
+        const name = String(ct.name || '')
+        const username = String(ct.username || '')
+        if (
+          qLower &&
+          !name.toLowerCase().includes(qLower) &&
+          !username.toLowerCase().includes(qLower)
+        )
+          return false
+        if (filter === 'Unread') return (Number(c.unread) || 0) > 0
+        if (filter === 'Online') return !!ct.online
+        return true
+      })
+      // Pinned chats first
+      filtered.sort((a, b) => {
+        const ap = pinnedIds.includes(String(a.contactId)) ? 1 : 0
+        const bp = pinnedIds.includes(String(b.contactId)) ? 1 : 0
+        if (ap !== bp) return bp - ap
+        return 0
+      })
+      return filtered
+    } catch (err) {
+      console.error('[ChatsHome list]', err)
+      return []
     }
-    const qLower = q ? q.toLowerCase() : ''
-    const filtered = Array.from(byPeer.values()).filter((c) => {
-      const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
-      if (
-        qLower &&
-        !ct.name.toLowerCase().includes(qLower) &&
-        !ct.username?.toLowerCase().includes(qLower)
-      )
-        return false
-      if (filter === 'Unread') return c.unread > 0
-      if (filter === 'Online') return ct.online
-      return true
-    })
-    // Pinned chats first
-    filtered.sort((a, b) => {
-      const ap = pinnedIds.includes(a.contactId) ? 1 : 0
-      const bp = pinnedIds.includes(b.contactId) ? 1 : 0
-      if (ap !== bp) return bp - ap
-      return 0
-    })
-    return filtered
   }, [filter, q, chats, contactMap, presenceMap, pinnedIds])
 
   const statusUsers = useMemo(() => {
@@ -626,7 +649,13 @@ export function ChatsHome({
                 const isNewRow = !seenRows.current.has(rowKey)
                 if (isNewRow) seenRows.current.add(rowKey)
                 const derived = previewFromThread(c.conversationId)
-                const lastText = derived?.last || c.last
+                const rawLast = (derived?.last != null && String(derived.last).trim() !== '')
+                  ? derived.last
+                  : c.last
+                const lastText =
+                  (rawLast && String(rawLast).trim()) ||
+                  ((c as any).image || (derived as any)?.image ? '📷 Photo' : '') ||
+                  ' '
                 const lastMine = derived?.mine ?? c.mine
                 const lastState = derived?.state || c.state
                 return (
@@ -704,7 +733,7 @@ export function ChatsHome({
                       ) : (
                         <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online) }} size={52} />
                       )}
-                      <div className="min-w-[12rem] flex-1 overflow-hidden">
+                      <div className="min-w-[12rem] flex-1 overflow-hidden pb-0.5">
                         <div className="flex items-start justify-between gap-3">
                           <p className="flex min-w-0 flex-1 items-center gap-1 font-extrabold">
                             {pinnedIds.includes(c.contactId) ? (
@@ -723,23 +752,33 @@ export function ChatsHome({
                               <VerifiedCheck size={14} />
                             )}
                           </p>
-                          <div className="flex min-w-[3.5rem] shrink-0 flex-col items-end gap-0.5">
-                            <span
-                              className={`whitespace-nowrap text-xs font-bold tabular-nums ${
-                                c.unread > 0 && !lastMine ? 'text-brand-purple' : 'text-gray-400'
-                              }`}
-                            >
-                              {c.time}
-                            </span>
-                            {lastMine && (
+                          <span
+                            className={`shrink-0 whitespace-nowrap pt-0.5 text-xs font-bold tabular-nums ${
+                              c.unread > 0 && !lastMine ? 'text-brand-purple' : 'text-gray-400'
+                            }`}
+                          >
+                            {c.time}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 flex items-end justify-between gap-3">
+                          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-gray-500">
+                            {lastMine ? 'You: ' : ''}
+                            {(typingPeers?.[ct.id] || typingPeers?.[c.contactId] || typingPeers?.[(ct as any).peerId]) ? (
+                              <span className="font-bold text-brand-blue">typing…</span>
+                            ) : (
+                              lastText
+                            )}
+                          </p>
+                          <div className="flex min-h-[1.15rem] shrink-0 items-end justify-end gap-1.5 pb-0.5">
+                            {lastMine && !(c.unread > 0) && (
                               <span
-                                className={`inline-flex items-center text-[11px] font-black leading-none ${
+                                className={`inline-flex items-center text-[12px] font-black leading-none ${
                                   lastState === 'read' ? 'text-brand-blue' : 'text-gray-400'
                                 }`}
                                 title={lastState || 'sent'}
                               >
                                 {lastState === 'pending' ? (
-                                  <Clock size={12} strokeWidth={2.5} className="opacity-70" aria-label="Sending" />
+                                  <Clock size={13} strokeWidth={2.5} className="opacity-70" aria-label="Sending" />
                                 ) : lastState === 'failed' ? (
                                   '!'
                                 ) : lastState === 'sent' || !lastState ? (
@@ -749,22 +788,12 @@ export function ChatsHome({
                                 )}
                               </span>
                             )}
-                          </div>
-                        </div>
-                        <div className="mt-0.5 flex items-center justify-between gap-3">
-                          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-gray-500">
-                            {lastMine ? 'You: ' : ''}
-                            {(typingPeers?.[ct.id] || typingPeers?.[c.contactId] || typingPeers?.[(ct as any).peerId]) ? (
-                              <span className="font-bold text-brand-blue">typing…</span>
-                            ) : (
-                              lastText
+                            {c.unread > 0 && (
+                              <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand-purple px-1.5 text-[11px] font-black text-white">
+                                {c.unread}
+                              </span>
                             )}
-                          </p>
-                          {c.unread > 0 && (
-                            <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand-purple px-1.5 text-[11px] font-black text-white">
-                              {c.unread}
-                            </span>
-                          )}
+                          </div>
                         </div>
                       </div>
                     </button>

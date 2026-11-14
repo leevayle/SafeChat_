@@ -519,6 +519,7 @@ export function Settings({
                     <button
                       type="button"
                       onClick={async () => {
+                        setToast('Removing your profile pic…')
                         try {
                           await saveProfile({
                             name: draft.name.trim() || s.name,
@@ -2371,6 +2372,7 @@ export function Settings({
           onCancel={() => setCropSrc(null)}
           onDone={async (dataUrl) => {
             setCropSrc(null)
+            setToast('Changing your profile pic…')
             try {
               await saveProfile({
                 name: s.name,
@@ -2378,7 +2380,7 @@ export function Settings({
                 bio: s.bio,
                 photo: dataUrl,
               })
-              setToast('Photo updated')
+              setToast('Changed successfully')
             } catch {
               setToast('Could not update photo')
             }

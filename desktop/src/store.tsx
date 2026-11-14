@@ -48,6 +48,36 @@ import { warmPhoto } from './lib/photoCache'
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/kv'
 const LS_OWNER_KEY = 'sc_user_id'
 
+/** Drop corrupt rows that would crash the inbox renderer (blank page). */
+function sanitizeChatList(list: ChatPreview[] | null | undefined): ChatPreview[] {
+  if (!Array.isArray(list)) return []
+  const out: ChatPreview[] = []
+  for (const row of list) {
+    if (!row || typeof row !== 'object') continue
+    const contactId = String((row as any).contactId || (row as any).contact_user_id || '').trim()
+    if (!contactId) continue
+    out.push({
+      ...row,
+      contactId,
+      conversationId: (row as any).conversationId
+        ? String((row as any).conversationId)
+        : (row as any).conversation_id
+          ? String((row as any).conversation_id)
+          : row.conversationId,
+      name: String(row.name || contactId),
+      last: row.last == null ? '' : String(row.last),
+      time: row.time == null ? '' : String(row.time),
+      unread: Number(row.unread) || 0,
+      mine: !!row.mine,
+      state: row.state,
+      photo: row.photo ?? null,
+      iso: row.iso,
+      hue: row.hue,
+    })
+  }
+  return out
+}
+
 function wipeForeignLocalState() {
   try {
     // NEVER delete live auth tokens here — login may have just written them.
@@ -799,14 +829,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const { chats: c } = await api.chats({ lean: !!opts?.lean, limit: 50 })
       // Merge network into UI — never drop a row that is only local / newer than server
       setChats((prev) => {
+        const safePrev = sanitizeChatList(prev)
+        const network = sanitizeChatList(c as any)
         // Index local rows by contactId AND conversationId so nothing is dropped
-        const byContact = new Map(prev.map((p) => [p.contactId, p]))
+        const byContact = new Map(safePrev.map((p) => [p.contactId, p]))
         const byConv = new Map(
-          prev.filter((p) => p.conversationId).map((p) => [p.conversationId!, p]),
+          safePrev.filter((p) => p.conversationId).map((p) => [p.conversationId!, p]),
         )
         const seenContact = new Set<string>()
         const seenConv = new Set<string>()
-        const merged = c.map((row) => {
+        const merged = network.map((row) => {
           seenContact.add(row.contactId)
           if (row.conversationId) seenConv.add(row.conversationId)
           const old =
@@ -822,11 +854,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             ...row,
             contactId: row.contactId || old.contactId,
             photo: row.photo || old.photo,
-            name: row.name || old.name,
+            name: row.name || old.name || row.contactId,
             hue: row.hue || old.hue,
-            last: keepLocalLast ? old.last : row.last || old.last,
+            last: keepLocalLast ? old.last : row.last || old.last || '',
             iso: keepLocalLast ? old.iso : row.iso || old.iso,
-            time: keepLocalLast ? old.time : row.time || old.time,
+            time: keepLocalLast ? old.time : row.time || old.time || '',
             state: keepLocalLast
               ? (old.state as any) || row.state
               : (row.state as any) || old.state,
@@ -842,7 +874,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
         })
         // Keep local-only previews (new chats / offline sends not yet on server)
-        for (const p of prev) {
+        for (const p of safePrev) {
           const byC = seenContact.has(p.contactId)
           const byV = p.conversationId && seenConv.has(p.conversationId)
           if (!byC && !byV) merged.push(p)
@@ -858,11 +890,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const saved = (ct?.savedName || ct?.name || '').trim()
           if (saved) merged[i] = { ...row, name: saved }
         }
-        if (prev.length === merged.length) {
+        const cleaned = sanitizeChatList(merged)
+        if (safePrev.length === cleaned.length) {
           let same = true
-          for (let i = 0; i < prev.length; i++) {
-            const a = prev[i]
-            const b = merged[i]
+          for (let i = 0; i < safePrev.length; i++) {
+            const a = safePrev[i]
+            const b = cleaned[i]
             if (
               a.contactId !== b.contactId ||
               a.conversationId !== b.conversationId ||
@@ -876,10 +909,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               break
             }
           }
-          if (same) return prev
+          if (same) return safePrev
         }
-        void saveCachedChats(merged)
-        return merged
+        void saveCachedChats(cleaned)
+        return cleaned
       })
     } catch (e: any) {
       if ((e as any)?.status === 401 && !(e as any)?.soft) {
@@ -1077,75 +1110,88 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const upsertChatPreview = useCallback(
     (preview: Partial<ChatPreview> & { contactId: string }) => {
+      const contactId = String(preview?.contactId || '').trim()
+      if (!contactId) return
       setChats((prev) => {
-        const idx = prev.findIndex(
-          (c) =>
-            c.contactId === preview.contactId ||
-            (preview.conversationId && c.conversationId === preview.conversationId),
-        )
-        const nowIso = preview.iso || new Date().toISOString()
-        const timeLabel =
-          preview.time ||
-          new Date(nowIso).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: (typeof window !== 'undefined' && (() => { try { const s = JSON.parse(kvGet('sc_settings') || '{}'); return s?.timeFormat === '12h' } catch { return false } })()),
-          })
-        let nextList: ChatPreview[]
-        if (idx >= 0) {
-          const cur = prev[idx]
-          const nextLast = preview.last ?? cur.last
-          const contentChanged = nextLast !== cur.last || (preview.iso && preview.iso !== cur.iso)
-          const updated: ChatPreview = {
-            ...cur,
-            ...preview,
-            last: nextLast,
-            time: contentChanged ? timeLabel : preview.time || cur.time,
-            iso: contentChanged ? nowIso : preview.iso || cur.iso,
-            unread: preview.unread !== undefined ? preview.unread : cur.unread,
-            mine: preview.mine ?? cur.mine ?? true,
-            state: preview.state ?? cur.state ?? 'sent',
-          }
-          if (!contentChanged && idx === 0) {
-            nextList = [...prev]
-            nextList[0] = updated
-          } else if (!contentChanged) {
-            nextList = [...prev]
-            nextList[idx] = updated
-          } else {
-            if (updated.mine === false) {
-              try {
-                const mutedMap = JSON.parse(kvGet('sc_chat_muted') || '{}')
-                if (!mutedMap[updated.contactId]) playIncomingMessageChime()
-              } catch {
-                playIncomingMessageChime()
-              }
+        try {
+          const safePrev = sanitizeChatList(prev)
+          const idx = safePrev.findIndex(
+            (c) =>
+              c.contactId === contactId ||
+              (preview.conversationId && c.conversationId === preview.conversationId),
+          )
+          const nowIso = preview.iso || new Date().toISOString()
+          const timeLabel =
+            preview.time ||
+            new Date(nowIso).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: (typeof window !== 'undefined' && (() => { try { const s = JSON.parse(kvGet('sc_settings') || '{}'); return s?.timeFormat === '12h' } catch { return false } })()),
+            })
+          let nextList: ChatPreview[]
+          if (idx >= 0) {
+            const cur = safePrev[idx]
+            const nextLast = preview.last !== undefined ? preview.last : cur.last
+            const contentChanged =
+              (preview.last !== undefined && nextLast !== cur.last) ||
+              (!!preview.iso && preview.iso !== cur.iso)
+            const updated: ChatPreview = {
+              ...cur,
+              ...preview,
+              contactId: cur.contactId || contactId,
+              last: nextLast == null ? cur.last : String(nextLast),
+              time: contentChanged ? timeLabel : preview.time || cur.time,
+              iso: contentChanged ? nowIso : preview.iso || cur.iso,
+              unread: preview.unread !== undefined ? Number(preview.unread) || 0 : cur.unread,
+              mine: preview.mine ?? cur.mine ?? true,
+              state: preview.state ?? cur.state ?? 'sent',
+              name: String(preview.name || cur.name || contactId),
             }
-            nextList = [...prev]
-            nextList[idx] = updated
-            const [item] = nextList.splice(idx, 1)
-            nextList = [item, ...nextList]
+            if (!contentChanged && idx === 0) {
+              nextList = [...safePrev]
+              nextList[0] = updated
+            } else if (!contentChanged) {
+              nextList = [...safePrev]
+              nextList[idx] = updated
+            } else {
+              if (updated.mine === false) {
+                try {
+                  const mutedMap = JSON.parse(kvGet('sc_chat_muted') || '{}')
+                  if (!mutedMap[updated.contactId]) playIncomingMessageChime()
+                } catch {
+                  playIncomingMessageChime()
+                }
+              }
+              nextList = [...safePrev]
+              nextList[idx] = updated
+              const [item] = nextList.splice(idx, 1)
+              nextList = [item, ...nextList]
+            }
+          } else {
+            nextList = [
+              {
+                contactId,
+                conversationId: preview.conversationId,
+                name: String(preview.name || contactId),
+                photo: preview.photo ?? null,
+                hue: preview.hue,
+                last: preview.last != null ? String(preview.last) : '',
+                time: timeLabel,
+                unread: 0,
+                mine: preview.mine ?? true,
+                state: preview.state || 'pending',
+                iso: nowIso,
+              },
+              ...safePrev,
+            ]
           }
-        } else {
-          nextList = [
-            {
-              contactId: preview.contactId,
-              conversationId: preview.conversationId,
-              name: preview.name,
-              photo: preview.photo ?? null,
-              hue: preview.hue,
-              last: preview.last || '',
-              time: timeLabel,
-              unread: 0,
-              mine: true,
-              state: preview.state || 'pending',
-              iso: nowIso,
-            },
-            ...prev,
-          ]
+          const cleaned = sanitizeChatList(nextList)
+          void saveCachedChats(cleaned)
+          return cleaned
+        } catch (err) {
+          console.error('[upsertChatPreview]', err)
+          return sanitizeChatList(prev)
         }
-        void saveCachedChats(nextList)
-        return nextList
       })
     },
     [],
@@ -1284,8 +1330,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           loadCachedStatuses<any>(),
         ])
         if (cachedChats.length) {
-          setChats((prev) => (prev.length ? prev : cachedChats))
-          setListsReady(true) // home can render from cache right away
+          const cleaned = sanitizeChatList(cachedChats as any)
+          setChats((prev) => (prev.length ? prev : cleaned))
         }
         if (cachedContacts.length) {
           setContacts((prev) => (prev.length ? prev : cachedContacts))
@@ -1294,58 +1340,66 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           setStatusList((prev: any[]) => (prev?.length ? prev : cachedStatuses))
         }
         setCacheOwner(uid)
+        // Home can render from cache (or empty state) without waiting on network
+        setListsReady(true)
       } else if (uid && owner && owner !== uid) {
         // Different account — drop previous user's disk cache
         await clearAllCaches()
         setCacheOwner(uid)
+        setListsReady(true)
+      } else {
+        setListsReady(true)
       }
     } catch {
-      /* cache optional */
+      setListsReady(true)
     }
 
-    // Phase 1 — network lean inbox (merge into UI + write back to IDB)
-    await Promise.all([refreshChats({ lean: true }), refreshContacts()])
+    // Phase 1 — network lean inbox in background-friendly way
+    // Chats first so the feed updates ASAP; contacts can trail slightly
+    void refreshChats({ lean: true }).then(() => {
+      if (!isSessionDead()) setListsReady(true)
+    })
+    void refreshContacts()
     if (isSessionDead()) {
       setListsReady(true)
       return
     }
-    setListsReady(true)
     setSessionOk(true)
 
     // Phase 2 — full list + last 50 msgs per recent thread (bounded concurrency)
+    // Do not block the UI — run in background
     if (isSessionDead()) return
     void refreshChats({ lean: false })
+    void refreshRecentMessages(false)
 
-    await refreshRecentMessages(false)
-
-    // Phase 3 — secondary lists
+    // Phase 3 — secondary lists (background)
     if (isSessionDead()) return
-    await Promise.all([
+    void Promise.all([
       refreshCalls(),
       refreshStatus(),
       refreshGroups(),
       refreshSaveRequests(),
       refreshNotifCount(),
-    ])
-
-    // Phase 4 — warm photos (does not block UI)
-    try {
-      const origin = (import.meta as any).env?.VITE_API_URL || ''
-      setContacts((cur) => {
-        for (const c of cur.slice(0, 40)) {
-          if (c.photo) warmPhoto(c.id, c.photo, origin)
-        }
-        return cur
-      })
-      setChats((cur) => {
-        for (const ch of cur.slice(0, 40)) {
-          if (ch.photo) warmPhoto(ch.contactId, ch.photo, origin)
-        }
-        return cur
-      })
-    } catch {
-      /* */
-    }
+    ]).then(() => {
+      // Phase 4 — warm photos after secondary data lands
+      try {
+        const origin = (import.meta as any).env?.VITE_API_URL || ''
+        setContacts((cur) => {
+          for (const c of cur.slice(0, 40)) {
+            if (c.photo) warmPhoto(c.id, c.photo, origin)
+          }
+          return cur
+        })
+        setChats((cur) => {
+          for (const ch of cur.slice(0, 40)) {
+            if (ch.photo) warmPhoto(ch.contactId, ch.photo, origin)
+          }
+          return cur
+        })
+      } catch {
+        /* */
+      }
+    })
   }, [refreshChats, refreshCalls, refreshStatus, refreshGroups, refreshSaveRequests, refreshNotifCount, refreshContacts, refreshRecentMessages])
 
   const bootStarted = useRef(false)
@@ -1371,7 +1425,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               loadCachedStatuses<any>(),
             ])
             if (cachedChats.length) {
-              setChats(cachedChats)
+              setChats(sanitizeChatList(cachedChats as any))
               setListsReady(true)
             }
             if (cachedContacts.length) setContacts(cachedContacts)
@@ -1531,13 +1585,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const mine = String(m.from) === String(myId)
 
           // 1) Build the full message object once (time-ordered, complete fields)
-          let previewText = m.text || (m.image ? '📷 Photo' : '')
+          // Prefer text, then content (REST shape), then media placeholders — never leave blank
+          const rawBody = String(
+            (m as any).text ?? (m as any).content ?? '',
+          ).trim()
+          const hasImage = !!(m.image || (m as any).media_attachments?.length)
+          let previewText =
+            rawBody ||
+            (hasImage ? '📷 Photo' : '') ||
+            ((m as any).message_type === 'image' ? '📷 Photo' : '') ||
+            'Message'
           const sr = String(previewText).match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
           if (sr) {
             const body = (sr[4] || '').trim()
             previewText = body ? `Status reply: ${body}` : 'Status reply'
           }
-          const iso = m.time || new Date().toISOString()
+          const iso = m.time || (m as any).created_at || new Date().toISOString()
           let timeLabel = ''
           try {
             timeLabel = new Date(iso).toLocaleTimeString([], {
@@ -1553,7 +1616,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             clientKey: ck,
             conversationId: cid,
             from: String(m.from || ''),
-            text: m.text || '',
+            text: rawBody || (hasImage ? '📷 Photo' : previewText),
             time: iso,
             timeLabel,
             mine,
@@ -1571,6 +1634,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // 3) Delivery / read side-effects
           // delivered = message reached this device (printed in memory/UI)
           // read = conversation open OR app foreground (inbox list shows the line)
+          const openNow = !!(activeConvRef.current && activeConvRef.current === cid)
+          const appVisible =
+            typeof document === 'undefined' || document.visibilityState === 'visible'
           if (!mine) {
             void api.markDelivered(mid).catch(() => {})
             void import('./realtime').then(({ wsReceipt }) => {
@@ -1578,9 +1644,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 wsReceipt({ conversationId: cid, messageId: mid, state: 'delivered' })
               } catch { /* */ }
             }).catch(() => {})
-            const openNow = !!(activeConvRef.current && activeConvRef.current === cid)
-            const appVisible =
-              typeof document === 'undefined' || document.visibilityState === 'visible'
             if (openNow || appVisible) {
               void api.markRead(cid).catch(() => {})
               void import('./realtime').then(({ wsReceipt }) => {
@@ -1595,66 +1658,75 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const already = seenInboundRef.current.has(mid)
           if (!mine) seenInboundRef.current.add(mid)
           setChats((prev) => {
-            const idx = prev.findIndex((c) => c.conversationId === cid)
-            let nextList: typeof prev
-            if (idx >= 0) {
-              const cur = prev[idx]
-              // Resolve display name from contacts if the row is sparse
-              let name = cur.name
-              let photo = cur.photo
-              let hue = cur.hue
-              if (!name && !mine) {
-                const ct = (contactsRef.current || []).find(
-                  (x: any) => x.id === cur.contactId || x.peerId === cur.contactId || x.id === m.from,
-                )
-                if (ct) {
-                  name = ct.savedName || ct.name || name
-                  photo = photo || ct.photo
-                  hue = hue || ct.hue
+            try {
+              const safePrev = sanitizeChatList(prev)
+              const idx = safePrev.findIndex((c) => c.conversationId === cid)
+              let nextList: ChatPreview[]
+              if (idx >= 0) {
+                const cur = safePrev[idx]
+                // Resolve display name from contacts if the row is sparse
+                let name = cur.name
+                let photo = cur.photo
+                let hue = cur.hue
+                if (!name && !mine) {
+                  const ct = (contactsRef.current || []).find(
+                    (x: any) => x.id === cur.contactId || x.peerId === cur.contactId || x.id === m.from,
+                  )
+                  if (ct) {
+                    name = ct.savedName || ct.name || name
+                    photo = photo || ct.photo
+                    hue = hue || ct.hue
+                  }
                 }
-              }
-              const updated = {
-                ...cur,
-                name,
-                photo,
-                hue,
-                last: previewText,
-                time: timeLabel,
-                iso,
-                mine,
-                state: mine ? ((m.state as any) || 'sent') : cur.state,
-                unread: mine || openNow ? 0 : already ? (cur.unread || 0) : (cur.unread || 0) + 1,
-                conversationId: cid,
-              }
-              nextList = [...prev]
-              nextList.splice(idx, 1)
-              nextList = [updated, ...nextList]
-            } else if (mine) {
-              // Own send: home row should already exist via upsertChatPreview
-              return prev
-            } else {
-              const ct = (contactsRef.current || []).find(
-                (x: any) => x.id === m.from || x.peerId === m.from,
-              )
-              nextList = [
-                {
-                  contactId: String(m.from),
-                  conversationId: cid,
-                  name: ct?.savedName || ct?.name,
-                  photo: ct?.photo ?? null,
-                  hue: ct?.hue,
-                  last: previewText,
-                  time: timeLabel,
+                const updated: ChatPreview = {
+                  ...cur,
+                  name: String(name || cur.contactId),
+                  photo,
+                  hue,
+                  last: String(previewText || cur.last || ''),
+                  time: timeLabel || cur.time || '',
                   iso,
-                  unread: openNow ? 0 : 1,
-                  mine: false,
-                  state: undefined,
-                },
-                ...prev,
-              ]
+                  mine,
+                  state: mine ? ((m.state as any) || 'sent') : cur.state,
+                  unread: mine || openNow ? 0 : already ? (cur.unread || 0) : (cur.unread || 0) + 1,
+                  conversationId: cid,
+                }
+                nextList = [...safePrev]
+                nextList.splice(idx, 1)
+                nextList = [updated, ...nextList]
+              } else if (mine) {
+                // Own send: home row should already exist via upsertChatPreview
+                return safePrev
+              } else {
+                const fromId = String(m.from || '').trim()
+                if (!fromId) return safePrev
+                const ct = (contactsRef.current || []).find(
+                  (x: any) => x.id === fromId || x.peerId === fromId,
+                )
+                nextList = [
+                  {
+                    contactId: fromId,
+                    conversationId: cid,
+                    name: String(ct?.savedName || ct?.name || fromId),
+                    photo: ct?.photo ?? null,
+                    hue: ct?.hue,
+                    last: String(previewText || ''),
+                    time: timeLabel,
+                    iso,
+                    unread: openNow ? 0 : 1,
+                    mine: false,
+                    state: undefined,
+                  },
+                  ...safePrev,
+                ]
+              }
+              const cleaned = sanitizeChatList(nextList)
+              void saveCachedChats(cleaned)
+              return cleaned
+            } catch (err) {
+              console.error('[onMessage setChats]', err)
+              return sanitizeChatList(prev)
             }
-            void saveCachedChats(nextList)
-            return nextList
           })
 
           // 5) Notify open ChatWindow once — it merges by id/clientKey (no double bubble)
@@ -1667,56 +1739,76 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           } catch { /* */ }
         },
         onReceipt: (cid, messageId, s) => {
-          const state =
-            s === 'read' ? 'read' : s === 'delivered' ? 'delivered' : s === 'sent' ? 'sent' : s
-          // Patch home-row ticks when this is the latest message in that chat
-          setChats((prev) => {
-            const idx = prev.findIndex((c) => c.conversationId === cid)
-            if (idx < 0) return prev
-            const row = prev[idx]
-            // Only bump receipt on own last message
-            if (!row.mine) return prev
-            const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 }
-            const nextRank = rank[state] ?? 0
-            const curRank = rank[row.state || 'sent'] ?? 1
-            if (nextRank <= curRank) return prev
-            const next = [...prev]
-            next[idx] = { ...row, state: state as any }
-            return next
-          })
           try {
-            window.dispatchEvent(
-              new CustomEvent('sc:rt-rcpt', { detail: { cid, id: messageId, s: state } }),
-            )
-          } catch {
-            /* */
+            const state =
+              s === 'read' ? 'read' : s === 'delivered' ? 'delivered' : s === 'sent' ? 'sent' : String(s || 'sent')
+            // Patch home-row ticks when this is the latest message in that chat
+            setChats((prev) => {
+              try {
+                const safePrev = sanitizeChatList(prev)
+                const idx = safePrev.findIndex((c) => c.conversationId && c.conversationId === cid)
+                if (idx < 0) return safePrev
+                const row = safePrev[idx]
+                // Only bump receipt on own last message
+                if (!row.mine) return safePrev
+                const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 }
+                const nextRank = rank[state] ?? 0
+                const curRank = rank[String(row.state || 'sent')] ?? 1
+                if (nextRank <= curRank) return safePrev
+                const next = [...safePrev]
+                next[idx] = { ...row, state: state as any }
+                void saveCachedChats(next)
+                return next
+              } catch (err) {
+                console.error('[onReceipt setChats]', err)
+                return sanitizeChatList(prev)
+              }
+            })
+            try {
+              window.dispatchEvent(
+                new CustomEvent('sc:rt-rcpt', { detail: { cid, id: messageId, s: state } }),
+              )
+            } catch {
+              /* */
+            }
+          } catch (err) {
+            console.error('[onReceipt]', err)
           }
         },
         onAck: (payload) => {
-          // Server logged the message — flip home-row ticks pending → sent immediately
-          const cid = (payload as any)?.c as string | undefined
-          const st = ((payload as any)?.s as string) || 'sent'
-          if (cid && (payload as any)?.ok !== false) {
-            setChats((prev) => {
-              const idx = prev.findIndex((c) => c.conversationId === cid)
-              if (idx < 0) return prev
-              const row = prev[idx]
-              if (!row.mine) return prev
-              const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 }
-              const nextRank = rank[st] ?? 1
-              const curRank = rank[row.state || 'pending'] ?? 0
-              if (nextRank <= curRank) return prev
-              const next = [...prev]
-              next[idx] = { ...row, state: st as any }
-              void saveCachedChats(next)
-        try { (window as any).__sc_chats_snap = next } catch { /* */ }
-              return next
-            })
-          }
           try {
-            window.dispatchEvent(new CustomEvent('sc:rt-ack', { detail: payload }))
-          } catch {
-            /* */
+            // Server logged the message — flip home-row ticks pending → sent immediately
+            const cid = (payload as any)?.c as string | undefined
+            const st = String(((payload as any)?.s as string) || 'sent')
+            if (cid && (payload as any)?.ok !== false) {
+              setChats((prev) => {
+                try {
+                  const safePrev = sanitizeChatList(prev)
+                  const idx = safePrev.findIndex((c) => c.conversationId && c.conversationId === cid)
+                  if (idx < 0) return safePrev
+                  const row = safePrev[idx]
+                  if (!row.mine) return safePrev
+                  const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 }
+                  const nextRank = rank[st] ?? 1
+                  const curRank = rank[String(row.state || 'pending')] ?? 0
+                  if (nextRank <= curRank) return safePrev
+                  const next = [...safePrev]
+                  next[idx] = { ...row, state: st as any }
+                  void saveCachedChats(next)
+                  return next
+                } catch (err) {
+                  console.error('[onAck setChats]', err)
+                  return sanitizeChatList(prev)
+                }
+              })
+            }
+            try {
+              window.dispatchEvent(new CustomEvent('sc:rt-ack', { detail: payload }))
+            } catch {
+              /* */
+            }
+          } catch (err) {
+            console.error('[onAck]', err)
           }
         },
         onCall: (packet) => {
@@ -2121,20 +2213,47 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const saveProfile = useCallback(async (profile: { name: string; username: string; bio: string; photo?: string | null }) => {
     const current = meRef.current
     if (!current) throw new Error('You must be signed in to update your profile')
-    await api.updateMe(profile)
-    const updated: ApiUser = {
+    const prevPhoto = current.photo ?? null
+    const nextPhoto = profile.photo !== undefined ? profile.photo : (current.photo ?? null)
+    // Optimistic: apply to me + settings immediately so avatar updates everywhere
+    const optimistic: ApiUser = {
       ...current,
       name: profile.name,
       username: profile.username,
       bio: profile.bio,
-      photo: profile.photo ?? current.photo ?? null,
+      photo: nextPhoto,
     }
-    meRef.current = updated
-    setMe(updated)
-    saveStoredUser(updated)
-    const nextSettings = { ...settings, ...profile }
-    setSettings(nextSettings)
-    try { kvSet('sc_settings', JSON.stringify(nextSettings)) } catch { /* ignore */ }
+    meRef.current = optimistic
+    setMe(optimistic)
+    saveStoredUser(optimistic)
+    const optimisticSettings = { ...settings, name: profile.name, username: profile.username, bio: profile.bio, photo: nextPhoto }
+    setSettings(optimisticSettings)
+    try { kvSet('sc_settings', JSON.stringify(optimisticSettings)) } catch { /* ignore */ }
+    try {
+      await api.updateMe(profile)
+    } catch (err) {
+      // Roll back photo (and identity fields) on failure
+      const rolled: ApiUser = {
+        ...current,
+        name: current.name,
+        username: current.username,
+        bio: current.bio,
+        photo: prevPhoto,
+      }
+      meRef.current = rolled
+      setMe(rolled)
+      saveStoredUser(rolled)
+      const rolledSettings = {
+        ...settings,
+        name: current.name,
+        username: current.username,
+        bio: current.bio,
+        photo: prevPhoto,
+      }
+      setSettings(rolledSettings)
+      try { kvSet('sc_settings', JSON.stringify(rolledSettings)) } catch { /* ignore */ }
+      throw err
+    }
   }, [settings])
 
   const createGroup = async (name: string, desc: string, memberIds: string[]) => {

@@ -32,6 +32,7 @@ import {
 } from '../lib/messageStore'
 import { warmPhoto } from '../lib/photoCache'
 import { putOutbox, removeOutbox } from '../lib/appCache'
+import { linkifyText } from '../lib/linkify'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 type Props = { contactId: string; onBack: () => void; onCall: (kind: 'audio' | 'video') => void; onOpenCalls?: () => void; onOpenStatus?: (userId: string, statusId?: string) => void }
@@ -224,7 +225,8 @@ const MessageBubble = memo(function MessageBubble({
     )
   }
 
-  const hasReactions = !!(m.reactions && m.reactions.length)
+  const reactionsList = Array.isArray(m.reactions) ? m.reactions : []
+  const hasReactions = reactionsList.length > 0
 
   return (
     <motion.div
@@ -438,8 +440,10 @@ const MessageBubble = memo(function MessageBubble({
           </div>
         )}
 
-        {m.text && m.text !== '📷 Photo' && !/^🎤 Voice note/.test(m.text) && (
-          <p className="px-3.5 pt-2.5 text-[15px] font-semibold leading-[1.35] tracking-[-0.01em]">{m.text}</p>
+        {m.text && String(m.text) !== '📷 Photo' && !/^🎤 Voice note/.test(String(m.text)) && (
+          <p className="whitespace-pre-wrap break-words px-3.5 pt-2.5 text-[15px] font-semibold leading-[1.35] tracking-[-0.01em]">
+            {linkifyText(String(m.text || ''), { mine })}
+          </p>
         )}
 
         <p
@@ -455,13 +459,13 @@ const MessageBubble = memo(function MessageBubble({
       {/* Reactions: sit on the bottom edge of the bubble (both sides) */}
       {hasReactions && (
         <div
-          className={`pointer-events-none absolute z-[5] flex translate-y-[42%] flex-wrap gap-0.5 ${
+          className={`pointer-events-none absolute z-[5] flex translate-y-[58%] flex-wrap gap-0.5 ${
             mine ? 'bottom-0 right-2' : 'bottom-0 left-2'
           }`}
         >
           {Object.entries(
-            (m.reactions || []).reduce((acc: Record<string, number>, r: any) => {
-              const e = typeof r === 'string' ? r : r.emoji
+            reactionsList.reduce((acc: Record<string, number>, r: any) => {
+              const e = typeof r === 'string' ? r : r?.emoji
               if (!e) return acc
               acc[e] = (acc[e] || 0) + 1
               return acc
@@ -1018,12 +1022,16 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       const openCid = convRef.current
       if (!openCid || detail.cid !== openCid) return
       const mine = detail.mine ?? detail.m.from === me?.id
-      let text = detail.m.text || (detail.m.image ? '📷 Photo' : '')
+      let text = String(
+        detail.m.text ?? (detail.m as any).content ?? '',
+      ).trim()
+      if (!text && detail.m.image) text = '📷 Photo'
+      if (!text) text = 'Message'
       let statusReply: { preview: string; time?: string; statusId?: string } | null = null
       const sr = text.match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
       if (sr) {
         statusReply = { preview: sr[1], time: sr[2] || undefined, statusId: sr[3] || undefined }
-        text = sr[4]
+        text = sr[4] || 'Status reply'
       }
       const ck = (detail.m as any).client_key || (detail.m as any).clientKey || detail.m.id
       const incoming = {
