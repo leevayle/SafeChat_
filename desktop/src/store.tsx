@@ -1169,8 +1169,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return current
       })
     })
-    const targets = snapshot.filter((chat) => chat.conversationId).slice(0, 20)
-    const concurrency = 4
+    // Prefetch only top pinned-visible threads (keeps login/home fast)
+    const targets = snapshot.filter((chat) => chat.conversationId).slice(0, force ? 12 : 8)
+    const concurrency = 3
+    const { applyThreadMessages } = await import('./lib/messageStore')
     for (let i = 0; i < targets.length; i += concurrency) {
       if (isSessionDead()) break
       await Promise.all(
@@ -1181,8 +1183,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             if (cached && cached.length >= 15) return
           }
           try {
-            const { messages } = await api.messages(conversationId, { limit: 50 })
-            await mergeCachedMessages(conversationId, messages)
+            const { messages } = await api.messages(conversationId, { limit: 40 })
+            await applyThreadMessages(conversationId, messages, 'merge')
           } catch {
             /* A thread can be refreshed when it is opened. */
           }
@@ -1191,28 +1193,46 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const refreshAll = useCallback(async () => {
+  const drainOutbox = useCallback(async () => {
     if (!hasAccessToken() || isSessionDead()) return
     try {
-      const { loadOutbox, removeOutbox } = await import('./lib/appCache')
-      const items = await loadOutbox()
+      const { loadDueOutbox, removeOutbox, markOutboxAttempt } = await import('./lib/appCache')
+      const { applyThreadMessages } = await import('./lib/messageStore')
+      const items = await loadDueOutbox()
+      // Per-conversation sequential drain (preserves order)
+      const byConv = new Map<string, typeof items>()
       for (const item of items) {
         if (!item.conversationId) continue
-        try {
-          const { message } = await api.send(item.conversationId, item.text, item.image, {
-            clientKey: item.id,
-          })
-          await mergeCachedMessages(item.conversationId, [
-            { ...message, clientKey: message.clientKey || item.id },
-          ])
-          await removeOutbox(item.id)
-        } catch {
-          // Leave failed sends in the outbox for the next retry.
-        }
+        const list = byConv.get(item.conversationId) || []
+        list.push(item)
+        byConv.set(item.conversationId, list)
       }
+      await Promise.all(
+        Array.from(byConv.entries()).map(async ([conversationId, convItems]) => {
+          for (const item of convItems) {
+            try {
+              const { message } = await api.send(conversationId, item.text, item.image, {
+                clientKey: item.id,
+                replyToId: item.replyToId,
+              })
+              await applyThreadMessages(conversationId, [
+                { ...message, clientKey: message.clientKey || item.id },
+              ])
+              await removeOutbox(item.id)
+            } catch {
+              await markOutboxAttempt(item.id, true)
+            }
+          }
+        }),
+      )
     } catch {
-      // Outbox storage is optional; still refresh server data.
+      /* outbox optional */
     }
+  }, [])
+
+  const refreshAll = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
+    await drainOutbox()
 
     await Promise.all([
       refreshChats(),
@@ -1224,8 +1244,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshNotifCount(),
       refreshSubscription(),
     ])
-    await refreshRecentMessages(true)
+    await refreshRecentMessages(false)
   }, [
+    drainOutbox,
     refreshChats,
     refreshCalls,
     refreshStatus,
@@ -1500,24 +1521,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       connectRealtime({
         onStatus: (st) => {
           if (st !== 'open' && (st as string) !== 'connected') return
-          // Flush outbox when connection restored
-          void loadOutbox().then(async (items) => {
-            for (const item of items) {
-              if (!item.conversationId) continue
-              // Avoid triple-send: only flush items older than 8s (live send may still be in flight)
-              const age = Date.now() - Date.parse(item.createdAt || '')
-              if (Number.isFinite(age) && age < 8000) continue
-              try {
-                const { message } = await api.send(item.conversationId, item.text, item.image, {
-                  clientKey: item.id,
-                })
-                await mergeCachedMessages(item.conversationId, [
-                  { ...message, clientKey: message.clientKey || item.id },
-                ])
-                await removeOutbox(item.id)
-              } catch { /* retry next open */ }
-            }
-          })
+          // Ordered outbox drain with backoff (skips items not yet due)
+          void drainOutbox()
         },
         onMessage: async (cid, m) => {
           if (!m?.id) return
@@ -1559,8 +1564,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             reactions: m.reactions || [],
           }
 
-          // Persist before publishing the new message to the rest of the client.
-          await mergeCachedMessages(cid, [mapped])
+          // Persist via central message store (memory + IDB + subscribers)
+          const { applyThreadMessages } = await import('./lib/messageStore')
+          await applyThreadMessages(cid, [mapped])
 
           // 3) Delivery / read side-effects (no UI)
           if (!mine) {

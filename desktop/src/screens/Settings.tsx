@@ -376,7 +376,7 @@ export function Settings({
                 <Card>
                   <Row label="Profile" hint="Name, username, bio, photo" onClick={() => setPage('profile')} />
                   <Row label="Privacy" hint="Last seen, read receipts" onClick={() => setPage('privacy')} />
-                  <Row label="Security" hint="App lock" onClick={() => setPage('security')} />
+                  <Row label="Security" hint="App lock, chat PIN, password" onClick={() => setPage('security')} />
                 </Card>
               </div>
 
@@ -973,7 +973,11 @@ export function Settings({
 
           {page === 'security' && (
             <motion.div key="sec" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4 px-1">
+              {/* Locks — app lock + chat lock together */}
               <Card>
+                <div className="border-b border-black/[0.04] px-3 pb-1 pt-3">
+                  <p className="text-[11px] font-black uppercase tracking-[0.08em] text-gray-400">Locks</p>
+                </div>
                 <Row
                   label="App lock"
                   hint="Require login when opening the app"
@@ -985,9 +989,72 @@ export function Settings({
                     />
                   }
                 />
+                <div className="space-y-3 border-t border-black/[0.04] px-3 py-3">
+                  <div>
+                    <p className="text-sm font-extrabold text-ink">Chat lock PIN</p>
+                    <p className="mt-1 text-xs font-semibold leading-relaxed text-gray-400">
+                      Lock individual chats from the chat menu. Keep this PIN safe.
+                    </p>
+                  </div>
+                  {!hasChatPin ? (
+                    <button
+                      type="button"
+                      className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
+                      onClick={() => {
+                        setChatPinError('')
+                        setChatPinDraft('')
+                        setChatPinConfirm('')
+                        setChatPinStep('warn')
+                      }}
+                    >
+                      Set chat lock PIN
+                    </button>
+                  ) : (
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
+                        onClick={() => {
+                          setChatPinError('')
+                          setChatPinDraft('')
+                          setChatPinConfirm('')
+                          setChatPinStep('change')
+                        }}
+                      >
+                        Change PIN
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full rounded-full bg-gray-100 py-3 text-sm font-extrabold text-ink"
+                        onClick={() => {
+                          setChatPinError('')
+                          setChatPinDraft('')
+                          setChatPinStep('disable')
+                        }}
+                      >
+                        Disable chat lock for all chats
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full rounded-full bg-brand-red/10 py-3 text-sm font-extrabold text-brand-red"
+                        onClick={() => {
+                          setForgotPhrase('')
+                          setChatPinError('')
+                          setChatPinStep('forgot')
+                        }}
+                      >
+                        Forgot PIN
+                      </button>
+                    </div>
+                  )}
+                </div>
               </Card>
 
+              {/* Account password — its own section */}
               <Card>
+                <div className="border-b border-black/[0.04] px-3 pb-1 pt-3">
+                  <p className="text-[11px] font-black uppercase tracking-[0.08em] text-gray-400">Account</p>
+                </div>
                 <div className="space-y-3 px-3 py-3">
                   <div>
                     <p className="text-sm font-extrabold text-ink">Account password</p>
@@ -1055,68 +1122,6 @@ export function Settings({
                           {passwordChangeBusy ? 'Updating…' : 'Update password'}
                         </button>
                       </div>
-                    </div>
-                  )}
-                </div>
-              </Card>
-
-              <Card>
-                <div className="space-y-3 px-3 py-3">
-                  <div>
-                    <p className="text-sm font-extrabold text-ink">Chat lock PIN</p>
-                    <p className="mt-1 text-xs font-semibold leading-relaxed text-gray-400">
-                      Used to lock individual chats from the chat menu. Keep this PIN safe.
-                    </p>
-                  </div>
-                  {!hasChatPin ? (
-                    <button
-                      type="button"
-                      className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
-                      onClick={() => {
-                        setChatPinError('')
-                        setChatPinDraft('')
-                        setChatPinConfirm('')
-                        setChatPinStep('warn')
-                      }}
-                    >
-                      Set chat lock PIN
-                    </button>
-                  ) : (
-                    <div className="space-y-2">
-                      <button
-                        type="button"
-                        className="w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
-                        onClick={() => {
-                          setChatPinError('')
-                          setChatPinDraft('')
-                          setChatPinConfirm('')
-                          setChatPinStep('change')
-                        }}
-                      >
-                        Change PIN
-                      </button>
-                      <button
-                        type="button"
-                        className="w-full rounded-full bg-gray-100 py-3 text-sm font-extrabold text-ink"
-                        onClick={() => {
-                          setChatPinError('')
-                          setChatPinDraft('')
-                          setChatPinStep('disable')
-                        }}
-                      >
-                        Disable chat lock for all chats
-                      </button>
-                      <button
-                        type="button"
-                        className="w-full rounded-full bg-brand-red/10 py-3 text-sm font-extrabold text-brand-red"
-                        onClick={() => {
-                          setForgotPhrase('')
-                          setChatPinError('')
-                          setChatPinStep('forgot')
-                        }}
-                      >
-                        Forgot PIN
-                      </button>
                     </div>
                   )}
                 </div>

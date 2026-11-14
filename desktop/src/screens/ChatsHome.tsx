@@ -27,6 +27,7 @@ import { ChatsHomeSkeleton } from '../components/ChatsHomeSkeleton'
 import { EmptyState } from '../components/EmptyState'
 import { PinPad } from '../components/PinPad'
 import { useStore } from '../store'
+import { previewFromThread } from '../lib/messageStore'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 const FILTERS = ['All chats', 'Unread', 'Online',] as const
@@ -624,12 +625,17 @@ export function ChatsHome({
                 const rowKey = c.conversationId || c.contactId
                 const isNewRow = !seenRows.current.has(rowKey)
                 if (isNewRow) seenRows.current.add(rowKey)
+                const derived = previewFromThread(c.conversationId)
+                const lastText = derived?.last || c.last
+                const lastMine = derived?.mine ?? c.mine
+                const lastState = derived?.state || c.state
                 return (
                   <motion.li
                     key={rowKey}
                     initial={isNewRow ? { opacity: 0, y: 10 } : false}
                     animate={{ opacity: 1, y: 0 }}
                     transition={isNewRow ? { delay: Math.min(i, 8) * 0.03 } : { duration: 0 }}
+                    style={{ contentVisibility: 'auto', containIntrinsicSize: '0 72px' }}
                   >
                     <button
                       type="button"
@@ -700,9 +706,9 @@ export function ChatsHome({
                         <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online),
                           premium: !!(ct as any).verifiedBadge }} size={52} />
                       )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="truncate font-extrabold">
+                      <div className="min-w-[12rem] flex-1 overflow-hidden">
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="min-w-0 flex-1 truncate font-extrabold">
                             {pinnedIds.includes(c.contactId) ? (
                               <Pin
                                 size={12}
@@ -714,26 +720,26 @@ export function ChatsHome({
                               ? `me(${me.username ? `@${String(me.username).replace(/^@/, '')}` : 'you'})`
                               : ((ct as any).savedName || ct.name)}
                           </p>
-                          <div className="flex shrink-0 flex-col items-end gap-0.5">
+                          <div className="flex min-w-[3.5rem] shrink-0 flex-col items-end gap-0.5">
                             <span
-                              className={`text-xs font-bold ${
-                                c.unread > 0 && !c.mine ? 'text-brand-purple' : 'text-gray-400'
+                              className={`whitespace-nowrap text-xs font-bold tabular-nums ${
+                                c.unread > 0 && !lastMine ? 'text-brand-purple' : 'text-gray-400'
                               }`}
                             >
                               {c.time}
                             </span>
-                            {c.mine && (
+                            {lastMine && (
                               <span
                                 className={`inline-flex items-center text-[11px] font-black leading-none ${
-                                  c.state === 'read' ? 'text-brand-blue' : 'text-gray-400'
+                                  lastState === 'read' ? 'text-brand-blue' : 'text-gray-400'
                                 }`}
-                                title={c.state || 'sent'}
+                                title={lastState || 'sent'}
                               >
-                                {c.state === 'pending' ? (
+                                {lastState === 'pending' ? (
                                   <Clock size={12} strokeWidth={2.5} className="opacity-70" aria-label="Sending" />
-                                ) : c.state === 'failed' ? (
+                                ) : lastState === 'failed' ? (
                                   '!'
-                                ) : c.state === 'sent' || !c.state ? (
+                                ) : lastState === 'sent' || !lastState ? (
                                   '✓'
                                 ) : (
                                   '✓✓'
@@ -742,17 +748,17 @@ export function ChatsHome({
                             )}
                           </div>
                         </div>
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="truncate text-sm font-semibold text-gray-500">
-                            {c.mine ? 'You: ' : ''}
+                        <div className="mt-0.5 flex items-center justify-between gap-3">
+                          <p className="min-w-0 flex-1 truncate text-sm font-semibold text-gray-500">
+                            {lastMine ? 'You: ' : ''}
                             {(typingPeers?.[ct.id] || typingPeers?.[c.contactId] || typingPeers?.[(ct as any).peerId]) ? (
                               <span className="font-bold text-brand-blue">typing…</span>
                             ) : (
-                              c.last
+                              lastText
                             )}
                           </p>
                           {c.unread > 0 && (
-                            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-purple px-1.5 text-[11px] font-black text-white">
+                            <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand-purple px-1.5 text-[11px] font-black text-white">
                               {c.unread}
                             </span>
                           )}

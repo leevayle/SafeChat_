@@ -20,6 +20,16 @@ import {
   mergeMessageLists,
   hydrateThreadFromDisk,
 } from '../lib/messageCache'
+import {
+  subscribeThread,
+  applyThreadMessages,
+  setThreadCursor,
+  getThreadCursor,
+  isLoadingOlder,
+  markLoadingOlder,
+  prependOlderMessages,
+  hydrateThread,
+} from '../lib/messageStore'
 import { warmPhoto } from '../lib/photoCache'
 import { putOutbox, removeOutbox } from '../lib/appCache'
 
@@ -319,6 +329,13 @@ const MessageBubble = memo(function MessageBubble({
           if (mine && m.state === 'failed') onRetry(m)
         }}
         className={`relative max-w-[76%] ${
+          (() => {
+            const letters = String(m.text || '').replace(/[^A-Za-z]/g, '').length
+            const shortText = !m.image && !m.statusReply && letters > 0 && letters < 5
+            // Short letter-only bubbles share one width so time + ticks never cram
+            return shortText ? 'min-w-[8.25rem]' : 'min-w-[5.75rem]'
+          })()
+        } ${
           mine
             ? 'bubble-mine rounded-2xl rounded-br-sm text-white shadow-[0_4px_18px_-6px_rgba(0,0,0,0.28)]'
             : 'rounded-2xl rounded-bl-sm bg-white text-ink shadow-[0_4px_16px_-8px_rgba(15,23,42,0.18)] ring-1 ring-black/[0.04]'
@@ -419,7 +436,7 @@ const MessageBubble = memo(function MessageBubble({
         )}
 
         <p
-          className={`flex items-center justify-end gap-1 px-3.5 pb-1.5 pt-0.5 text-[10px] font-bold tracking-wide ${
+          className={`flex items-center justify-end gap-1 whitespace-nowrap px-3.5 pb-1.5 pt-0.5 text-[10px] font-bold tabular-nums tracking-wide ${
             mine ? 'text-white/70' : 'text-gray-400'
           }`}
         >
@@ -597,6 +614,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
   const [emoji, setEmoji] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [hasMoreOlder, setHasMoreOlder] = useState(true)
   const [pendingImage, setPendingImage] = useState<string | null>(null)
   const [replyTo, setReplyTo] = useState<ApiMsg | null>(null)
   const [profileOpen, setProfileOpen] = useState(false)
@@ -713,7 +732,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         setMsgs((prev) => (prev.length ? prev : cached))
         if (!silent) setLoading(false)
       }
-      const { messages } = await api.messages(cid, { limit: 50 })
+      const { messages, nextCursor } = await api.messages(cid, { limit: 50 })
+      setThreadCursor(cid, nextCursor || (messages.length ? messages[0]?.id : null))
+      setHasMoreOlder(!!nextCursor || messages.length >= 50)
       // Incoming messages we just pulled: ack delivered before/while painting (no await)
       for (const m of messages) {
         const mine = m.mine ?? m.from === me?.id
@@ -822,7 +843,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         )
         if (sameMsgList(prev, stable)) return prev
         if (!stable.length && prev.length) return prev
-        void mergeCachedMessages(cid, stable)
+        void applyThreadMessages(cid, stable, 'merge')
         return stable
       })
       api.markRead(cid).catch(() => {})
@@ -833,6 +854,51 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }
 
+  const loadOlder = useCallback(async () => {
+    const cid = convRef.current || conversationId
+    if (!cid || !hasMoreOlder || loadingOlder || isLoadingOlder(cid)) return
+    const oldest = msgs.find((m) => m.id && !String(m.id).startsWith('local-'))
+    const beforeId = getThreadCursor(cid) || oldest?.id
+    if (!beforeId) {
+      setHasMoreOlder(false)
+      return
+    }
+    const scroller = msgsScrollRef.current
+    const prevHeight = scroller?.scrollHeight || 0
+    setLoadingOlder(true)
+    markLoadingOlder(cid, true)
+    try {
+      const { messages, nextCursor } = await api.messages(cid, { limit: 40, beforeId: String(beforeId) })
+      if (!messages.length) {
+        setHasMoreOlder(false)
+        setThreadCursor(cid, null)
+        return
+      }
+      await prependOlderMessages(cid, messages, nextCursor)
+      setMsgs((prev) => mergeMessageLists(prev, messages))
+      setHasMoreOlder(!!nextCursor)
+      setThreadCursor(cid, nextCursor)
+      requestAnimationFrame(() => {
+        if (!scroller) return
+        const delta = scroller.scrollHeight - prevHeight
+        if (delta > 0) scroller.scrollTop += delta
+      })
+    } catch {
+      /* keep hasMore; user can scroll again */
+    } finally {
+      markLoadingOlder(cid, false)
+      setLoadingOlder(false)
+    }
+  }, [conversationId, hasMoreOlder, loadingOlder, msgs])
+
+  // Subscribe to central message store for this thread
+  useEffect(() => {
+    const cid = conversationId || knownConv
+    if (!cid) return
+    return subscribeThread(cid, (list) => {
+      setMsgs((prev) => (sameMsgList(prev, list) ? prev : list))
+    })
+  }, [conversationId, knownConv])
 
   // When home list later provides conversationId, adopt it (fixes empty inbox)
   useEffect(() => {
@@ -877,12 +943,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         })
       } else {
         setMsgs([])
-        void hydrateThreadFromDisk(knownConv).then((disk) => {
+        void hydrateThread(knownConv).then((disk) => {
           if (disk?.length && convRef.current === knownConv) {
             seedKeys(disk)
             setMsgs((prev) => {
               const merged = mergeMessageLists(disk, prev)
-              void mergeCachedMessages(knownConv, merged)
+              void applyThreadMessages(knownConv, merged, 'merge')
               return merged
             })
             setLoading(false)
@@ -1347,7 +1413,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         convRef.current = cid
       }
       if (optimistic) {
-        await mergeCachedMessages(cid, [{ ...optimistic, conversationId: cid }])
+        await applyThreadMessages(cid, [{ ...optimistic, conversationId: cid }], 'merge')
       }
       // Prefer persistent WebSocket (no new HTTP handshake)
       let wsText = body || ''
@@ -1373,9 +1439,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         clientKey: localId,
         ...opts,
       })
-      await mergeCachedMessages(cid, [
-        { ...message, clientKey: message.clientKey || localId, conversationId: cid },
-      ])
+      const confirmed = {
+        ...message,
+        clientKey: message.clientKey || localId,
+        conversationId: cid,
+      }
+      await applyThreadMessages(cid, [confirmed], 'merge')
       // In-place receipt update only - never replace/remove the printed bubble
       setMsgs((m) =>
         m.map((x) =>
@@ -1499,6 +1568,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       text: body,
       image: img,
       createdAt: nowIso,
+      status: 'queued',
+      attempts: 0,
+      nextAttemptAt: 0,
+      replyToId: replySnap?.id,
     })
     // Backend later
     void deliverMessage(localId, body, img, {
@@ -2403,7 +2476,16 @@ return (
         data-msg-list
         className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4 pb-6 md:px-8"
         style={{ fontSize: FONT_SIZES[settings.fontSize] || '1rem' }}
+        onScroll={(e) => {
+          const el = e.currentTarget
+          if (el.scrollTop < 80) void loadOlder()
+        }}
       >
+        {(loadingOlder || hasMoreOlder) && (
+          <p className="py-2 text-center text-[11px] font-bold text-gray-400">
+            {loadingOlder ? 'Loading earlier messages…' : hasMoreOlder ? 'Scroll up for earlier messages' : ''}
+          </p>
+        )}
         <p className="mx-auto w-fit rounded-full bg-white px-3 py-1 text-xs font-extrabold text-gray-500 shadow-sm">
           Today
         </p>
