@@ -1639,14 +1639,18 @@ export function Settings({
                         setSetting('busyEnabled' as any, v as never)
                         // Turning off publishes immediately so peers stop seeing the custom message
                         if (!v) {
+                          // Optimistic off — instant UI
+                          setToast('Busy status turned off')
                           void api
                             .updatePreferences({
                               busy_enabled: false,
                               busy_message: '',
                               busy_until: null as any,
                             })
-                            .then(() => setToast('Busy status turned off'))
-                            .catch(() => setToast('Could not update busy status'))
+                            .catch(() => {
+                              setSetting('busyEnabled' as any, true as never)
+                              setToast('Could not turn off busy status')
+                            })
                         }
                       }}
                       label="Busy status"
@@ -1730,22 +1734,30 @@ export function Settings({
                           if (busyUpdating) return
                           const mins = Number((s as any).busyDurationMin || 30)
                           const until = new Date(Date.now() + mins * 60 * 1000).toISOString()
+                          const message = String((s as any).busyMessage || '')
+                          const scope = (s as any).busyScope || 'everyone'
+                          // Optimistic: local state + toast immediately; API in background
                           setSetting('busyUntil' as any, until as never)
                           setSetting('busyEnabled' as any, true as never)
+                          setToast('Busy status updated')
                           setBusyUpdating(true)
                           void api
                             .updatePreferences({
                               busy_enabled: true,
-                              busy_message: (s as any).busyMessage || '',
+                              busy_message: message,
                               busy_until: until,
-                              busy_scope: (s as any).busyScope || 'everyone',
+                              busy_scope: scope,
                             })
-                            .then(() => setToast('Busy status updated, contacts see your message'))
-                            .catch(() => setToast('Could not update busy status'))
+                            .then(() => setToast('Contacts can see your status'))
+                            .catch(() => {
+                              setSetting('busyEnabled' as any, false as never)
+                              setSetting('busyUntil' as any, null as never)
+                              setToast('Could not update busy status')
+                            })
                             .finally(() => setBusyUpdating(false))
                         }}
                       >
-                        {busyUpdating ? 'Updating…' : 'Update busy status'}
+                        {busyUpdating ? 'Saving…' : 'Update busy status'}
                       </button>
                       <p className="text-[11px] font-semibold leading-relaxed text-gray-400">
                         Overrides Online for contacts. Typing still shows. Expires after the duration.

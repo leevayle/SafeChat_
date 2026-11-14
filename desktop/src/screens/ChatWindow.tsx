@@ -912,7 +912,25 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     const cid = conversationId || knownConv
     if (!cid) return
     return subscribeThread(cid, (list) => {
-      setMsgs((prev) => (sameMsgList(prev, list) ? prev : list))
+      setMsgs((prev) => {
+        if (sameMsgList(prev, list)) return prev
+        // Prefer in-flight optimistic edits already on screen (avoid snap-back to old body)
+        if (!prev.length) return list
+        const byId = new Map(prev.map((m) => [m.id, m]))
+        const byCk = new Map(prev.filter((m) => m.clientKey).map((m) => [m.clientKey!, m]))
+        return list.map((incoming) => {
+          const local = byId.get(incoming.id) || (incoming.clientKey ? byCk.get(incoming.clientKey) : undefined)
+          if (!local) return incoming
+          // Local marked edited with different text wins until store catches up
+          if ((local as any).edited && local.text && local.text !== incoming.text) {
+            return { ...incoming, text: local.text, edited: true }
+          }
+          if ((local as any).editing) {
+            return { ...incoming, text: local.text, editing: true }
+          }
+          return incoming
+        })
+      })
     })
   }, [conversationId, knownConv])
 
@@ -1177,13 +1195,21 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       if (!d?.id) return
       const openCid = convRef.current
       if (d.cid && openCid && d.cid !== openCid) return
-      setMsgs((prev) =>
-        prev.map((x) =>
-          x.id === d.id || x.clientKey === d.id
-            ? { ...x, text: d.text, edited: true, editing: false }
-            : x,
-        ),
-      )
+      const nextText = String(d.text || '')
+      setMsgs((prev) => {
+        let changed = false
+        const next = prev.map((x) => {
+          if (x.id !== d.id && x.clientKey !== d.id) return x
+          if (x.text === nextText && (x as any).edited) return x
+          changed = true
+          return { ...x, text: nextText, edited: true, editing: false }
+        })
+        if (changed && openCid) {
+          const patched = next.filter((x) => x.id === d.id || x.clientKey === d.id)
+          if (patched.length) void applyThreadMessages(openCid, patched, 'merge')
+        }
+        return changed ? next : prev
+      })
     }
     const onReact = (ev: Event) => {
       const d = (ev as CustomEvent).detail as {
@@ -1787,34 +1813,51 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     const id = actionMsg.id
     const clientKey = actionMsg.clientKey
     const prevText = actionMsg.text
+    const prevEdited = !!(actionMsg as any).edited
     const text = editText.trim()
-    // Optimistic: keep text, mark editing… - never blank the bubble
+    if (text === String(prevText || '').trim()) {
+      setEditing(false)
+      setActionMsg(null)
+      return
+    }
+    // Single optimistic paint: new text + edited. No intermediate "editing…" state.
+    const patched = {
+      ...actionMsg,
+      text,
+      edited: true,
+      editing: false,
+    } as ApiMsg
     setMsgs((list) =>
       list.map((m) =>
-        m.id === id || (clientKey && m.clientKey === clientKey)
-          ? { ...m, text, editing: true, edited: false }
-          : m,
+        m.id === id || (clientKey && m.clientKey === clientKey) ? { ...m, text, edited: true, editing: false } : m,
       ),
     )
     setEditing(false)
     setActionMsg(null)
+    const cid = convRef.current
+    if (cid) {
+      // Keep central store in sync so subscribeThread cannot re-emit the old body
+      void applyThreadMessages(cid, [patched], 'merge')
+    }
     try {
       await api.editMessage(id, text)
-      setMsgs((list) =>
-        list.map((m) =>
-          m.id === id || (clientKey && m.clientKey === clientKey)
-            ? { ...m, text, editing: false, edited: true }
-            : m,
-        ),
-      )
+      // Success: already showing final UI — do not re-render
     } catch {
+      // Only rollback on failure
       setMsgs((list) =>
         list.map((m) =>
           m.id === id || (clientKey && m.clientKey === clientKey)
-            ? { ...m, text: prevText, editing: false, edited: !!(m as any).edited }
+            ? { ...m, text: prevText, editing: false, edited: prevEdited }
             : m,
         ),
       )
+      if (cid) {
+        void applyThreadMessages(
+          cid,
+          [{ ...actionMsg, text: prevText, edited: prevEdited, editing: false } as ApiMsg],
+          'merge',
+        )
+      }
       showToast('Could not edit message')
     }
   }

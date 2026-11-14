@@ -52,6 +52,8 @@ async def websocket_endpoint(
             data = await websocket.receive_json()
             t = (data or {}).get("t")
             if t == "ping":
+                # Keep last_seen / presence fresh while the socket is alive
+                await _touch_last_seen(user_id)
                 await websocket.send_json({"t": "pong", "ts": _utc_iso()})
             elif t == "send":
                 await _handle_send(user_id, websocket, data)

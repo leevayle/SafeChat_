@@ -133,8 +133,11 @@ function scheduleReconnect() {
   if (state.intentionalClose) return
   if (!hasAccessToken() || isSessionDead()) return
   if (state.reconnectTimer) return // already scheduled
-  // Fast first retries, then cap — proxies often drop idle sockets ~30–60s
-  const delay = Math.min(8000, 500 * Math.pow(1.5, state.retries))
+  // Stay online aggressively: near-instant first retries when the browser reports network
+  const online =
+    typeof navigator === 'undefined' || navigator.onLine !== false
+  const base = online ? 200 : 800
+  const delay = Math.min(5000, base * Math.pow(1.4, Math.min(state.retries, 8)))
   state.retries += 1
   state.reconnectTimer = setTimeout(() => {
     state.reconnectTimer = null
@@ -143,6 +146,11 @@ function scheduleReconnect() {
       if (state.ws && state.ws.readyState !== WebSocket.CLOSED) state.ws.close()
     } catch { /* */ }
     state.ws = null
+    // Skip opening while offline — online event will bump us
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      scheduleReconnect()
+      return
+    }
     connectRealtime(state.handlers)
   }, delay)
 }
@@ -199,13 +207,20 @@ function bindLifecycleListeners() {
   state.listenersBound = true
   const bump = () => {
     if (state.intentionalClose) return
-    if (!hasAccessToken()) return
+    if (!hasAccessToken() || isSessionDead()) return
     // Tab visible again or network back — reconnect immediately if socket dead
-    const alive = state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)
+    const alive =
+      state.ws &&
+      (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)
     if (!alive) {
       state.retries = 0
+      if (state.reconnectTimer) {
+        clearTimeout(state.reconnectTimer)
+        state.reconnectTimer = null
+      }
       connectRealtime(state.handlers)
     } else if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+      state.lastPongAt = Date.now()
       rawSend({ t: 'ping' })
     }
   }
@@ -215,6 +230,19 @@ function bindLifecycleListeners() {
   window.addEventListener('online', bump)
   // Some browsers throttle timers in background; resume aggressively
   window.addEventListener('focus', bump)
+  // Periodic watchdog: if we think we should be online but socket is dead, reconnect
+  window.setInterval(() => {
+    if (state.intentionalClose) return
+    if (!hasAccessToken() || isSessionDead()) return
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+    const alive =
+      state.ws &&
+      (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)
+    if (!alive && !state.reconnectTimer) {
+      state.retries = 0
+      connectRealtime(state.handlers)
+    }
+  }, 20000)
 }
 
 function rawSend(obj: object): boolean {
@@ -258,6 +286,11 @@ export function connectRealtime(handlers?: RtHandlers) {
     state.retries = 0
     state.authFailCount = 0
     state.lastPongAt = Date.now()
+    // Cancel any pending reconnect now that we are live
+    if (state.reconnectTimer) {
+      clearTimeout(state.reconnectTimer)
+      state.reconnectTimer = null
+    }
     state.handlers.onStatus?.('open')
     if (wasReconnect && hasAccessToken() && !isSessionDead()) {
       try {
@@ -267,22 +300,22 @@ export function connectRealtime(handlers?: RtHandlers) {
         )
       } catch { /* */ }
     }
-    // Ping every 15s — stays under common proxy idle timeouts (30–60s)
+    // Keepalive: ping every 12s (under common 30–60s proxy idle cuts)
     state.pingTimer = setInterval(() => {
       if (!rawSend({ t: 'ping' })) {
         scheduleReconnect()
       }
-    }, 15000)
-    // If no pong for 45s, treat socket as dead and reconnect
+    }, 12000)
+    // Only treat socket as dead after a long silence — avoid flapping on brief lag
     state.pongWatch = setInterval(() => {
       if (state.intentionalClose) return
-      if (Date.now() - state.lastPongAt > 45000) {
+      if (Date.now() - state.lastPongAt > 90000) {
         try { state.ws?.close() } catch { /* */ }
         state.ws = null
         clearTimers()
         scheduleReconnect()
       }
-    }, 10000)
+    }, 15000)
   }
 
   ws.onmessage = (ev) => {
@@ -519,13 +552,19 @@ export function connectRealtime(handlers?: RtHandlers) {
     clearTimers()
     state.ws = null
     state.handlers.onStatus?.('closed')
-    // 4401 = our backend auth reject; 1006/1008 often accompany proxy 403
+    if (state.intentionalClose) return
     const code = ev?.code ?? 0
-    if (code === 4401 || code === 1008 || code === 1006 || code === 1002) {
+    // Only 4401 is our explicit auth reject. Network drops (1006) must reconnect fast
+    // without burning auth refresh attempts.
+    if (code === 4401) {
       void handlePossibleAuthFailure().then(() => {
         if (!state.intentionalClose && !isSessionDead()) scheduleReconnect()
       })
       return
+    }
+    // Immediate retry when the tab is online — presence should stay continuous
+    if (typeof navigator === 'undefined' || navigator.onLine !== false) {
+      state.retries = Math.min(state.retries, 1)
     }
     scheduleReconnect()
   }
