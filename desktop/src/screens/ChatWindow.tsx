@@ -243,9 +243,9 @@ const MessageBubble = memo(function MessageBubble({
         if (dx > 28) onReply?.(m)
         setDx(0)
       }}
-      className={`group/bubble relative flex ${mine ? 'justify-end' : 'justify-start'} ${highlight ? 'z-10' : ''}`}
+      className={`group/bubble relative flex w-full ${mine ? 'justify-end' : 'justify-start'} ${highlight ? 'z-10' : ''}`}
     >
-      <div className="relative inline-flex max-w-[85%] items-start">
+      <div className={`relative inline-flex max-w-[85%] items-start ${mine ? 'ml-auto' : 'mr-auto'}`}>
       {/* Desktop: hover actions */}
       {!m.deleted && (
         <div
@@ -479,7 +479,7 @@ const MessageBubble = memo(function MessageBubble({
 
 function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus }: Props) {
   const sendingKeysRef = useRef<Set<string>>(new Set())
-  const { settings, contacts, chats, me, showToast, upsertChatPreview, statusList, setActiveConversationId, busyMap, presenceMap, refreshContacts } = useStore()
+  const { settings, contacts, chats, me, showToast, upsertChatPreview, statusList, setActiveConversationId, busyMap, presenceMap, typingPeers, refreshContacts } = useStore()
   // Resolve peer from contacts, or from an existing chat preview (notifications may pass contactId)
   const chatPreview =
     chats.find(
@@ -1614,12 +1614,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
 
 
-  // Presence for this peer (includes busy message so Online is replaced)
+  // Presence for this peer (REST seed + poll; WS drives live updates below)
   useEffect(() => {
     let alive = true
     const load = async () => {
       try {
-        const p = await api.presence(contactId)
+        const p = await api.presence(peerId || contactId)
         if (!alive) return
         setPeerOnline(!!p.online)
         setPeerLastSeen(p.lastSeen || null)
@@ -1637,12 +1637,43 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       alive = false
       clearInterval(id)
     }
-  }, [contactId])
+  }, [contactId, peerId])
 
-  // Live typing + presence from WS (match contactId or resolved peerId)
+  // Keep header Online in sync with global presenceMap (WS → store)
   useEffect(() => {
-    const isPeer = (id?: string) =>
-      !!id && (id === contactId || id === peerId || id === (c as any)?.peerId)
+    const keys = [peerId, contactId, (c as any)?.peerId, (c as any)?.id].filter(Boolean).map(String)
+    for (const k of keys) {
+      if (presenceMap?.[k] != null) {
+        setPeerOnline(!!presenceMap[k])
+        break
+      }
+    }
+    for (const k of keys) {
+      const b = busyMap?.[k]
+      if (b && b.message) {
+        setPeerBusy({ message: b.message, until: b.until || null })
+        break
+      }
+    }
+  }, [presenceMap, busyMap, peerId, contactId, c])
+
+  // Store typingPeers → header (home + open chat share the same map)
+  useEffect(() => {
+    const keys = [peerId, contactId, (c as any)?.peerId, (c as any)?.id].filter(Boolean).map(String)
+    const on = keys.some((k) => !!typingPeers?.[k])
+    setTyping(on)
+    if (!on) setLiveDraft(null)
+  }, [typingPeers, peerId, contactId, c])
+
+  // Live typing + presence from WS window events (match contactId or resolved peerId)
+  useEffect(() => {
+    const isPeer = (id?: string) => {
+      if (!id) return false
+      const keys = new Set(
+        [contactId, peerId, (c as any)?.peerId, (c as any)?.id].filter(Boolean).map(String),
+      )
+      return keys.has(String(id))
+    }
 
     const onTyping = (ev: Event) => {
       const d = (ev as CustomEvent).detail as { peerId?: string; typing?: boolean }
@@ -1651,6 +1682,24 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       setTyping(!!d.typing)
       // Only clear the bubble when peer fully stops (not on every keypress)
       if (!d.typing) setLiveDraft(null)
+    }
+    const onPresence = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as {
+        peerId?: string
+        online?: boolean
+        lastSeen?: string | null
+        busy?: boolean
+        busyMessage?: string
+        busyUntil?: string | null
+      }
+      if (!isPeer(d?.peerId)) return
+      if (d.online != null) setPeerOnline(!!d.online)
+      if (d.lastSeen) setPeerLastSeen(d.lastSeen)
+      if (d.busy && d.busyMessage) {
+        setPeerBusy({ message: d.busyMessage, until: d.busyUntil || null })
+      } else if (d.busy === false) {
+        setPeerBusy(null)
+      }
     }
     const onRec = (ev: Event) => {
       const d = (ev as CustomEvent).detail as { peerId?: string; recording?: boolean }
@@ -1679,15 +1728,17 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       }
     }
     window.addEventListener('sc:rt-typing', onTyping)
+    window.addEventListener('sc:rt-presence', onPresence)
     window.addEventListener('sc:rt-recording', onRec)
     window.addEventListener('sc:rt-live-typing', onLive)
     return () => {
       window.removeEventListener('sc:rt-typing', onTyping)
+      window.removeEventListener('sc:rt-presence', onPresence)
       window.removeEventListener('sc:rt-recording', onRec)
       window.removeEventListener('sc:rt-live-typing', onLive)
       if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
     }
-  }, [contactId, peerId, settings])
+  }, [contactId, peerId, settings, c])
 
 
   const applyEdit = async () => {
@@ -2084,7 +2135,13 @@ return (
                   busyInfo.message &&
                   (!busyInfo.until || Date.parse(String(busyInfo.until)) > Date.now())
                 )
-                const online = !!(presenceMap?.[peer] || peerOnline || c.online)
+                const online = !!(
+                  presenceMap?.[peer] ||
+                  presenceMap?.[peerId] ||
+                  presenceMap?.[contactId] ||
+                  peerOnline ||
+                  c.online
+                )
                 const last = peerLastSeen || (c as any).lastSeen
                 if (busyActive) return busyInfo!.message || 'busy'
                 if (online) return 'Online'

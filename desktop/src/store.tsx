@@ -1756,6 +1756,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
         },
         onPresence: (peerId, online, lastSeen, extra?: any) => {
+          // Match SafeChat_ reference exactly
           setPresenceMap((prev) => {
             if (prev[peerId] === !!online) return prev
             return { ...prev, [peerId]: !!online }

@@ -267,6 +267,11 @@ export function hasAccessToken(): boolean {
   return !!accessToken()
 }
 
+/** In-memory access JWT for WebSocket auth (not persisted). */
+export function getAccessToken(): string {
+  return accessToken()
+}
+
 /** Set after a permanent 401 so callers stop firing protected requests. */
 let sessionDead = false
 

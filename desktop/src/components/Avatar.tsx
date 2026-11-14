@@ -70,6 +70,8 @@ export function Avatar({
     </span>
   )
 
+  const onlineDot = Math.max(10, Math.round(size * 0.22))
+
   return (
     <span
       className="relative inline-flex shrink-0 isolate"
@@ -85,15 +87,28 @@ export function Avatar({
           body
         )}
       </span>
+      {contact.online && (
+        <span
+          className="pointer-events-none absolute z-[2] rounded-full bg-emerald-500 shadow-sm ring-2 ring-white dark:ring-[#0b1220]"
+          style={{
+            width: onlineDot,
+            height: onlineDot,
+            right: 0,
+            bottom: 0,
+          }}
+          title="Online"
+          aria-label="Online"
+        />
+      )}
       {showBadge && (
         <span
           className="pointer-events-none absolute z-[1] flex items-center justify-center rounded-full bg-[#1DA1F2] text-white shadow-md ring-2 ring-white"
           style={{
             width: badge,
             height: badge,
-            // Bottom-right of profile photo
+            // Top-right so it does not collide with the online dot
             right: -2,
-            bottom: -2,
+            top: -2,
             fontSize: badge * 0.55,
           }}
           title="Premium"

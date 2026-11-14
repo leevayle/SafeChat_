@@ -15,7 +15,7 @@
  *   { t: "call", a, to, callId, sdp?, candidate?, kind? }
  *   { t: "ping" }
  */
-import { hasAccessToken, isSessionDead, markSessionDead } from './api'
+import { hasAccessToken, isSessionDead, markSessionDead, getAccessToken } from './api'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/kv'
 export type RtMsg = {
@@ -240,7 +240,8 @@ export function connectRealtime(handlers?: RtHandlers) {
   }
 
   state.intentionalClose = false
-  const token = kvGet('sc_access') || kvGet('sc_token') || ''
+  // Access token lives in memory (api.getAccessToken) — not in kv/localStorage
+  const token = getAccessToken() || kvGet('sc_access') || kvGet('sc_token') || ''
   if (!token) return
 
   let ws: WebSocket
@@ -354,28 +355,55 @@ export function connectRealtime(handlers?: RtHandlers) {
       state.handlers.onCall?.(data as RtCallPacket)
       return
     }
-    if (t === 'typing' && data.from) {
-      state.handlers.onTyping?.(String(data.from), !!data.typing)
-      if (data.live || data.draft != null) {
+    if (t === 'typing' && (data.from || data.userId || data.user_id)) {
+      const peerId = String(data.from || data.userId || data.user_id)
+      const typingOn =
+        data.typing != null
+          ? !!data.typing
+          : !!(data.live || (data.draft != null && String(data.draft).length > 0))
+      try {
         window.dispatchEvent(
-          new CustomEvent('sc:rt-live-typing', {
-            detail: { peerId: String(data.from), draft: data.draft ?? '' },
+          new CustomEvent('sc:rt-typing', {
+            detail: { peerId, typing: typingOn },
           }),
         )
+      } catch { /* */ }
+      state.handlers.onTyping?.(peerId, typingOn)
+      if (data.live || data.draft != null) {
+        try {
+          window.dispatchEvent(
+            new CustomEvent('sc:rt-live-typing', {
+              detail: { peerId, draft: data.draft ?? '' },
+            }),
+          )
+        } catch { /* */ }
       }
       return
     }
-    if (t === 'presence' && data.userId) {
-      state.handlers.onPresence?.(
-        String(data.userId),
-        !!data.online,
-        data.lastSeen || null,
-        {
-          busy: !!data.busy,
-          busyMessage: data.busyMessage || data.busy_message || '',
-          busyUntil: data.busyUntil || data.busy_until || null,
-        },
-      )
+    if (t === 'presence' && (data.userId || data.user_id || data.from)) {
+      const peerId = String(data.userId || data.user_id || data.from)
+      const online = !!data.online
+      const lastSeen = data.lastSeen || data.last_seen || null
+      const extra = {
+        busy: !!data.busy,
+        busyMessage: data.busyMessage || data.busy_message || '',
+        busyUntil: data.busyUntil || data.busy_until || null,
+      }
+      state.handlers.onPresence?.(peerId, online, lastSeen, extra)
+      try {
+        window.dispatchEvent(
+          new CustomEvent('sc:rt-presence', {
+            detail: {
+              peerId,
+              online,
+              lastSeen,
+              busy: extra.busy,
+              busyMessage: extra.busyMessage,
+              busyUntil: extra.busyUntil,
+            },
+          }),
+        )
+      } catch { /* */ }
       return
     }
     if (t === 'status_view' && data.status_id) {
