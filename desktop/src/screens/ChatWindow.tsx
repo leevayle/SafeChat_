@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download, Gamepad2, Reply, Trash2 } from 'lucide-react'
-import { Avatar } from '../components/Avatar'
+import { Avatar, VerifiedCheck } from '../components/Avatar'
 import { NotesBoard } from '../components/NotesBoard'
 import { ChatImageCropper } from '../components/ChatImageCropper'
 import { TicTacToe } from '../components/TicTacToe'
@@ -115,7 +115,8 @@ const ReceiptTicks = memo(function ReceiptTicks({
   mine: boolean
 }) {
   if (!mine) return null
-  if (state === 'pending') {
+  // pending → clock | sent → ✓ | delivered → ✓✓ gray | read → ✓✓ blue
+  if (state === 'pending' || !state) {
     return <Clock size={13} strokeWidth={2.5} className="opacity-80" aria-label="Sending" />
   }
   if (state === 'failed') {
@@ -134,14 +135,18 @@ const ReceiptTicks = memo(function ReceiptTicks({
   if (state === 'delivered') {
     return <CheckCheck size={14} strokeWidth={2.5} className="opacity-90" aria-label="Delivered" />
   }
-  return (
-    <CheckCheck
-      size={14}
-      strokeWidth={2.5}
-      className={readReceipts ? 'text-sky-300' : 'opacity-90'}
-      aria-label="Read"
-    />
-  )
+  if (state === 'read') {
+    return (
+      <CheckCheck
+        size={14}
+        strokeWidth={2.5}
+        className={readReceipts ? 'text-sky-300' : 'text-sky-400'}
+        aria-label="Read"
+      />
+    )
+  }
+  // Unknown → single tick (never look "read" by accident)
+  return <Check size={14} strokeWidth={2.5} aria-label="Sent" />
 })
 
 type BubbleProps = {
@@ -1070,6 +1075,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       setMsgs((prev) => {
         let changed = false
         const next = prev.map((x) => {
+          // Match server id or clientKey (acks/receipts may use either)
           if (x.id !== detail.id && x.clientKey !== detail.id) return x
           const rank: Record<string, number> = {
             pending: 0,
@@ -1083,7 +1089,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           return { ...x, state: nextState }
         })
         if (changed && openCid) {
-          void mergeCachedMessages(openCid, next)
+          void applyThreadMessages(openCid, next.filter((x) => x.id === detail.id || x.clientKey === detail.id), 'merge')
         }
         return changed ? next : prev
       })
@@ -1429,10 +1435,23 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         replyToId: opts?.replyToId || undefined,
       })
       if (usedWs) {
-        // Prevent outbox flush from re-sending the same message
+        // Socket accepted the frame → treat as sent until ack upgrades id/state
+        setMsgs((m) =>
+          m.map((x) =>
+            x.id === localId || x.clientKey === localId
+              ? { ...x, state: pickState('sent', x.state) }
+              : x,
+          ),
+        )
+        upsertChatPreview({
+          contactId: (c as any).peerId || contactId,
+          conversationId: cid,
+          state: 'sent',
+          mine: true,
+        })
         void removeOutbox(localId)
         sendingKeysRef.current.delete(localId)
-        // Ack arrives via sc:rt-ack / store onAck → updates ticks to sent
+        // sc:rt-ack still maps server id + may bump delivered/read
         return
       }
       const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img, {
@@ -2103,10 +2122,15 @@ return (
           }}
           className="flex min-w-0 flex-1 items-center gap-2 text-left"
         >
-          <Avatar contact={{ ...c, online: peerOnline || c.online, premium: !!(c as any).verifiedBadge }} size={44} />
+          <Avatar contact={{ ...c, online: peerOnline || c.online }} size={44} />
           <div className="min-w-0 flex-1">
-            <p className="truncate font-extrabold leading-tight">
-              {isSelfChat ? `Me (${me?.name || (c as any).publicName || c.name || 'You'})` : c.name}
+            <p className="flex min-w-0 items-center gap-1 font-extrabold leading-tight">
+              <span className="truncate">
+                {isSelfChat ? `Me (${me?.name || (c as any).publicName || c.name || 'You'})` : c.name}
+              </span>
+              {!!(c as any).verifiedBadge && !isSelfChat && (
+                <VerifiedCheck size={15} />
+              )}
             </p>
             <p
               className={`text-xs font-bold ${
@@ -2862,14 +2886,16 @@ return (
                   contact={{
                     ...c,
                     online: peerOnline || c.online,
-                    premium: !!(c as any).verifiedBadge,
                   }}
                   size={120}
                 />
               </div>
             </div>
-            <h2 className="mt-4 text-2xl font-black text-ink">
-              {isSelfChat ? `Me (${me?.name || (c as any).publicName || c.name || 'You'})` : c.name}
+            <h2 className="mt-4 flex items-center justify-center gap-1.5 text-2xl font-black text-ink">
+              <span>
+                {isSelfChat ? `Me (${me?.name || (c as any).publicName || c.name || 'You'})` : c.name}
+              </span>
+              {!!(c as any).verifiedBadge && !isSelfChat && <VerifiedCheck size={18} />}
             </h2>
             {(c as any).publicName && (c as any).publicName !== c.name ? (
               <p className="mt-1 text-sm font-semibold text-gray-500">

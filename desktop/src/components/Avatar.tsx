@@ -29,8 +29,6 @@ export function Avatar({
   const [a, b] = contact.hue || ['#7B2CBF', '#6389EB']
   const [broken, setBroken] = useState(false)
   const src = resolvePhoto(contact.id, contact.photo, API_ORIGIN)
-  const showBadge = premium ?? contact.premium ?? contact.verified ?? false
-
   useEffect(() => {
     setBroken(false)
     if (contact.photo) warmPhoto(contact.id, contact.photo, API_ORIGIN)
@@ -44,7 +42,6 @@ export function Avatar({
     .toUpperCase()
 
   const showImg = Boolean(src) && !broken
-  const badge = Math.max(14, Math.round(size * 0.28))
 
   const body = showImg ? (
     <img
@@ -100,25 +97,26 @@ export function Avatar({
           aria-label="Online"
         />
       )}
-      {showBadge && (
-        <span
-          className="pointer-events-none absolute z-[1] flex items-center justify-center rounded-full bg-[#1DA1F2] text-white shadow-md ring-2 ring-white"
-          style={{
-            width: badge,
-            height: badge,
-            // Top-right so it does not collide with the online dot
-            right: -2,
-            top: -2,
-            fontSize: badge * 0.55,
-          }}
-          title="Premium"
-          aria-label="Premium verified"
-        >
-          <svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor" aria-hidden>
-            <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
-          </svg>
-        </span>
-      )}
+    </span>
+  )
+}
+
+/** Same verified mark formerly on the avatar — place after the display name. */
+export function VerifiedCheck({ size = 16 }: { size?: number }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center justify-center rounded-full bg-[#1DA1F2] text-white shadow-md ring-2 ring-white dark:ring-[#0b1220]"
+      style={{
+        width: size,
+        height: size,
+        fontSize: size * 0.55,
+      }}
+      title="Premium"
+      aria-label="Premium verified"
+    >
+      <svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor" aria-hidden>
+        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+      </svg>
     </span>
   )
 }

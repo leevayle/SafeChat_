@@ -1568,16 +1568,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const { applyThreadMessages } = await import('./lib/messageStore')
           await applyThreadMessages(cid, [mapped])
 
-          // 3) Delivery / read side-effects (no UI)
+          // 3) Delivery / read side-effects
+          // delivered = message reached this device (printed in memory/UI)
+          // read = conversation open OR app foreground (inbox list shows the line)
           if (!mine) {
             void api.markDelivered(mid).catch(() => {})
-          }
-          const openNow = !!(activeConvRef.current && activeConvRef.current === cid)
-          if (openNow && !mine) {
-            void api.markRead(cid).catch(() => {})
             void import('./realtime').then(({ wsReceipt }) => {
-              try { wsReceipt({ conversationId: cid, messageId: mid, state: 'read' }) } catch { /* */ }
+              try {
+                wsReceipt({ conversationId: cid, messageId: mid, state: 'delivered' })
+              } catch { /* */ }
             }).catch(() => {})
+            const openNow = !!(activeConvRef.current && activeConvRef.current === cid)
+            const appVisible =
+              typeof document === 'undefined' || document.visibilityState === 'visible'
+            if (openNow || appVisible) {
+              void api.markRead(cid).catch(() => {})
+              void import('./realtime').then(({ wsReceipt }) => {
+                try {
+                  wsReceipt({ conversationId: cid, messageId: mid, state: 'read' })
+                } catch { /* */ }
+              }).catch(() => {})
+            }
           }
 
           // 4) Home feed — one atomic update with full row details

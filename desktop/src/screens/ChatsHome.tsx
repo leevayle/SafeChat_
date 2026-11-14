@@ -21,7 +21,7 @@ import {
   Archive,
 } from 'lucide-react'
 import { Wordmark } from '../components/Logo'
-import { Avatar } from '../components/Avatar'
+import { Avatar, VerifiedCheck } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
 import { ChatsHomeSkeleton } from '../components/ChatsHomeSkeleton'
 import { EmptyState } from '../components/EmptyState'
@@ -698,17 +698,15 @@ export function ChatsHome({
                           aria-label="View status"
                         >
                           <StatusRing total={meta.total} viewed={meta.viewed} size={56}>
-                            <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online),
-                          premium: !!(ct as any).verifiedBadge }} size={46} />
+                            <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online) }} size={46} />
                           </StatusRing>
                         </span>
                       ) : (
-                        <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online),
-                          premium: !!(ct as any).verifiedBadge }} size={52} />
+                        <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online) }} size={52} />
                       )}
                       <div className="min-w-[12rem] flex-1 overflow-hidden">
                         <div className="flex items-start justify-between gap-3">
-                          <p className="min-w-0 flex-1 truncate font-extrabold">
+                          <p className="flex min-w-0 flex-1 items-center gap-1 font-extrabold">
                             {pinnedIds.includes(c.contactId) ? (
                               <Pin
                                 size={12}
@@ -716,9 +714,14 @@ export function ChatsHome({
                                 aria-hidden
                               />
                             ) : null}
-                            {me?.id && c.contactId === me.id
-                              ? `me(${me.username ? `@${String(me.username).replace(/^@/, '')}` : 'you'})`
-                              : ((ct as any).savedName || ct.name)}
+                            <span className="truncate">
+                              {me?.id && c.contactId === me.id
+                                ? `me(${me.username ? `@${String(me.username).replace(/^@/, '')}` : 'you'})`
+                                : ((ct as any).savedName || ct.name)}
+                            </span>
+                            {!!(ct as any).verifiedBadge && !(me?.id && c.contactId === me.id) && (
+                              <VerifiedCheck size={14} />
+                            )}
                           </p>
                           <div className="flex min-w-[3.5rem] shrink-0 flex-col items-end gap-0.5">
                             <span
