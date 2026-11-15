@@ -18,8 +18,10 @@ that origin during local development. `VITE_PIXELDROID_URL` is optional and
 controls the external PixelDroid links in Settings.
 
 For deployment, set `VITE_API_URL` in the hosting provider's build environment
-before building. Vite embeds `VITE_` variables in the client bundle, so do not
-put secrets in them.
+before building. Also add the desktop app's **frontend origin** (the URL users
+visit) to the backend's comma-separated `CORS_ORIGINS` environment variable;
+this is not the backend URL in `VITE_API_URL`. Vite embeds `VITE_` variables in
+the client bundle, so do not put secrets in them.
 
 Open http://localhost:5173
 

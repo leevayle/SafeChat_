@@ -14,10 +14,11 @@ npm run dev
 ```
 
 Open `http://localhost:5174`. The Vite development server proxies API calls to
-`VITE_API_URL`. For a deployed portal, set `VITE_API_URL` in the hosting
-provider's build environment and configure that origin in the backend's
-`CORS_ORIGINS`. `VITE_` variables are public client configuration; do not put
-secrets in them.
+`VITE_API_URL`. For deployment, set `VITE_API_URL` in the portal's build
+environment and add the portal's **frontend origin** (the URL users visit) to
+the backend's comma-separated `CORS_ORIGINS` environment variable. Do not add
+the backend URL there. `VITE_` variables are public client configuration; do
+not put secrets in them.
 
 ## Access and controls
 
