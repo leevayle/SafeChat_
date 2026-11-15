@@ -169,16 +169,30 @@ class ContactService:
 
     @staticmethod
     async def _upsert_accepted_pair(
-        db, request: dict, from_phone: str = ""
+        db,
+        request: dict,
+        from_phone: str = "",
+        to_phone: str = "",
     ) -> None:
+        """Create both contact edges after accept.
+
+        When the request included share_phone, both sides receive the peer's
+        number so profile / contact info can show it for everyone involved.
+        """
         import asyncio
 
         from_id = str(request["from_user_id"])
         to_id = str(request["to_user_id"])
         nickname = (request.get("from_nickname") or "").strip() or None
         await asyncio.gather(
-            ContactService._upsert_contact_edge(db, from_id, to_id, nickname=nickname),
-            ContactService._upsert_contact_edge(db, to_id, from_id, peer_phone=from_phone),
+            # Sender's edge → recipient (sender sees recipient number when shared)
+            ContactService._upsert_contact_edge(
+                db, from_id, to_id, peer_phone=to_phone, nickname=nickname
+            ),
+            # Recipient's edge → sender (recipient sees sender number when shared)
+            ContactService._upsert_contact_edge(
+                db, to_id, from_id, peer_phone=from_phone
+            ),
         )
 
     @staticmethod
@@ -201,20 +215,48 @@ class ContactService:
         now = datetime.now(timezone.utc)
         share_phone = bool(req.get("share_phone"))
         from_phone = ""
+        to_phone = ""
         if share_phone:
-            from_user = await db.users.find_one(
-                {"_id": ObjectId(req["from_user_id"])},
-                {"phone_number": 1, "phone": 1},
+            from_oid = (
+                ObjectId(req["from_user_id"])
+                if ObjectId.is_valid(str(req["from_user_id"]))
+                else None
+            )
+            to_oid = (
+                ObjectId(req["to_user_id"])
+                if ObjectId.is_valid(str(req["to_user_id"]))
+                else None
+            )
+            from_user = (
+                await db.users.find_one(
+                    {"_id": from_oid},
+                    {"phone_number": 1, "phone": 1},
+                )
+                if from_oid
+                else None
+            )
+            to_user = (
+                await db.users.find_one(
+                    {"_id": to_oid},
+                    {"phone_number": 1, "phone": 1},
+                )
+                if to_oid
+                else None
             )
             from_phone = (
                 (from_user or {}).get("phone_number")
                 or (from_user or {}).get("phone")
                 or ""
             )
+            to_phone = (
+                (to_user or {}).get("phone_number")
+                or (to_user or {}).get("phone")
+                or ""
+            )
 
         # Persist both directions before marking the request accepted. If either
         # write fails, the pending request can be retried and repaired safely.
-        await ContactService._upsert_accepted_pair(db, req, from_phone)
+        await ContactService._upsert_accepted_pair(db, req, from_phone, to_phone)
         should_notify = False
         if request_status != ContactRequestStatus.ACCEPTED.value:
             result = await db.contact_requests.update_one(
@@ -478,31 +520,94 @@ class ContactService:
             if repairs:
                 import asyncio
 
-                sender_users = await _users_by_ids(
-                    db,
-                    list(
-                        {
-                            str(request.get("from_user_id"))
-                            for request in repairs
-                            if request.get("share_phone")
-                        }
-                    ),
+                phone_user_ids = list(
+                    {
+                        str(request.get("from_user_id"))
+                        for request in repairs
+                        if request.get("share_phone")
+                    }
+                    | {
+                        str(request.get("to_user_id"))
+                        for request in repairs
+                        if request.get("share_phone")
+                    }
                 )
+                phone_users = await _users_by_ids(db, phone_user_ids)
 
                 async def repair_pair(request: dict) -> None:
-                    sender = sender_users.get(str(request.get("from_user_id"))) or {}
+                    if not request.get("share_phone"):
+                        await ContactService._upsert_accepted_pair(db, request, "", "")
+                        return
+                    sender = phone_users.get(str(request.get("from_user_id"))) or {}
+                    recipient = phone_users.get(str(request.get("to_user_id"))) or {}
                     from_phone = (
-                        (sender.get("phone_number") or sender.get("phone") or "")
-                        if request.get("share_phone")
-                        else ""
+                        sender.get("phone_number") or sender.get("phone") or ""
+                    )
+                    to_phone = (
+                        recipient.get("phone_number") or recipient.get("phone") or ""
                     )
                     await ContactService._upsert_accepted_pair(
-                        db, request, from_phone
+                        db, request, from_phone, to_phone
                     )
 
                 await asyncio.gather(
                     *(repair_pair(request) for request in repairs)
                 )
+
+            # Backfill missing shared_phone on existing accepted edges when the
+            # original request opted into share_phone (fixes older one-way data).
+            missing_phone_peers = [
+                peer_id
+                for peer_id, edge in by_peer.items()
+                if not (edge.get("shared_phone") or "").strip()
+            ]
+            if missing_phone_peers:
+                share_reqs = [
+                    r
+                    for r in requests
+                    if r.get("share_phone")
+                    and request_peer(r) in set(missing_phone_peers)
+                ]
+                if share_reqs:
+                    import asyncio
+
+                    ids = list(
+                        {
+                            str(r.get("from_user_id"))
+                            for r in share_reqs
+                        }
+                        | {str(r.get("to_user_id")) for r in share_reqs}
+                    )
+                    phone_users = await _users_by_ids(db, ids)
+
+                    async def backfill_phones(request: dict) -> None:
+                        from_id = str(request.get("from_user_id"))
+                        to_id = str(request.get("to_user_id"))
+                        sender = phone_users.get(from_id) or {}
+                        recipient = phone_users.get(to_id) or {}
+                        from_phone = (
+                            sender.get("phone_number") or sender.get("phone") or ""
+                        )
+                        to_phone = (
+                            recipient.get("phone_number")
+                            or recipient.get("phone")
+                            or ""
+                        )
+                        await ContactService._upsert_accepted_pair(
+                            db, request, from_phone, to_phone
+                        )
+                        # Refresh in-memory edge so this list response includes phone
+                        edge = by_peer.get(request_peer(request))
+                        if edge is not None:
+                            owner = str(edge.get("owner_user_id") or user_id)
+                            if owner == from_id and to_phone:
+                                edge["shared_phone"] = to_phone
+                            elif owner == to_id and from_phone:
+                                edge["shared_phone"] = from_phone
+
+                    await asyncio.gather(
+                        *(backfill_phones(r) for r in share_reqs)
+                    )
 
         peer_ids = list(by_peer)
         users = await _users_by_ids(db, peer_ids)

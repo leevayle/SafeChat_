@@ -2178,6 +2178,8 @@ return (
         <button
           type="button"
           onClick={() => {
+            // Pull latest shared phone / contact fields when opening profile
+            void refreshContacts?.()
             // Desktop: toggle contact info drawer; mobile: existing profile sheet
             if (typeof window !== 'undefined' && window.matchMedia('(min-width: 900px)').matches) {
               window.dispatchEvent(new CustomEvent('sc:toggle-info-drawer'))

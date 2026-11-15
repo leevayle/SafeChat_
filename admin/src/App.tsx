@@ -21,7 +21,6 @@ import {
   Monitor,
   Moon,
   RefreshCw,
-  Send,
   Settings,
   Sun,
   Menu,
