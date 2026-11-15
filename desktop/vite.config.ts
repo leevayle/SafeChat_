@@ -5,20 +5,29 @@ import path from 'path'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const apiUrl = env.VITE_API_URL?.trim().replace(/\/+$/, '')
-  const proxy = apiUrl
-    ? {
-        '/api': {
-          target: apiUrl,
-          changeOrigin: true,
-          ws: true,
-        },
-        '/health': {
-          target: apiUrl,
-          changeOrigin: true,
-        },
-      }
-    : undefined
+  const rawApiUrl = env.VITE_API_URL?.trim()
+  if (!rawApiUrl) {
+    throw new Error('VITE_API_URL is required in desktop/.env or the build environment')
+  }
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(rawApiUrl)
+    ? rawApiUrl
+    : `${/^(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:\/|$)/i.test(rawApiUrl) ? 'http' : 'https'}://${rawApiUrl}`
+  const backendUrl = new URL(candidate)
+  if (backendUrl.protocol !== 'http:' && backendUrl.protocol !== 'https:') {
+    throw new Error('VITE_API_URL must use HTTP or HTTPS')
+  }
+  const apiUrl = backendUrl.origin
+  const proxy = {
+    '/api': {
+      target: apiUrl,
+      changeOrigin: true,
+      ws: true,
+    },
+    '/health': {
+      target: apiUrl,
+      changeOrigin: true,
+    },
+  }
 
   return {
     plugins: [react(), tailwindcss()],

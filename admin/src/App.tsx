@@ -138,10 +138,23 @@ type Overview = {
 }
 type Health = { api: string; mongodb: string; checked_at: string }
 
-const API_BASE = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
-if (import.meta.env.PROD && !API_BASE) {
-  console.error('[SafeChat Admin] VITE_API_URL is not set. Configure it for the deployed backend.')
+function normalizeApiBase(value: string | undefined): string {
+  const raw = value?.trim()
+  if (!raw) {
+    throw new Error('VITE_API_URL is required in the admin app environment')
+  }
+  const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(raw)
+    ? raw
+    : `${/^(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:\/|$)/i.test(raw) ? 'http' : 'https'}://${raw}`
+  const url = new URL(candidate)
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('VITE_API_URL must use HTTP or HTTPS')
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`
 }
+
+const API_ORIGIN = normalizeApiBase(import.meta.env.VITE_API_URL)
+const API_BASE = import.meta.env.DEV ? '' : API_ORIGIN
 let accessToken = ''
 let refreshTask: Promise<boolean> | null = null
 

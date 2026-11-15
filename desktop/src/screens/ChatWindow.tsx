@@ -32,6 +32,7 @@ import {
 } from '../lib/messageStore'
 import { warmPhoto } from '../lib/photoCache'
 import { putOutbox, removeOutbox } from '../lib/appCache'
+import { API_ORIGIN } from '../config'
 import { linkifyText } from '../lib/linkify'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
@@ -50,8 +51,6 @@ const EMOJIS = [
   '🔥','⭐','✨','🌟','💫','💥','🎉','🎊','🎈','🎁','🏆','🥇','🎯','💯','✅',
   '☕','🍕','🍔','🍟','🌮','🍣','🍦','🍰','🍺','🍻','🎂','🍪','🍩','🍿',
 ].filter((e) => e !== 'sneezing')
-
-const API_ORIGIN = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
 
 function mediaUrl(path?: string | null) {
   if (!path) return ''

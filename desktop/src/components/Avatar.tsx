@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { resolvePhoto, warmPhoto } from '../lib/photoCache'
+import { API_ORIGIN } from '../config'
 
 type ContactLike = {
   id: string
@@ -11,8 +12,6 @@ type ContactLike = {
   premium?: boolean
   verified?: boolean
 }
-
-const API_ORIGIN = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
 
 export function Avatar({
   contact,

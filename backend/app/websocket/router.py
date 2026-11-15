@@ -43,9 +43,12 @@ async def websocket_endpoint(
         await websocket.close(code=4401)
         return
 
-    await manager.connect(user_id, websocket)
+    was_offline = await manager.connect(user_id, websocket)
     await _touch_last_seen(user_id)
-    await _broadcast_presence(user_id, True)
+    # Only announce online when coming from a true offline state.
+    # Reconnects within the grace window stay silently online for contacts.
+    if was_offline:
+        await _broadcast_presence(user_id, True)
     await _send_presence_snapshot(user_id)
     try:
         while True:
@@ -70,9 +73,12 @@ async def websocket_endpoint(
         logger.debug("ws error user=%s: %s", user_id, e)
     finally:
         if user_id:
-            await manager.disconnect(user_id, websocket)
+            fully_offline = await manager.disconnect(user_id, websocket)
             await _touch_last_seen(user_id)
-            await _broadcast_presence(user_id, False)
+            # Offline is announced by the manager after a grace period so brief
+            # reconnects do not flicker the green online dot for contacts.
+            if fully_offline:
+                pass
 
 
 async def _handle_send(user_id: str, websocket: WebSocket, data: dict) -> None:
@@ -270,6 +276,16 @@ async def _broadcast_presence(user_id: str, online: bool) -> None:
             await manager.send_user(str(pid), payload)
     except Exception:
         logger.debug("presence broadcast failed", exc_info=True)
+
+
+async def _announce_offline(user_id: str) -> None:
+    """Invoked by ConnectionManager after the offline grace period."""
+    await _touch_last_seen(user_id)
+    await _broadcast_presence(user_id, False)
+
+
+# Wire delayed offline announcements (cancels if the user reconnects in time)
+manager.set_offline_callback(_announce_offline)
 
 
 async def _send_presence_snapshot(user_id: str) -> None:

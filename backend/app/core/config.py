@@ -1,6 +1,7 @@
 """Application configuration using Pydantic Settings."""
 from functools import lru_cache
 from typing import List, Optional
+from urllib.parse import urlsplit
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,8 +24,9 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field(
         default="dev-secret-key-change-in-production-must-be-at-least-64-characters-long"
     )
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
-    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+    # Long enough that brief offline / tab sleep does not force constant rotates
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 90
 
     # MongoDB
     MONGODB_URI: str = "mongodb://localhost:27017"
@@ -34,7 +36,7 @@ class Settings(BaseSettings):
     REDIS_URL: Optional[str] = None
 
     # CORS
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+    CORS_ORIGINS: str
 
     # Media
     MEDIA_STORAGE_BACKEND: str = "local"  # local | s3
@@ -82,12 +84,7 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> List[str]:
-        origins = []
-        for origin in self.CORS_ORIGINS.split(","):
-            normalized = origin.strip().rstrip("/")
-            if normalized:
-                origins.append(normalized)
-        return origins
+        return [origin.strip().rstrip("/") for origin in self.CORS_ORIGINS.split(",")]
 
     @property
     def stun_servers_list(self) -> List[str]:
@@ -103,6 +100,26 @@ class Settings(BaseSettings):
         if len(v) < 32:
             raise ValueError("SECRET_KEY must be at least 32 characters")
         return v
+
+    @field_validator("CORS_ORIGINS")
+    @classmethod
+    def cors_origins_required(cls, value: str) -> str:
+        origins = [origin.strip().rstrip("/") for origin in value.split(",")]
+        if not origins or any(not origin for origin in origins):
+            raise ValueError("CORS_ORIGINS must contain comma-separated frontend origins")
+
+        for origin in origins:
+            parsed = urlsplit(origin)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError(f"Invalid CORS origin: {origin}")
+            if parsed.path or parsed.query or parsed.fragment:
+                raise ValueError(f"CORS origin must not include a path: {origin}")
+            try:
+                parsed.port
+            except ValueError as exc:
+                raise ValueError(f"Invalid port in CORS origin: {origin}") from exc
+
+        return ",".join(origins)
 
 
 @lru_cache

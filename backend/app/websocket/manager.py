@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional, Set
+from typing import Any, Callable, Coroutine, Dict, Optional, Set
 
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
+
+# How long to wait after the last socket drops before announcing offline.
+# Prevents green-dot flicker during brief reconnects / token rotates.
+OFFLINE_GRACE_SECONDS = 20.0
 
 
 class ConnectionManager:
@@ -21,22 +25,79 @@ class ConnectionManager:
         # user_id -> set of live sockets (multi-device)
         self._by_user: Dict[str, Set[WebSocket]] = {}
         self._lock = asyncio.Lock()
+        # user_id -> delayed offline task
+        self._offline_tasks: Dict[str, asyncio.Task] = {}
+        self._offline_callback: Optional[
+            Callable[[str], Coroutine[Any, Any, None]]
+        ] = None
 
-    async def connect(self, user_id: str, ws: WebSocket) -> None:
-        await ws.accept()
-        async with self._lock:
-            self._by_user.setdefault(user_id, set()).add(ws)
-        logger.debug("ws connect user=%s sockets=%s", user_id, len(self._by_user.get(user_id, ())))
+    def set_offline_callback(
+        self, cb: Optional[Callable[[str], Coroutine[Any, Any, None]]]
+    ) -> None:
+        """Called once after the offline grace expires with no reconnect."""
+        self._offline_callback = cb
 
-    async def disconnect(self, user_id: str, ws: WebSocket) -> None:
-        async with self._lock:
-            sockets = self._by_user.get(user_id)
-            if not sockets:
+    def _cancel_offline(self, user_id: str) -> None:
+        task = self._offline_tasks.pop(str(user_id), None)
+        if task and not task.done():
+            task.cancel()
+
+    def _schedule_offline(self, user_id: str) -> None:
+        uid = str(user_id)
+        self._cancel_offline(uid)
+
+        async def _fire() -> None:
+            try:
+                await asyncio.sleep(OFFLINE_GRACE_SECONDS)
+            except asyncio.CancelledError:
                 return
+            # Still offline?
+            if self.is_online(uid):
+                return
+            cb = self._offline_callback
+            if cb:
+                try:
+                    await cb(uid)
+                except Exception:
+                    logger.debug("offline callback failed user=%s", uid, exc_info=True)
+            self._offline_tasks.pop(uid, None)
+
+        self._offline_tasks[uid] = asyncio.create_task(_fire())
+
+    async def connect(self, user_id: str, ws: WebSocket) -> bool:
+        """Accept socket. Returns True if this is the first live socket (was offline)."""
+        await ws.accept()
+        uid = str(user_id)
+        async with self._lock:
+            sockets = self._by_user.setdefault(uid, set())
+            was_offline = len(sockets) == 0
+            sockets.add(ws)
+        # Cancel any pending offline announcement
+        self._cancel_offline(uid)
+        logger.debug(
+            "ws connect user=%s sockets=%s was_offline=%s",
+            uid,
+            len(self._by_user.get(uid, ())),
+            was_offline,
+        )
+        return was_offline
+
+    async def disconnect(self, user_id: str, ws: WebSocket) -> bool:
+        """Drop socket. Returns True if the user has no remaining sockets."""
+        uid = str(user_id)
+        fully_offline = False
+        async with self._lock:
+            sockets = self._by_user.get(uid)
+            if not sockets:
+                return True
             sockets.discard(ws)
             if not sockets:
-                self._by_user.pop(user_id, None)
-        logger.debug("ws disconnect user=%s", user_id)
+                self._by_user.pop(uid, None)
+                fully_offline = True
+        logger.debug("ws disconnect user=%s fully_offline=%s", uid, fully_offline)
+        if fully_offline:
+            self._schedule_offline(uid)
+        return fully_offline
 
     def is_online(self, user_id: str) -> bool:
         uid = str(user_id or "")
@@ -44,7 +105,6 @@ class ConnectionManager:
             return False
         if self._by_user.get(uid):
             return True
-        # Tolerate id shape differences
         for k in self._by_user.keys():
             if str(k) == uid:
                 return True
@@ -75,15 +135,18 @@ class ConnectionManager:
                 dead.append(ws)
         if dead:
             async with self._lock:
-                live = self._by_user.get(user_id)
+                live = self._by_user.get(uid)
                 if live:
                     for ws in dead:
                         live.discard(ws)
                     if not live:
-                        self._by_user.pop(user_id, None)
+                        self._by_user.pop(uid, None)
+                        self._schedule_offline(uid)
         return ok
 
-    async def send_users(self, user_ids: list[str], payload: dict, *, exclude: Optional[str] = None) -> None:
+    async def send_users(
+        self, user_ids: list[str], payload: dict, *, exclude: Optional[str] = None
+    ) -> None:
         for uid in user_ids:
             if exclude and uid == exclude:
                 continue
@@ -118,32 +181,12 @@ def packet_rcpt(conversation_id: str, message_id: str, state: str) -> dict:
     return {"t": "rcpt", "c": conversation_id, "id": message_id, "s": state}
 
 
-def packet_edit(conversation_id: str, message_id: str, text: str, user_id: str) -> dict:
-    return {
-        "t": "edit",
-        "c": conversation_id,
-        "id": message_id,
-        "text": text,
-        "from": user_id,
-        "edited": True,
-    }
-
-
-def packet_react(conversation_id: str, message_id: str, emoji: str, user_id: str, removed: bool = False) -> dict:
-    return {
-        "t": "react",
-        "c": conversation_id,
-        "id": message_id,
-        "emoji": emoji,
-        "from": user_id,
-        "removed": removed,
-    }
-
-
 def _first_media_url(message: dict) -> Optional[str]:
-    media = message.get("media_attachments") or []
-    if media and isinstance(media, list):
+    media = message.get("media_attachments") or message.get("media") or []
+    if isinstance(media, list) and media:
         first = media[0]
         if isinstance(first, dict):
-            return first.get("url")
+            return first.get("url") or first.get("path")
+        if isinstance(first, str):
+            return first
     return message.get("image")

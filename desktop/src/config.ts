@@ -1,0 +1,21 @@
+function normalizeOrigin(value: string | undefined): string {
+  const raw = value?.trim()
+  if (!raw) {
+    throw new Error('VITE_API_URL is required in the desktop app environment')
+  }
+
+  const hasScheme = /^[a-z][a-z\d+.-]*:\/\//i.test(raw)
+  const localHost = /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])(?::\d+)?(?:\/|$)/i.test(raw)
+  const candidate = hasScheme ? raw : `${localHost ? 'http' : 'https'}://${raw}`
+  const url = new URL(candidate)
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('VITE_API_URL must use HTTP or HTTPS')
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error('VITE_API_URL must be a backend origin without credentials or query parameters')
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}`
+}
+
+export const API_ORIGIN = normalizeOrigin(import.meta.env.VITE_API_URL)
+export const API_BASE = import.meta.env.DEV ? '' : API_ORIGIN

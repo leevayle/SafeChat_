@@ -657,6 +657,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const activeConvRef = useRef<string | null>(null)
   activeConvRef.current = activeConversationId
   const typingClearRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const presenceOfflineTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const seenInboundRef = useRef<Set<string>>(new Set())
   const [groups, setGroups] = useState<any[]>([])
   const [statusList, setStatusList] = useState<any[]>([])
@@ -1861,11 +1862,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           }
         },
         onPresence: (peerId, online, lastSeen, extra?: any) => {
-          // Match SafeChat_ reference exactly
-          setPresenceMap((prev) => {
-            if (prev[peerId] === !!online) return prev
-            return { ...prev, [peerId]: !!online }
-          })
+          // Debounce offline so brief reconnects do not flicker the green dot
+          const offlineTimers = (presenceOfflineTimersRef.current ||= {})
+          if (online) {
+            if (offlineTimers[peerId]) {
+              clearTimeout(offlineTimers[peerId])
+              delete offlineTimers[peerId]
+            }
+            setPresenceMap((prev) => {
+              if (prev[peerId] === true) return prev
+              return { ...prev, [peerId]: true }
+            })
+          } else {
+            if (offlineTimers[peerId]) clearTimeout(offlineTimers[peerId])
+            offlineTimers[peerId] = setTimeout(() => {
+              delete offlineTimers[peerId]
+              setPresenceMap((prev) => {
+                if (prev[peerId] === false) return prev
+                return { ...prev, [peerId]: false }
+              })
+            }, 8000)
+          }
           if (extra && ('busy' in extra || extra.busyMessage)) {
             setBusyMap((prev) => ({
               ...prev,
@@ -1879,7 +1896,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               c.id === peerId || c.peerId === peerId
                 ? {
                     ...c,
-                    online,
+                    online: !!online,
                     lastSeen: lastSeen ?? c.lastSeen,
                     busy: !!(extra && extra.busy),
                     busyMessage: extra?.busy ? (extra.busyMessage || 'busy') : '',

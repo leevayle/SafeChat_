@@ -1,16 +1,12 @@
 import { formatLocalTime } from './time'
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/kv'
+import { API_BASE } from './config'
 /**
  * SafeChat API client — talks to FastAPI backend at /api/v1
  * Response shape: { success, message, data }
  */
 
-const BASE = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
-if (typeof window !== 'undefined' && import.meta.env.PROD && !BASE) {
-  console.error(
-    '[SafeChat] VITE_API_URL is not set. Cloudflare Pages must define VITE_API_URL=https://your-api.onrender.com and rebuild.',
-  )
-}
+const BASE = API_BASE
 
 export type ApiUser = {
   id: string
@@ -596,9 +592,13 @@ async function tryRefresh(): Promise<boolean> {
         }
         sessionDead = false
         consecutiveRefreshFails = 0
-        // Rotate WS onto the new access token
+        // Keep the existing WS if it is healthy — reconnecting on every refresh
+        // broadcasts offline/online to contacts and makes the green dot flicker.
         try {
-          void import('./realtime').then((m) => m.forceReconnectRealtime?.())
+          void import('./realtime').then((m) => {
+            if (typeof m.isRealtimeOpen === 'function' && m.isRealtimeOpen()) return
+            m.forceReconnectRealtime?.()
+          })
         } catch { /* */ }
         return true
       }
@@ -618,11 +618,12 @@ async function tryRefresh(): Promise<boolean> {
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 export function startProactiveRefresh() {
   if (refreshTimer) return
+  // Access tokens last longer now; refresh well before expiry without thrashing
   refreshTimer = setInterval(() => {
     if (sessionDead) return
     // Cookie may hold refresh even when memory is empty
     void tryRefresh()
-  }, 12 * 60 * 1000) // every 12 minutes
+  }, 25 * 60 * 1000) // every 25 minutes
 }
 export function stopProactiveRefresh() {
   if (refreshTimer) {
@@ -711,7 +712,9 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
     }
     // Soft reads: do not deauth — just fail this request (UI keeps cached data)
     const soft = isSoftReadPath(path, method)
-    if (!soft && consecutiveRefreshFails >= 2) {
+    // Require several consecutive refresh failures before killing the session.
+    // Transient network blips must not force a full re-login.
+    if (!soft && consecutiveRefreshFails >= 5) {
       markSessionDead()
     }
     const err = new Error(

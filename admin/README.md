@@ -4,8 +4,9 @@ Standalone administrator interface for the SafeChat API.
 
 ## Run locally
 
-Copy `.env.example` to `.env` and set `VITE_API_URL` to the backend origin
-(for local development, `http://localhost:8000`). Start the backend, then run:
+Copy `.env.example` to `.env` and set `VITE_API_URL` to your backend origin
+(for local development, `http://localhost:8000`). This value is mandatory for
+both the dev server and production builds. Start the backend, then run:
 
 ```powershell
 cd D:\safechat\admin
@@ -16,9 +17,9 @@ npm run dev
 Open `http://localhost:5174`. The Vite development server proxies API calls to
 `VITE_API_URL`. For deployment, set `VITE_API_URL` in the portal's build
 environment and add the portal's **frontend origin** (the URL users visit) to
-the backend's comma-separated `CORS_ORIGINS` environment variable. Do not add
-the backend URL there. `VITE_` variables are public client configuration; do
-not put secrets in them.
+the backend's comma-separated `CORS_ORIGINS` environment variable when the
+portal calls the API directly. Do not add the backend URL there. `VITE_`
+variables are public client configuration; do not put secrets in them.
 
 ## Access and controls
 

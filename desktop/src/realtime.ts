@@ -18,6 +18,7 @@
 import { hasAccessToken, isSessionDead, markSessionDead, getAccessToken } from './api'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/kv'
+import { API_ORIGIN } from './config'
 export type RtMsg = {
   id: string
   from: string
@@ -97,13 +98,12 @@ const state: SocketState = {
 }
 
 function wsUrl(token: string): string {
-  const env = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
-  if (!env) {
+  if (import.meta.env.DEV || !API_ORIGIN) {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     return `${proto}//${window.location.host}/api/v1/ws?token=${encodeURIComponent(token)}`
   }
   try {
-    const u = new URL(env)
+    const u = new URL(API_ORIGIN)
     u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
     u.pathname = '/api/v1/ws'
     u.search = `token=${encodeURIComponent(token)}`
@@ -646,8 +646,14 @@ export function wsLiveTyping(to: string, draft: string) {
 }
 
 
-/** Close and open a fresh socket (e.g. after access token rotation). */
+/**
+ * Reconnect only when the socket is not healthy.
+ * Closing a live socket causes presence offline/online flicker for contacts.
+ */
 export function forceReconnectRealtime() {
+  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
+    return
+  }
   state.intentionalClose = false
   state.retries = 0
   clearTimers()
