@@ -1823,20 +1823,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         },
         onTyping: (peerId, typing) => {
           const on = !!typing
-          // Clear any previous idle timer
+          // Reset idle timer on every packet so pauses mid-sentence stay "typing"
           const prevTimer = typingClearRef.current[peerId]
           if (prevTimer) {
             clearTimeout(prevTimer)
             delete typingClearRef.current[peerId]
           }
           setTypingPeers((prev) => {
-            if (!!prev[peerId] === on) return prev
+            if (on) {
+              if (prev[peerId]) return prev
+              return { ...prev, [peerId]: true }
+            }
+            if (!prev[peerId]) return prev
             const next = { ...prev }
-            if (on) next[peerId] = true
-            else delete next[peerId]
+            delete next[peerId]
             return next
           })
-          // Auto-clear so home feed returns to last message text
+          // Longer idle — heartbeats refresh this; only clear after real stop
           if (on) {
             typingClearRef.current[peerId] = setTimeout(() => {
               setTypingPeers((prev) => {
@@ -1851,7 +1854,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   new CustomEvent('sc:rt-typing', { detail: { peerId, typing: false } }),
                 )
               } catch { /* */ }
-            }, 4000)
+            }, 15000)
           }
           try {
             window.dispatchEvent(
@@ -1883,26 +1886,42 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               })
             }, 8000)
           }
-          if (extra && ('busy' in extra || extra.busyMessage)) {
+          // Only touch busy map when the packet explicitly carries busy fields.
+          // Plain online/offline packets must not wipe a custom busy message.
+          if (extra && (extra.busy === true || (extra.busyMessage && String(extra.busyMessage).length))) {
             setBusyMap((prev) => ({
               ...prev,
-              [peerId]: extra.busy
-                ? { message: extra.busyMessage || 'busy', until: extra.busyUntil || null }
-                : { message: '', until: null },
+              [peerId]: {
+                message: extra.busyMessage || 'busy',
+                until: extra.busyUntil || null,
+              },
             }))
+          } else if (extra && extra.busy === false && !extra.busyMessage) {
+            // Explicit clear only
+            setBusyMap((prev) => {
+              if (!prev[peerId]?.message) return prev
+              const next = { ...prev }
+              next[peerId] = { message: '', until: null }
+              return next
+            })
           }
           setContacts((prev) =>
-            prev.map((c) =>
-              c.id === peerId || c.peerId === peerId
-                ? {
-                    ...c,
-                    online: !!online,
-                    lastSeen: lastSeen ?? c.lastSeen,
-                    busy: !!(extra && extra.busy),
-                    busyMessage: extra?.busy ? (extra.busyMessage || 'busy') : '',
-                  }
-                : c,
-            ),
+            prev.map((c) => {
+              if (c.id !== peerId && c.peerId !== peerId) return c
+              const next: any = {
+                ...c,
+                online: !!online,
+                lastSeen: lastSeen ?? c.lastSeen,
+              }
+              if (extra && (extra.busy === true || extra.busyMessage)) {
+                next.busy = true
+                next.busyMessage = extra.busyMessage || 'busy'
+              } else if (extra && extra.busy === false && !extra.busyMessage) {
+                next.busy = false
+                next.busyMessage = ''
+              }
+              return next
+            }),
           )
         },
       })

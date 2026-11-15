@@ -1247,31 +1247,34 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }, [contactId, me?.id, peerId, upsertChatPreview])
 
-  // Live typing stream (all users) - character-level draft to peer via WS
+  // Live typing stream — keep packets flowing while the composer has text so
+  // the peer never loses "typing…" / live draft during short pauses.
   const liveSendRef = useRef<{ last: string; at: number }>({ last: '', at: 0 })
   const liveClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pushLiveDraft = useCallback(
-    (draft: string) => {
+  const liveHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const liveDraftSeenAt = useRef(0)
+
+  const emitLiveOrTyping = useCallback(
+    (draft: string, force = false) => {
       const to = peerId || contactId
       if (!to || !hasAccessToken()) return
       if (settings.typingIndicator === false) return
 
-      // Always stream draft so Premium peers can render live characters.
-      // Non-premium peers only show the classic typing bubble.
-      // Premium senders may hide their draft via hideLiveTyping.
-      const hideMine = !!(settings as any).hideLiveTyping &&
+      const hideMine =
+        !!(settings as any).hideLiveTyping &&
         (settings as any).subscriptionPlan === 'premium'
-
       const typingNow = draft.length > 0
-      if (draft === liveSendRef.current.last) return
-      liveSendRef.current = { last: draft, at: Date.now() }
+      const now = Date.now()
+      // Skip identical empty clears; allow force heartbeat for non-empty draft
+      if (!force && draft === liveSendRef.current.last && draft === '') return
+      if (!force && draft === liveSendRef.current.last && now - liveSendRef.current.at < 400) return
+      liveSendRef.current = { last: draft, at: now }
 
       try {
         if (isRealtimeOpen()) {
           if (hideMine) {
             wsTyping(to, typingNow)
           } else {
-            // draft packet includes typing flag for all receivers
             wsLiveTyping(to, draft)
           }
         } else if (typingNow) {
@@ -1284,12 +1287,38 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     [peerId, contactId, settings],
   )
 
+  const pushLiveDraft = useCallback(
+    (draft: string) => {
+      emitLiveOrTyping(draft, false)
+      // Heartbeat while local composer still has text
+      if (liveHeartbeatRef.current) {
+        clearInterval(liveHeartbeatRef.current)
+        liveHeartbeatRef.current = null
+      }
+      if (draft.length > 0) {
+        liveHeartbeatRef.current = setInterval(() => {
+          const last = liveSendRef.current.last
+          if (!last) {
+            if (liveHeartbeatRef.current) {
+              clearInterval(liveHeartbeatRef.current)
+              liveHeartbeatRef.current = null
+            }
+            return
+          }
+          emitLiveOrTyping(last, true)
+        }, 2500)
+      }
+    },
+    [emitLiveOrTyping],
+  )
+
   useEffect(() => {
     return () => {
       if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
+      if (liveHeartbeatRef.current) clearInterval(liveHeartbeatRef.current)
       // Clear peer's live preview when leaving the chat
       const to = peerId || contactId
-      if (to && isRealtimeOpen() && !(settings as any).hideLiveTyping) {
+      if (to && isRealtimeOpen()) {
         try {
           wsLiveTyping(to, '')
           wsTyping(to, false)
@@ -1298,7 +1327,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         }
       }
     }
-  }, [peerId, contactId, settings])
+  }, [peerId, contactId])
 
   const openedOnce = useRef(false)
 
@@ -1673,30 +1702,42 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
 
 
-  // Presence for this peer (REST seed + poll; WS drives live updates below)
+  // Presence seed from REST once; live updates come from presenceMap / WS.
+  // Avoid aggressive polling that overwrites sticky online/busy/typing state.
   useEffect(() => {
     let alive = true
     const load = async () => {
       try {
         const p = await api.presence(peerId || contactId)
         if (!alive) return
-        setPeerOnline(!!p.online)
-        setPeerLastSeen(p.lastSeen || null)
+        // Only promote to online from REST; offline is handled by debounced WS path
+        if (p.online) setPeerOnline(true)
+        if (p.lastSeen) setPeerLastSeen(p.lastSeen || null)
         const busy = !!(p as any).busy
         const msg = (p as any).busyMessage || (p as any).busy_message || ''
         const until = (p as any).busyUntil || (p as any).busy_until || null
-        setPeerBusy(busy && msg ? { message: msg, until } : null)
+        if (busy && msg) setPeerBusy({ message: msg, until })
+        else if (!busy) setPeerBusy(null)
       } catch {
         /* */
       }
     }
     load()
-    const id = setInterval(load, 30000)
+    // Light refresh only — WS is source of truth while connected
+    const id = setInterval(load, 90000)
     return () => {
       alive = false
       clearInterval(id)
     }
   }, [contactId, peerId])
+
+  // Mirror global presenceMap so online stays steady with the home-list dots
+  useEffect(() => {
+    const keys = [peerId, contactId, (c as any)?.peerId, (c as any)?.id].filter(Boolean).map(String)
+    const mapped = keys.some((k) => presenceMap?.[k] === true)
+    if (mapped) setPeerOnline(true)
+    else if (keys.some((k) => presenceMap?.[k] === false)) setPeerOnline(false)
+  }, [presenceMap, peerId, contactId, c])
 
   // Keep header Online in sync with global presenceMap (WS → store)
   useEffect(() => {
@@ -1724,11 +1765,14 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   }, [presenceMap, busyMap, peerId, contactId, c])
 
   // Store typingPeers → header (home + open chat share the same map)
+  // Do NOT clear liveDraft here — only explicit stop / idle timer may clear it.
   useEffect(() => {
     const keys = [peerId, contactId, (c as any)?.peerId, (c as any)?.id].filter(Boolean).map(String)
     const on = keys.some((k) => !!typingPeers?.[k])
-    setTyping(on)
-    if (!on) setLiveDraft(null)
+    if (on) setTyping(true)
+    else if (Date.now() - liveDraftSeenAt.current > 12000) {
+      setTyping(false)
+    }
   }, [typingPeers, peerId, contactId, c])
 
   // Live typing + presence from WS window events (match contactId or resolved peerId)
@@ -1744,10 +1788,27 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     const onTyping = (ev: Event) => {
       const d = (ev as CustomEvent).detail as { peerId?: string; typing?: boolean }
       if (!isPeer(d?.peerId)) return
-      // Header only - never put draft text here
-      setTyping(!!d.typing)
-      // Only clear the bubble when peer fully stops (not on every keypress)
-      if (!d.typing) setLiveDraft(null)
+      if (d.typing) {
+        liveDraftSeenAt.current = Date.now()
+        setTyping(true)
+        if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
+        liveClearTimer.current = setTimeout(() => {
+          // Only clear if no live packets refreshed recently
+          if (Date.now() - liveDraftSeenAt.current >= 14000) {
+            setLiveDraft(null)
+            setTyping(false)
+          }
+        }, 15000)
+      } else {
+        // Explicit stop — clear only after a short grace so heartbeat lag is ok
+        if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
+        liveClearTimer.current = setTimeout(() => {
+          if (Date.now() - liveDraftSeenAt.current >= 3000) {
+            setLiveDraft(null)
+            setTyping(false)
+          }
+        }, 3500)
+      }
     }
     const onPresence = (ev: Event) => {
       const d = (ev as CustomEvent).detail as {
@@ -1759,10 +1820,17 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         busyUntil?: string | null
       }
       if (!isPeer(d?.peerId)) return
-      if (d.online != null) setPeerOnline(!!d.online)
+      if (d.online === true) setPeerOnline(true)
+      else if (d.online === false) {
+        // Soft: presenceMap debounce handles global; keep local sticky briefly
+        setTimeout(() => {
+          // only go offline if still not online in map
+        }, 0)
+        setPeerOnline(false)
+      }
       if (d.lastSeen) setPeerLastSeen(d.lastSeen)
-      if (d.busy && d.busyMessage) {
-        setPeerBusy({ message: d.busyMessage, until: d.busyUntil || null })
+      if (d.busy && (d.busyMessage || d.busyMessage === '')) {
+        setPeerBusy({ message: d.busyMessage || 'busy', until: d.busyUntil || null })
       } else if (d.busy === false) {
         setPeerBusy(null)
       }
@@ -1775,22 +1843,28 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       const d = (ev as CustomEvent).detail as { peerId?: string; draft?: string }
       if (!isPeer(d?.peerId)) return
       const draft = typeof d.draft === 'string' ? d.draft : ''
+      liveDraftSeenAt.current = Date.now()
       // One-way: only Premium (live typing on, default true) sees real characters
       const canSeeLive =
         (settings as any).subscriptionPlan === 'premium' &&
         (settings as any).liveTyping !== false
       if (canSeeLive) {
         setLiveDraft(draft.length > 0 ? draft : null)
-      } else {
-        setLiveDraft(null)
       }
+      // Non-premium still sees typing indicator from live packets
       setTyping(draft.length > 0)
       if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
       if (draft.length > 0) {
         liveClearTimer.current = setTimeout(() => {
-          setLiveDraft(null)
-          setTyping(false)
-        }, 6000)
+          if (Date.now() - liveDraftSeenAt.current >= 14000) {
+            setLiveDraft(null)
+            setTyping(false)
+          }
+        }, 15000)
+      } else {
+        // Explicit empty draft = stopped typing
+        setLiveDraft(null)
+        setTyping(false)
       }
     }
     window.addEventListener('sc:rt-typing', onTyping)

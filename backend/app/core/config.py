@@ -84,7 +84,12 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> List[str]:
-        return [origin.strip().rstrip("/") for origin in self.CORS_ORIGINS.split(",")]
+        origins = []
+        for origin in self.CORS_ORIGINS.split(","):
+            normalized = origin.strip().rstrip("/")
+            if normalized:
+                origins.append(normalized)
+        return origins
 
     @property
     def stun_servers_list(self) -> List[str]:

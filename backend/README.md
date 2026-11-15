@@ -20,6 +20,11 @@ This foundation is runnable locally. Subsequent modules follow the same patterns
 
 **Windows users (no Docker):** see the full guide → [WINDOWS.md](WINDOWS.md)
 
+`CORS_ORIGINS` is required in the backend environment. Set it to a
+comma-separated list of allowed frontend origins (for example, the desktop and
+admin URLs users visit, not the backend URL). The backend rejects missing or
+invalid origins at startup.
+
 ### Prerequisites
 - Python 3.12+
 - MongoDB (local **or** free MongoDB Atlas – recommended)

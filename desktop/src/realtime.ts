@@ -417,11 +417,18 @@ export function connectRealtime(handlers?: RtHandlers) {
       const peerId = String(data.userId || data.user_id || data.from)
       const online = !!data.online
       const lastSeen = data.lastSeen || data.last_seen || null
-      const extra = {
-        busy: !!data.busy,
-        busyMessage: data.busyMessage || data.busy_message || '',
-        busyUntil: data.busyUntil || data.busy_until || null,
-      }
+      // Preserve "not provided" vs explicit false so clients don't wipe busy on plain online
+      const hasBusyField =
+        Object.prototype.hasOwnProperty.call(data, 'busy') ||
+        Object.prototype.hasOwnProperty.call(data, 'busyMessage') ||
+        Object.prototype.hasOwnProperty.call(data, 'busy_message')
+      const extra = hasBusyField
+        ? {
+            busy: !!data.busy,
+            busyMessage: data.busyMessage || data.busy_message || '',
+            busyUntil: data.busyUntil || data.busy_until || null,
+          }
+        : undefined
       state.handlers.onPresence?.(peerId, online, lastSeen, extra)
       try {
         window.dispatchEvent(
@@ -430,9 +437,13 @@ export function connectRealtime(handlers?: RtHandlers) {
               peerId,
               online,
               lastSeen,
-              busy: extra.busy,
-              busyMessage: extra.busyMessage,
-              busyUntil: extra.busyUntil,
+              ...(extra
+                ? {
+                    busy: extra.busy,
+                    busyMessage: extra.busyMessage,
+                    busyUntil: extra.busyUntil,
+                  }
+                : {}),
             },
           }),
         )

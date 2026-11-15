@@ -14,8 +14,8 @@ npm run dev
 
 Copy `.env.example` to `.env` and set `VITE_API_URL` to your backend origin
 (for local development, `http://localhost:8000`). This value is mandatory for
-both the dev server and production builds. Vite proxies `/api` and `/health`
-to that origin during local development. `VITE_PIXELDROID_URL` is optional and
+both the dev server and production builds. Vite proxies `/api` and `/health` to
+that origin during local development. `VITE_PIXELDROID_URL` is optional and
 controls the external PixelDroid links in Settings.
 
 For deployment, set `VITE_API_URL` in the hosting provider's build environment
