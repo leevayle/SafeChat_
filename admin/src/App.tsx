@@ -138,7 +138,10 @@ type Overview = {
 }
 type Health = { api: string; mongodb: string; checked_at: string }
 
-const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+const API_BASE = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
+if (import.meta.env.PROD && !API_BASE) {
+  console.error('[SafeChat Admin] VITE_API_URL is not set. Configure it for the deployed backend.')
+}
 let accessToken = ''
 let refreshTask: Promise<boolean> | null = null
 

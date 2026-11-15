@@ -1383,7 +1383,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     ]).then(() => {
       // Phase 4 — warm photos after secondary data lands
       try {
-        const origin = (import.meta as any).env?.VITE_API_URL || ''
+        const origin = String((import.meta as any).env?.VITE_API_URL || '')
+          .trim()
+          .replace(/\/+$/, '')
         setContacts((cur) => {
           for (const c of cur.slice(0, 40)) {
             if (c.photo) warmPhoto(c.id, c.photo, origin)

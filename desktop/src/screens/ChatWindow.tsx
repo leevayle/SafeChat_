@@ -51,7 +51,7 @@ const EMOJIS = [
   '☕','🍕','🍔','🍟','🌮','🍣','🍦','🍰','🍺','🍻','🎂','🍪','🍩','🍿',
 ].filter((e) => e !== 'sneezing')
 
-const API_ORIGIN = import.meta.env.VITE_API_URL || ''
+const API_ORIGIN = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
 
 function mediaUrl(path?: string | null) {
   if (!path) return ''

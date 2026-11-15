@@ -5,7 +5,7 @@ import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/k
  * Response shape: { success, message, data }
  */
 
-const BASE = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+const BASE = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
 if (typeof window !== 'undefined' && import.meta.env.PROD && !BASE) {
   console.error(
     '[SafeChat] VITE_API_URL is not set. Cloudflare Pages must define VITE_API_URL=https://your-api.onrender.com and rebuild.',

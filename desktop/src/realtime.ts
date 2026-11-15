@@ -97,7 +97,7 @@ const state: SocketState = {
 }
 
 function wsUrl(token: string): string {
-  const env = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '')
+  const env = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
   if (!env) {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     return `${proto}//${window.location.host}/api/v1/ws?token=${encodeURIComponent(token)}`

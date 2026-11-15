@@ -25,6 +25,7 @@ import { StatusAudiencePicker } from '../components/StatusAudiencePicker'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 const WHO = ['Everyone', 'My contacts', 'Nobody']
+const PIXELDROID_URL = import.meta.env.VITE_PIXELDROID_URL?.trim() || ''
 const themeLabelFromId = (id: string) =>
   THEMES[id as keyof typeof THEMES]?.label || THEMES.purple.label
 const themeIdFromLabel = (label: string) => {
@@ -423,17 +424,18 @@ export function Settings({
                   <div className="min-w-0 max-w-[58%]">
                     <p className="text-left text-[12px] font-semibold leading-relaxed text-gray-500">
                       Safechat is made and maintained by{' '}
-                      <a
-                        href={
-                          (import.meta as any).env?.VITE_PIXELDROID_URL ||
-                          'https://pixeldroid.com'
-                        }
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-extrabold text-brand-purple"
-                      >
-                        pixeldroid
-                      </a>
+                      {PIXELDROID_URL ? (
+                        <a
+                          href={PIXELDROID_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-extrabold text-brand-purple"
+                        >
+                          pixeldroid
+                        </a>
+                      ) : (
+                        <span className="font-extrabold text-brand-purple">pixeldroid</span>
+                      )}
                     </p>
                     <p className="mt-2 text-left text-[11px] font-normal text-gray-400">
                       Version 2.0.0
@@ -445,22 +447,26 @@ export function Settings({
                       <Wordmark className="text-[15px] leading-none" />
                     </div>
                     <div className="h-px w-full bg-gray-200 dark:bg-white/10" />
-                    <a
-                      href={
-                        (import.meta as any).env?.VITE_PIXELDROID_URL ||
-                        'https://pixeldroid.com'
-                      }
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block"
-                    >
-                      {/* Black-text PixelDroid mark */}
+                    {PIXELDROID_URL ? (
+                      <a
+                        href={PIXELDROID_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block"
+                      >
+                        <img
+                          src="/pixeldroid-light.png"
+                          alt="PixelDroid"
+                          className="h-7 w-auto max-w-[120px] object-contain"
+                        />
+                      </a>
+                    ) : (
                       <img
                         src="/pixeldroid-light.png"
                         alt="PixelDroid"
                         className="h-7 w-auto max-w-[120px] object-contain"
                       />
-                    </a>
+                    )}
                   </div>
                 </div>
               </div>

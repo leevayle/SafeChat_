@@ -13,7 +13,7 @@ import { compressForWeb } from '../lib/imageProcess'
 import { StatusAudiencePicker } from '../components/StatusAudiencePicker'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
-const API_ORIGIN = import.meta.env.VITE_API_URL || ''
+const API_ORIGIN = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
 function mediaUrl(path?: string | null) {
   if (!path) return ''
   if (path.startsWith('http') || path.startsWith('data:') || path.startsWith('blob:')) return path

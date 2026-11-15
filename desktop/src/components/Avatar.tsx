@@ -12,7 +12,7 @@ type ContactLike = {
   verified?: boolean
 }
 
-const API_ORIGIN = import.meta.env.VITE_API_URL || ''
+const API_ORIGIN = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
 
 export function Avatar({
   contact,

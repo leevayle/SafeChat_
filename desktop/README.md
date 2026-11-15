@@ -12,11 +12,16 @@ npm install
 npm run dev
 ```
 
+Copy `.env.example` to `.env` and set `VITE_API_URL` to the backend origin
+(for example, `http://localhost:8000`). Vite proxies `/api` and `/health` to
+that origin during local development. `VITE_PIXELDROID_URL` is optional and
+controls the external PixelDroid links in Settings.
+
+For deployment, set `VITE_API_URL` in the hosting provider's build environment
+before building. Vite embeds `VITE_` variables in the client bundle, so do not
+put secrets in them.
+
 Open http://localhost:5173
-
-Vite proxies `/api` and `/health` to `http://localhost:8000`.
-
-Optional: copy `.env.example` → `.env` and set `VITE_API_URL` if the API is on another host.
 
 ## Auth
 
