@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Check, X, UserPlus, Clock, Inbox } from 'lucide-react'
+import { Check, X, UserPlus, Clock, Inbox, Trash2 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { ScreenHeader } from '../components/ui'
 import { useStore } from '../store'
 import { api } from '../api'
+import { kvGet, kvSet } from '../lib/kv'
 
 type RequestItem = {
   id: string
@@ -24,10 +25,11 @@ type Props = {
   onChat?: (userId: string) => void
 }
 
+const CACHE_KEY = 'sc_save_requests_cache'
+
 function timeAgo(iso: string) {
   if (!iso) return ''
   try {
-    // Treat naive timestamps from the API as UTC
     let raw = iso.trim()
     if (raw && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)) {
       raw = raw.includes('T') ? `${raw}Z` : `${raw.replace(' ', 'T')}Z`
@@ -45,6 +47,15 @@ function timeAgo(iso: string) {
   }
 }
 
+function statusLabel(status: string) {
+  const s = (status || '').toLowerCase()
+  if (s === 'pending') return 'Pending'
+  if (s === 'accepted') return 'Accepted'
+  if (s === 'rejected' || s === 'declined') return 'Declined'
+  if (s === 'cancelled' || s === 'canceled') return 'Cancelled'
+  return status || 'Unknown'
+}
+
 export function SaveRequests({ onClose, onChat }: Props) {
   const { refreshContacts, showToast } = useStore()
   const [tab, setTab] = useState<'incoming' | 'outgoing'>('incoming')
@@ -52,72 +63,108 @@ export function SaveRequests({ onClose, onChat }: Props) {
   const [outgoing, setOutgoing] = useState<RequestItem[]>([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [selected, setSelected] = useState<string[]>([])
 
-  const load = useCallback(async (): Promise<RequestItem[] | null> => {
-    setLoading(true)
+  const load = useCallback(async (): Promise<void> => {
     try {
       const [inRes, outRes] = await Promise.all([
         api.incomingContactRequests(),
         api.outgoingContactRequests(),
       ])
-      const nextIncoming = (inRes.requests || []).filter((r) => r.status === 'pending')
+      // Full history — first to latest (API already sorts newest first)
+      const nextIncoming = inRes.requests || []
+      const nextOutgoing = outRes.requests || []
       setIncoming(nextIncoming)
-      // Sent: show pending + accepted (Message only when accepted)
-      setOutgoing(
-        (outRes.requests || []).filter(
-          (r) => r.status === 'pending' || r.status === 'accepted',
-        ),
-      )
-      return nextIncoming
+      setOutgoing(nextOutgoing)
+      try {
+        kvSet(
+          CACHE_KEY,
+          JSON.stringify({
+            incoming: nextIncoming,
+            outgoing: nextOutgoing,
+            at: Date.now(),
+          }),
+        )
+      } catch {
+        /* */
+      }
     } catch {
       showToast('Could not load save requests')
-      return null
     } finally {
       setLoading(false)
     }
   }, [showToast])
 
   useEffect(() => {
-    load()
+    // Instant paint from local cache
+    try {
+      const raw = kvGet(CACHE_KEY)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed?.incoming)) setIncoming(parsed.incoming)
+        if (Array.isArray(parsed?.outgoing)) setOutgoing(parsed.outgoing)
+        setLoading(false)
+      }
+    } catch {
+      /* */
+    }
+    void load()
   }, [load])
 
   const accept = async (id: string) => {
-    const row = incoming.find((r) => r.id === id)
     setBusyId(id)
     try {
-      const res = await api.acceptContactRequest(id)
-      showToast(
-        row?.username || row?.name
-          ? `Saved @${row.username || row.name} — both sides updated`
-          : 'Contact saved on both sides',
+      await api.acceptContactRequest(id)
+      setIncoming((list) =>
+        list.map((r) => (r.id === id ? { ...r, status: 'accepted' } : r)),
       )
-      setIncoming((list) => list.filter((r) => r.id !== id))
-      // Server wrote mutual edges — pull full list into cache then UI
-      await refreshContacts()
+      showToast('Contact saved on both sides')
+      void refreshContacts()
       void load()
     } catch (e: any) {
-      let refreshedRequests: RequestItem[] | null = null
-      try {
-        refreshedRequests = await load()
-        await refreshContacts()
-      } catch {
-        // Keep the original acceptance error as the user-facing result.
-      }
-      if (refreshedRequests && !refreshedRequests.some((request) => request.id === id)) {
-        showToast('Contact saved on both sides')
-      } else {
-        showToast(e?.message || 'Could not accept')
-      }
+      showToast(e?.message || 'Could not accept')
     } finally {
       setBusyId(null)
     }
   }
 
-  const revoke = async (peerId: string, requestId: string) => {
+  const decline = async (id: string) => {
+    setBusyId(id)
+    try {
+      await api.rejectContactRequest(id)
+      setIncoming((list) =>
+        list.map((r) => (r.id === id ? { ...r, status: 'rejected' } : r)),
+      )
+      showToast('Request declined')
+    } catch (e: any) {
+      showToast(e?.message || 'Could not decline')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const cancelOutgoing = async (id: string) => {
+    setBusyId(id)
+    try {
+      await api.cancelContactRequest(id)
+      setOutgoing((list) =>
+        list.map((r) => (r.id === id ? { ...r, status: 'cancelled' } : r)),
+      )
+      showToast('Request cancelled')
+    } catch (e: any) {
+      showToast(e?.message || 'Could not cancel')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const unsave = async (peerId: string, requestId: string) => {
     setBusyId(requestId)
     try {
       await api.deleteContact(peerId)
-      setOutgoing((list) => list.filter((r) => r.id !== requestId))
+      setOutgoing((list) =>
+        list.map((r) => (r.id === requestId ? { ...r, status: 'cancelled' } : r)),
+      )
       showToast('Contact removed')
       void refreshContacts()
     } catch (e: any) {
@@ -127,28 +174,42 @@ export function SaveRequests({ onClose, onChat }: Props) {
     }
   }
 
-  const decline = async (id: string) => {
-    const snapshot = incoming
-    setIncoming((list) => list.filter((r) => r.id !== id))
-    showToast('Request declined')
-    try {
-      await api.rejectContactRequest(id)
-    } catch (e: any) {
-      setIncoming(snapshot)
-      showToast(e?.message || 'Could not decline')
+  const toggleSelect = (id: string) => {
+    setSelected((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
+  }
+
+  const deleteSelected = async () => {
+    if (!selected.length) return
+    const ids = [...selected]
+    setSelected([])
+    // Optimistic remove from UI
+    setIncoming((list) => list.filter((r) => !ids.includes(r.id)))
+    setOutgoing((list) => list.filter((r) => !ids.includes(r.id)))
+    let failed = 0
+    for (const id of ids) {
+      try {
+        await api.deleteContactRequest(id)
+      } catch {
+        failed += 1
+      }
     }
+    if (failed) showToast(`Could not delete ${failed} item(s)`)
+    else showToast(ids.length > 1 ? 'Requests deleted' : 'Request deleted')
+    void load()
   }
 
   const list = tab === 'incoming' ? incoming : outgoing
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div className="flex h-full flex-col bg-white dark:bg-[#121821]">
       <ScreenHeader title="Save requests" onBack={onClose} />
 
       <div className="flex gap-2 px-4 pb-3 pt-3">
         {(
           [
-            { id: 'incoming' as const, label: 'Incoming', count: incoming.length },
+            { id: 'incoming' as const, label: 'Received', count: incoming.length },
             { id: 'outgoing' as const, label: 'Sent', count: outgoing.length },
           ]
         ).map((t) => {
@@ -157,11 +218,14 @@ export function SaveRequests({ onClose, onChat }: Props) {
             <button
               key={t.id}
               type="button"
-              onClick={() => setTab(t.id)}
+              onClick={() => {
+                setTab(t.id)
+                setSelected([])
+              }}
               className={`flex flex-1 items-center justify-center gap-2 rounded-2xl py-2.5 text-sm font-extrabold transition-colors ${
                 active
                   ? 'bg-brand-purple text-white shadow-md shadow-brand-purple/25'
-                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200 dark:bg-white/10 dark:text-gray-300'
               }`}
             >
               {t.label}
@@ -179,8 +243,24 @@ export function SaveRequests({ onClose, onChat }: Props) {
         })}
       </div>
 
+      {selected.length > 0 && (
+        <div className="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-2 dark:border-white/10">
+          <p className="text-sm font-extrabold text-ink dark:text-gray-100">
+            {selected.length} selected
+          </p>
+          <button
+            type="button"
+            onClick={() => void deleteSelected()}
+            className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-3 py-1.5 text-xs font-extrabold text-brand-red dark:bg-red-500/15"
+          >
+            <Trash2 size={14} />
+            Delete
+          </button>
+        </div>
+      )}
+
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-10">
-        {loading ? (
+        {loading && list.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-3 py-20 text-gray-400">
             <motion.div
               animate={{ rotate: 360 }}
@@ -194,121 +274,143 @@ export function SaveRequests({ onClose, onChat }: Props) {
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-purple/10 text-brand-purple">
               {tab === 'incoming' ? <Inbox size={28} /> : <Clock size={28} />}
             </div>
-            <p className="text-base font-extrabold text-gray-700">
-              {tab === 'incoming' ? 'No save requests' : 'No sent requests'}
+            <p className="text-base font-extrabold text-gray-700 dark:text-gray-200">
+              {tab === 'incoming' ? 'No received requests' : 'No sent requests'}
             </p>
             <p className="text-sm font-semibold text-gray-400">
               {tab === 'incoming'
                 ? 'When someone wants to save you as a contact, their request will show up here.'
-                : 'Requests you send appear here. Message is available after they accept.'}
+                : 'Requests you send appear here — from the first to the latest.'}
             </p>
           </div>
         ) : (
           <ul className="space-y-2">
             <AnimatePresence initial={false}>
-              {list.map((r, i) => (
-                <motion.li
-                  key={r.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, x: -40, height: 0, marginBottom: 0 }}
-                  transition={{ delay: i * 0.03 }}
-                  className="overflow-hidden rounded-2xl bg-gray-50 ring-1 ring-gray-100"
-                >
-                  <div className="flex items-start gap-3 p-3.5">
-                    <Avatar
-                      contact={{
-                        name: r.name,
-                        photo: r.photo,
-                        hue: r.hue,
-                        online: false,
-                      }}
-                      size={48}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <p className="truncate font-extrabold text-ink">{r.name}</p>
-                        <span className="shrink-0 text-[11px] font-bold text-gray-400">
-                          {timeAgo(r.createdAt)}
-                        </span>
+              {list.map((r, i) => {
+                const pending = (r.status || '').toLowerCase() === 'pending'
+                const accepted = (r.status || '').toLowerCase() === 'accepted'
+                const peerId = tab === 'incoming' ? r.fromUserId : r.toUserId
+                const isSelected = selected.includes(r.id)
+                return (
+                  <motion.li
+                    key={r.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, x: -40, height: 0, marginBottom: 0 }}
+                    transition={{ delay: Math.min(i * 0.02, 0.2) }}
+                    className={`overflow-hidden rounded-2xl ring-1 ${
+                      isSelected
+                        ? 'bg-brand-purple/10 ring-brand-purple/30'
+                        : 'bg-gray-50 ring-gray-100 dark:bg-white/5 dark:ring-white/10'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3 p-3.5">
+                      <button
+                        type="button"
+                        aria-label="Select"
+                        onClick={() => toggleSelect(r.id)}
+                        className={`mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border ${
+                          isSelected
+                            ? 'border-brand-purple bg-brand-purple text-white'
+                            : 'border-gray-300 bg-white dark:border-white/20 dark:bg-transparent'
+                        }`}
+                      >
+                        {isSelected ? <Check size={12} strokeWidth={3} /> : null}
+                      </button>
+                      <Avatar
+                        contact={{
+                          id: peerId,
+                          name: r.name,
+                          photo: r.photo,
+                          hue: r.hue,
+                          online: false,
+                        }}
+                        size={48}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline justify-between gap-2">
+                          <p className="truncate font-extrabold text-ink dark:text-gray-100">{r.name}</p>
+                          <span className="shrink-0 text-[11px] font-bold text-gray-400">
+                            {timeAgo(r.createdAt)}
+                          </span>
+                        </div>
+                        {r.username && (
+                          <p className="truncate text-sm font-bold text-brand-purple">
+                            @{String(r.username).replace(/^@/, '')}
+                          </p>
+                        )}
+                        {r.message && (
+                          <p className="mt-0.5 line-clamp-2 text-xs font-semibold text-gray-500">
+                            {r.message}
+                          </p>
+                        )}
+                        <p className="mt-1 text-[11px] font-extrabold uppercase tracking-wide text-gray-400">
+                          {statusLabel(r.status)}
+                        </p>
+
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {tab === 'incoming' && pending && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={busyId === r.id}
+                                onClick={() => void accept(r.id)}
+                                className="inline-flex items-center gap-1 rounded-full bg-brand-purple px-3 py-1.5 text-xs font-extrabold text-white disabled:opacity-60"
+                              >
+                                <UserPlus size={14} />
+                                Accept
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busyId === r.id}
+                                onClick={() => void decline(r.id)}
+                                className="inline-flex items-center gap-1 rounded-full bg-gray-200 px-3 py-1.5 text-xs font-extrabold text-gray-700 disabled:opacity-60 dark:bg-white/10 dark:text-gray-200"
+                              >
+                                <X size={14} />
+                                Decline
+                              </button>
+                            </>
+                          )}
+                          {tab === 'outgoing' && pending && (
+                            <button
+                              type="button"
+                              disabled={busyId === r.id}
+                              onClick={() => void cancelOutgoing(r.id)}
+                              className="inline-flex items-center gap-1 rounded-full bg-gray-200 px-3 py-1.5 text-xs font-extrabold text-gray-700 disabled:opacity-60 dark:bg-white/10 dark:text-gray-200"
+                            >
+                              Cancel request
+                            </button>
+                          )}
+                          {tab === 'outgoing' && accepted && (
+                            <>
+                              {onChat && (
+                                <button
+                                  type="button"
+                                  onClick={() => onChat(peerId)}
+                                  className="inline-flex items-center gap-1 rounded-full bg-brand-purple px-3 py-1.5 text-xs font-extrabold text-white"
+                                >
+                                  Message
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                disabled={busyId === r.id}
+                                onClick={() => void unsave(peerId, r.id)}
+                                className="inline-flex items-center gap-1 rounded-full bg-red-50 px-3 py-1.5 text-xs font-extrabold text-brand-red disabled:opacity-60 dark:bg-red-500/15"
+                              >
+                                Unsave
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      {r.username && (
-                        <p className="truncate text-sm font-bold text-brand-purple">@{r.username}</p>
-                      )}
-                      {r.message && (
-                        <p className="mt-1 line-clamp-2 text-sm font-semibold text-gray-500">
-                          “{r.message}”
-                        </p>
-                      )}
-                      {tab === 'outgoing' && r.status === 'pending' && (
-                        <p className="mt-1.5 flex items-center gap-1 text-xs font-bold text-amber-600">
-                          <Clock size={12} /> Waiting for response
-                        </p>
-                      )}
-                      {tab === 'outgoing' && r.status === 'accepted' && (
-                        <p className="mt-1.5 flex items-center gap-1 text-xs font-bold text-green-600">
-                          <Check size={12} strokeWidth={2.5} /> Accepted
-                        </p>
-                      )}
                     </div>
-                  </div>
-
-                  {tab === 'incoming' && (
-                    <div className="flex gap-2 border-t border-gray-100 px-3 py-2.5">
-                      <button
-                        type="button"
-                        disabled={busyId === r.id}
-                        onClick={() => decline(r.id)}
-                        className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-gray-200/80 py-2.5 text-sm font-extrabold text-gray-600 transition hover:bg-gray-300 disabled:opacity-50"
-                      >
-                        <X size={16} strokeWidth={2.5} />
-                        Decline
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busyId === r.id}
-                        onClick={() => accept(r.id)}
-                        className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-brand-purple py-2.5 text-sm font-extrabold text-white shadow-sm shadow-brand-purple/30 transition hover:bg-brand-magenta disabled:opacity-50"
-                      >
-                        <Check size={16} strokeWidth={2.5} />
-                        {busyId === r.id ? 'Accepting…' : 'Accept'}
-                      </button>
-                    </div>
-                  )}
-
-                  {tab === 'outgoing' && r.status === 'accepted' && (
-                    <div className="flex gap-2 border-t border-gray-100 px-3 py-2">
-                      {onChat && (
-                        <button
-                          type="button"
-                          onClick={() => onChat(r.toUserId)}
-                          className="flex-1 rounded-xl py-2 text-sm font-bold text-brand-purple hover:bg-brand-purple/5"
-                        >
-                          Message
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        disabled={busyId === r.id}
-                        onClick={() => revoke(r.toUserId, r.id)}
-                        className="flex-1 rounded-xl py-2 text-sm font-bold text-brand-red hover:bg-red-50 disabled:opacity-50"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  )}
-                </motion.li>
-              ))}
+                  </motion.li>
+                )
+              })}
             </AnimatePresence>
           </ul>
         )}
-      </div>
-
-      <div className="border-t border-gray-100 px-5 py-3">
-        <p className="flex items-center justify-center gap-2 text-center text-xs font-semibold text-gray-400">
-          <UserPlus size={14} className="text-brand-purple/60" />
-          Saving someone sends a request they can accept or decline
-        </p>
       </div>
     </div>
   )

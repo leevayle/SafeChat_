@@ -85,3 +85,37 @@ export function formatLastSeen(input?: string | number | Date | null): string {
   if (d.toDateString() === y.toDateString()) return `last seen yesterday at ${time}`
   return `last seen ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} at ${time}`
 }
+
+/** Local calendar day key (YYYY-MM-DD) for grouping messages / list sections. */
+export function localDayKey(input?: string | number | Date | null): string {
+  const d = parseUtc(input)
+  if (!d) return ''
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+/**
+ * Chat day separator label from a UTC timestamp.
+ * Today → "Today", yesterday → "Yesterday", else weekday or short date.
+ */
+export function formatDayLabel(input?: string | number | Date | null): string {
+  const d = parseUtc(input)
+  if (!d) return ''
+  const now = new Date()
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const startMsg = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const diffDays = Math.round((startToday.getTime() - startMsg.getTime()) / 86_400_000)
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  if (diffDays > 1 && diffDays < 7) {
+    return d.toLocaleDateString(undefined, { weekday: 'long' })
+  }
+  return d.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+  })
+}

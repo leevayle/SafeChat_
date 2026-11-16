@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download, Gamepad2, Reply, Trash2 } from 'lucide-react'
 import { Avatar, VerifiedCheck } from '../components/Avatar'
@@ -9,7 +9,7 @@ import { fileToDataUrl } from '../lib/imageProcess'
 import { EmptyState } from '../components/EmptyState'
 import { Toggle } from '../components/ui'
 import { api, hasAccessToken, type ApiMsg } from '../api'
-import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc } from '../time'
+import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc, formatDayLabel, localDayKey } from '../time'
 import { isRealtimeOpen, wsSendMessage, wsReceipt, wsLiveTyping, wsTyping } from '../realtime'
 import { FONT_SIZES, resolveWallpaper, useStore } from '../store'
 import { playInboxLandingChime } from '../lib/sounds'
@@ -2716,9 +2716,6 @@ return (
             {loadingOlder ? 'Loading earlier messages…' : hasMoreOlder ? 'Scroll up for earlier messages' : ''}
           </p>
         )}
-        <p className="mx-auto w-fit rounded-full bg-white px-3 py-1 text-xs font-extrabold text-gray-500 shadow-sm">
-          Today
-        </p>
         {loading && <p className="py-6 text-center text-sm font-bold text-gray-400">Loading…</p>}
         {!loading && msgs.length === 0 && !selfNoteItems.length && (
           <EmptyState
@@ -2759,10 +2756,28 @@ return (
               }
             }
             feed.sort((a, b) => a.t - b.t || (a.id < b.id ? -1 : 1))
-            return feed.map((item) => {
+            // Day separators: Today, Yesterday, weekday, or short date
+            let lastDay = ''
+            const nodes: ReactNode[] = []
+            for (const item of feed) {
+              const day = localDayKey(item.t || null)
+              if (day && day !== lastDay) {
+                lastDay = day
+                const label = formatDayLabel(item.t || null)
+                if (label) {
+                  nodes.push(
+                    <p
+                      key={`day-${day}`}
+                      className="mx-auto my-2 w-fit rounded-full bg-white px-3 py-1 text-xs font-extrabold text-gray-500 shadow-sm dark:bg-[#1a2332] dark:text-gray-400"
+                    >
+                      {label}
+                    </p>,
+                  )
+                }
+              }
               if (item.type === 'note') {
                 const n = item.data
-                return (
+                nodes.push(
                   <button
                     type="button"
                     key={`note-${n.id}`}
@@ -2789,15 +2804,16 @@ return (
                     <p className="mt-1 text-[10px] font-bold text-gray-300">
                       {n.updatedAt ? new Date(n.updatedAt).toLocaleString() : ''}
                     </p>
-                  </button>
+                  </button>,
                 )
+                continue
               }
               const m = item.data
               const mine = m.mine ?? m.from === me?.id
               const key = m.clientKey || m.id
               const animateIn = !animatedKeys.current.has(key)
               if (animateIn) animatedKeys.current.add(key)
-              return (
+              nodes.push(
               <div
                 key={key}
                 className="w-full"
@@ -2879,9 +2895,10 @@ return (
                     onOpenStatus?.(found.userId || contactId, sr.statusId)
                   }}
                 />
-              </div>
-            )
-          })
+              </div>,
+              )
+            }
+            return nodes
           })()}
           {/* Classic three-dot typing bubble (default for everyone; Pro always) */}
           {typing && !(liveDraft != null && liveDraft !== '') && (

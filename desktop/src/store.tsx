@@ -827,7 +827,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshChats = useCallback(async (opts?: { lean?: boolean }) => {
     if (!hasAccessToken() || isSessionDead()) return
     try {
-      const { chats: c } = await api.chats({ lean: !!opts?.lean, limit: 50 })
+      const { chats: c } = await api.chats({ lean: !!opts?.lean, limit: opts?.lean ? 20 : 40 })
       // Merge network into UI — never drop a row that is only local / newer than server
       setChats((prev) => {
         const safePrev = sanitizeChatList(prev)
@@ -1319,8 +1319,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return
     }
 
-    // Phase 0 — paint IndexedDB cache immediately (no network wait)
-    // Only fetch from API when cache is empty or to merge updates afterward.
+    // Phase 0 — paint IndexedDB cache immediately (no network wait).
+    // First login / empty cache: keep listsReady false so home shows skeleton
+    // until lean chats arrive, then cache + continue the rest in background.
+    let hadCachedChats = false
     try {
       const uid = meRef.current?.id || getStoredUser()?.id || ''
       const owner = cacheOwnerId()
@@ -1331,6 +1333,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           loadCachedStatuses<any>(),
         ])
         if (cachedChats.length) {
+          hadCachedChats = true
           const cleaned = sanitizeChatList(cachedChats as any)
           setChats((prev) => (prev.length ? prev : cleaned))
         }
@@ -1341,25 +1344,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           setStatusList((prev: any[]) => (prev?.length ? prev : cachedStatuses))
         }
         setCacheOwner(uid)
-        // Home can render from cache (or empty state) without waiting on network
-        setListsReady(true)
+        // Only unlock home when cache has chats to show
+        if (hadCachedChats) setListsReady(true)
       } else if (uid && owner && owner !== uid) {
         // Different account — drop previous user's disk cache
         await clearAllCaches()
         setCacheOwner(uid)
-        setListsReady(true)
-      } else {
-        setListsReady(true)
+        // Keep skeleton until this account's chats load
       }
+      // else: no uid yet — wait for network lean chats
     } catch {
-      setListsReady(true)
+      /* keep skeleton; network path will unlock */
     }
 
-    // Phase 1 — network lean inbox in background-friendly way
-    // Chats first so the feed updates ASAP; contacts can trail slightly
-    void refreshChats({ lean: true }).then(() => {
-      if (!isSessionDead()) setListsReady(true)
-    })
+    // Phase 1 — lean home chats first (required for first login + always revalidate)
+    try {
+      await refreshChats({ lean: true })
+    } catch {
+      /* soft */
+    }
+    if (!isSessionDead()) setListsReady(true)
     void refreshContacts()
     if (isSessionDead()) {
       setListsReady(true)
@@ -1367,8 +1371,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     setSessionOk(true)
 
-    // Phase 2 — full list + last 50 msgs per recent thread (bounded concurrency)
-    // Do not block the UI — run in background
+    // Phase 2 — full list + last 50 msgs per recent thread (background, always cache)
     if (isSessionDead()) return
     void refreshChats({ lean: false })
     void refreshRecentMessages(false)
@@ -2091,7 +2094,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     resolveAndApplyAppearance(user.id, (user as any).theme ? { theme: (user as any).theme } : null)
     applyUser(user)
     setSessionOk(true)
-    const hydrateP = hydrateAfterAuth()
+    // First-account path: show home skeleton until lean chats land + are cached
+    setListsReady(false)
+    const hydrateP = hydrateAfterAuth().catch(() => {
+      setListsReady(true)
+    })
     void (async () => {
       try {
         const { user: fresh, settings: s } = await api.me()
@@ -2432,13 +2439,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const onNotifsCleared = () => setNotifUnreadCount(0)
     window.addEventListener('sc:notifs-cleared', onNotifsCleared)
     const onNotif = (ev: Event) => {
-      setNotifUnreadCount((n) => n + 1)
       const d = (ev as CustomEvent).detail || {}
       const ntype = String(d.type || d.t || '')
       if (ntype === 'save_request_accepted' || ntype === 'contact_accepted') {
         void refreshContacts()
         void refreshSaveRequests()
       }
+      // Cache first, then raise the red dot so opening Notifications is instant
       void (async () => {
         try {
           const { loadCachedNotifications, saveCachedNotifications } = await import('./lib/appCache')
@@ -2449,7 +2456,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               ? 'status_like'
               : d.t === 'status_new'
                 ? 'status_new'
-                : 'system')
+                : ntype || 'system')
           const row = {
             id: String(
               d.notification_id ||
@@ -2464,11 +2471,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             status_id: d.status_id,
             game_id: d.game_id,
             read: false,
-            created_at: new Date().toISOString(),
+            created_at: d.created_at || new Date().toISOString(),
           }
           const next = [row, ...prev.filter((x: any) => x.id !== row.id)].slice(0, 100)
           await saveCachedNotifications(next)
+          try {
+            window.dispatchEvent(new CustomEvent('sc:notif-cached', { detail: row }))
+          } catch { /* */ }
         } catch { /* */ }
+        // Red dot only after cache write so the list is ready when opened
+        setNotifUnreadCount((n) => n + 1)
       })()
     }
     window.addEventListener('sc:rt-notif', onNotif)

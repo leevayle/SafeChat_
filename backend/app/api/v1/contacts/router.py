@@ -59,6 +59,20 @@ async def reject_request(request_id: str, user: dict = Depends(get_current_user)
     return success_response("Request rejected", result)
 
 
+
+@router.post("/requests/{request_id}/cancel")
+async def cancel_request(request_id: str, user: dict = Depends(get_current_user)):
+    """Sender cancels a pending outgoing save request."""
+    result = await ContactService.cancel_request(request_id, user["id"])
+    return success_response("Request cancelled", result)
+
+
+@router.delete("/requests/{request_id}")
+async def delete_request(request_id: str, user: dict = Depends(get_current_user)):
+    """Hard-delete a request record from the current user's history view."""
+    result = await ContactService.delete_request_record(request_id, user["id"])
+    return success_response("Request deleted", result)
+
 @router.delete("/{contact_user_id}")
 async def remove_contact(contact_user_id: str, user: dict = Depends(get_current_user)):
     await ContactService.remove_contact(user["id"], contact_user_id)

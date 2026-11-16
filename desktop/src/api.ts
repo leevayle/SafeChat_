@@ -1248,7 +1248,20 @@ export const api = {
     }
   },
 
-  rejectContactRequest: async (requestId: string) => {
+    cancelContactRequest: async (requestId: string) => {
+    return req<any>(`/api/v1/contacts/requests/${requestId}/cancel`, {
+      method: 'POST',
+      body: '{}',
+    })
+  },
+
+  deleteContactRequest: async (requestId: string) => {
+    return req<any>(`/api/v1/contacts/requests/${requestId}`, {
+      method: 'DELETE',
+    })
+  },
+
+rejectContactRequest: async (requestId: string) => {
     const data = await req<any>(`/api/v1/contacts/requests/${requestId}/reject`, {
       method: 'POST',
     })

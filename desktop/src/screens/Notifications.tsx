@@ -149,8 +149,19 @@ export function Notifications({
       void refreshNotifCount?.()
     }
     window.addEventListener('sc:rt-notif', onRealtimeNotification)
+    const onCached = (ev: Event) => {
+      const row = (ev as CustomEvent).detail
+      if (!row?.id) return
+      setServerNotifs((prev) => {
+        const next = [row, ...(prev || []).filter((n: any) => String(n.id) !== String(row.id))]
+        return next
+      })
+      setLoading(false)
+    }
+    window.addEventListener('sc:notif-cached', onCached)
     return () => {
       window.removeEventListener('sc:rt-notif', onRealtimeNotification)
+      window.removeEventListener('sc:notif-cached', onCached)
     }
   }, [refreshContacts, refreshNotifCount])
 

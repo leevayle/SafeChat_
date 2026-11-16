@@ -176,9 +176,14 @@ async def update_my_profile(
     body: ProfileUpdate,
     user: dict = Depends(get_current_user),
 ):
-    updates = {
-        k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None
-    }
+    # profile_photo may be explicitly null (remove photo) — keep nulls for that field
+    raw = body.model_dump(exclude_unset=True)
+    updates = {}
+    for k, v in raw.items():
+        if v is not None:
+            updates[k] = v
+        elif k == "profile_photo":
+            updates[k] = None
     if not updates:
         return success_response("Nothing to update")
     updates["updated_at"] = datetime.now(timezone.utc)

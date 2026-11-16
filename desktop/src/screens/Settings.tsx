@@ -525,6 +525,8 @@ export function Settings({
                     <button
                       type="button"
                       onClick={async () => {
+                        const prev = s.photo
+                        // Optimistic clear in settings snapshot via saveProfile
                         setToast('Removing your profile pic…')
                         try {
                           await saveProfile({
@@ -2392,10 +2394,11 @@ export function Settings({
             setCropSrc(null)
             setToast('Changing your profile pic…')
             try {
+              // saveProfile applies optimistic photo immediately across me/settings/avatar
               await saveProfile({
-                name: s.name,
-                username: s.username,
-                bio: s.bio,
+                name: draft.name.trim() || s.name,
+                username: draft.username.trim() || s.username,
+                bio: draft.bio || s.bio || '',
                 photo: dataUrl,
               })
               setToast('Changed successfully')

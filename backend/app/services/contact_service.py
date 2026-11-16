@@ -397,6 +397,51 @@ class ContactService:
         )
         return {"id": request_id, "status": ContactRequestStatus.REJECTED.value}
 
+
+    @staticmethod
+    async def cancel_request(request_id: str, user_id: str) -> dict:
+        """Sender cancels their own pending request."""
+        db = get_database()
+        if not ObjectId.is_valid(request_id):
+            raise ValidationError("Invalid request id")
+        req = await db.contact_requests.find_one({"_id": ObjectId(request_id)})
+        if not req:
+            raise NotFoundError("Request not found")
+        if str(req.get("from_user_id")) != str(user_id):
+            raise ForbiddenError("Only the sender can cancel this request")
+        status = str(req.get("status") or "").lower()
+        if status != ContactRequestStatus.PENDING.value:
+            raise ConflictError("Only pending requests can be cancelled")
+        now = datetime.now(timezone.utc)
+        await db.contact_requests.update_one(
+            {"_id": ObjectId(request_id)},
+            {"$set": {"status": "cancelled", "updated_at": now}},
+        )
+        return {"id": request_id, "status": "cancelled"}
+
+    @staticmethod
+    async def delete_request_record(request_id: str, user_id: str) -> dict:
+        """Remove a request from history for the current user (soft hide flags)."""
+        db = get_database()
+        if not ObjectId.is_valid(request_id):
+            raise ValidationError("Invalid request id")
+        req = await db.contact_requests.find_one({"_id": ObjectId(request_id)})
+        if not req:
+            raise NotFoundError("Request not found")
+        from_id = str(req.get("from_user_id"))
+        to_id = str(req.get("to_user_id"))
+        uid = str(user_id)
+        if uid not in {from_id, to_id}:
+            raise ForbiddenError("Not your request")
+        now = datetime.now(timezone.utc)
+        field = "hidden_by_sender" if uid == from_id else "hidden_by_recipient"
+        await db.contact_requests.update_one(
+            {"_id": ObjectId(request_id)},
+            {"$set": {field: True, "updated_at": now}},
+        )
+        return {"id": request_id, "deleted": True}
+
+
     @staticmethod
     async def list_contacts(user_id: str) -> List[dict]:
         db = get_database()
@@ -693,12 +738,7 @@ class ContactService:
             await db.contact_requests.find(
                 {
                     "from_user_id": user_id,
-                    "status": {
-                        "$in": [
-                            ContactRequestStatus.PENDING.value,
-                            ContactRequestStatus.ACCEPTED.value,
-                        ]
-                    },
+                    "hidden_by_sender": {"$ne": True},
                 }
             )
             .sort("created_at", -1)

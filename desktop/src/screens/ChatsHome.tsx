@@ -93,7 +93,7 @@ export function ChatsHome({
   const [pendingPin, setPendingPin] = useState('')
 
   const pendingCount = saveRequestPending
-  const showSkeleton = !listsReady
+  const showSkeleton = !listsReady && chats.length === 0
   /** Rows that already entered - receipt/state updates must not re-animate the whole row */
   const seenRows = useRef<Set<string>>(new Set())
 
@@ -591,7 +591,8 @@ export function ChatsHome({
                       onClick={() => onOpenStatus(c.id)}
                     >
                       <StatusRing total={meta.total} viewed={meta.viewed} size={60}>
-                        <Avatar contact={{ ...c, online: !!(presenceMap?.[c.id] ?? c.online) }} size={50} />
+                        {/* Online green dot only on chat rows — never on status rings */}
+                        <Avatar contact={{ ...c, online: false }} size={50} />
                       </StatusRing>
                       <span className="w-16 truncate text-center text-xs font-bold">{c.name.split(' ')[0]}</span>
                     </motion.button>
