@@ -295,7 +295,7 @@ export function connectRealtime(handlers?: RtHandlers) {
     if (wasReconnect && hasAccessToken() && !isSessionDead()) {
       try {
         console.log(
-          '%c[SafeChat] WebSocket back online — session active',
+          '%c[SafeChat] WebSocket back online - session active',
           'color:#16a34a;font-weight:bold',
         )
       } catch { /* */ }

@@ -202,18 +202,23 @@ function hueFor(id: string): [string, string] {
 }
 
 let memoryAccess = ''
+let memoryRefresh = ''
 
 function accessToken() {
   if (memoryAccess) return memoryAccess
-  // Legacy IDB only during migration — prefer memory
+  // Legacy IDB only during migration; prefer memory
   const fromKv = kvGet('sc_access') || kvGet('sc_token') || ''
   if (fromKv) memoryAccess = fromKv
   return memoryAccess
 }
 
 function refreshToken() {
-  // Refresh lives in HttpOnly cookie; body token only if still in memory/kv (migration)
-  return kvGet('sc_refresh') || ''
+  // Prefer memory, then durable kv. Cookie is still sent with credentials:include
+  // when the browser allows it; body token is the cross-origin fallback.
+  if (memoryRefresh) return memoryRefresh
+  const fromKv = kvGet('sc_refresh') || ''
+  if (fromKv) memoryRefresh = fromKv
+  return memoryRefresh
 }
 
 /** JWT exp (seconds) or 0 if unreadable — does not verify signature. */
@@ -293,10 +298,16 @@ export function markSessionDead() {
 export function setSession(access: string, refresh: string, user: ApiUser) {
   sessionDead = false
   memoryAccess = access || ''
-  // Access token: memory only. Refresh: HttpOnly cookie from server (do not persist secrets).
+  // Access: memory only. Refresh: memory + kv so prod works when third-party
+  // cookies (API on another host) are blocked. Server also sets HttpOnly cookie.
   kvRemove('sc_access')
   kvRemove('sc_token')
-  kvRemove('sc_refresh')
+  if (refresh) {
+    memoryRefresh = refresh
+    kvSet('sc_refresh', refresh)
+  } else {
+    memoryRefresh = ''
+  }
   if (user) kvSet('sc_user', JSON.stringify(user))
   startProactiveRefresh()
 }
@@ -308,6 +319,7 @@ export function saveStoredUser(user: ApiUser) {
 export function clearSession() {
   stopProactiveRefresh()
   memoryAccess = ''
+  memoryRefresh = ''
   kvRemove('sc_access')
   kvRemove('sc_refresh')
   kvRemove('sc_token')
@@ -587,8 +599,10 @@ async function tryRefresh(): Promise<boolean> {
         memoryAccess = (data as any).access_token
         kvRemove('sc_access')
         kvRemove('sc_token')
-        if ((data as any).refresh_token) {
-          kvRemove('sc_refresh')
+        const nextRt = (data as any).refresh_token
+        if (nextRt) {
+          memoryRefresh = String(nextRt)
+          kvSet('sc_refresh', memoryRefresh)
         }
         sessionDead = false
         consecutiveRefreshFails = 0
@@ -660,7 +674,7 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
   // Hard stop only when session was proven dead (failed write/auth after refresh)
   if (!publicPath) {
     if (sessionDead) {
-      const err = new Error('Session expired — log in again')
+      const err = new Error('Session expired - log in again')
       ;(err as any).status = 401
       throw err
     }
@@ -720,7 +734,7 @@ async function req<T = any>(path: string, opts: RequestInit = {}, retried = fals
     const err = new Error(
       soft
         ? 'Temporarily unavailable'
-        : friendlyError(body.message || 'Session expired — log in again', 401, path),
+        : friendlyError(body.message || 'Session expired - log in again', 401, path),
     )
     ;(err as any).status = 401
     ;(err as any).soft = soft
@@ -767,19 +781,19 @@ function friendlyError(raw: string, status?: number, path?: string): string {
     return 'Wrong username or password'
   }
   if (t.includes('invalid token') || t.includes('not authenticated') || t.includes('token expired')) {
-    return 'Session expired — log in again'
+    return 'Session expired - log in again'
   }
   if (!isAuthForm && (status === 401 || t.includes('unauthorized'))) {
-    return 'Session expired — log in again'
+    return 'Session expired - log in again'
   }
   if (status === 403 || t.includes('forbidden')) return 'You don’t have permission for that'
   if (status === 404 || t.includes('not found')) {
-    if (isAuthForm) return 'Cannot reach server — start the backend on port 8000, then try again'
+    if (isAuthForm) return 'Cannot reach server - start the backend on port 8000, then try again'
     return 'Not found'
   }
   if (status === 409 || t.includes('conflict') || t.includes('already')) return raw.length < 80 ? raw : 'That action isn’t available right now'
   if (status === 429 || t.includes('rate limit') || t.includes('too many')) return 'Slow down a moment and try again'
-  if (status && status >= 500) return 'Something went wrong — try again'
+  if (status && status >= 500) return 'Something went wrong - try again'
   if (
     t.includes('network') ||
     t.includes('failed to fetch') ||
@@ -793,7 +807,7 @@ function friendlyError(raw: string, status?: number, path?: string): string {
   if (t.includes('incorrect password') || t.includes('wrong password')) return 'Incorrect password'
   // Keep short human messages; trim long technical dumps
   if (raw && raw.length <= 90 && !t.includes('exception') && !t.includes('traceback')) return raw
-  return 'Something went wrong — try again'
+  return 'Something went wrong - try again'
 }
 
 function meId(): string {

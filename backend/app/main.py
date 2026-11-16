@@ -90,6 +90,13 @@ async def lifespan(app: FastAPI):
             _print_ready_banner()
         except Exception:
             pass
+        # Version line after index / DB checks (connect_to_mongo logs "checking indexes")
+        try:
+            ver = (settings.APP_VERSION or "0.0.0").strip()
+            print(f"safechat version {ver}")
+            logger.info("safechat version %s", ver)
+        except Exception:
+            pass
         _boot_done = True
     else:
         logger.info("reload complete")
@@ -103,7 +110,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.APP_NAME,
     description="SafeChat - Secure real-time messaging backend",
-    version="1.0.0",
+    version=settings.APP_VERSION,
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
@@ -142,7 +149,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": settings.APP_NAME}
+    return {
+        "status": "ok",
+        "service": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+    }
 
 
 @app.get("/health/live")

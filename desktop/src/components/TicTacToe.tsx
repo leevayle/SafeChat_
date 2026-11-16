@@ -97,7 +97,7 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
   const applySoloResult = useCallback((w: string | null) => {
     if (!w) return
     if (w === 'draw') {
-      setSetMsg('Draw — next set')
+      setSetMsg('Draw - next set')
       setStatus('set_over')
       return
     }
@@ -304,7 +304,7 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
       setSetMsg(g.winner === meId ? 'You won the match!' : 'You lost the match')
     } else if (g.set_winner) {
       setStatus('set_over')
-      setSetMsg(g.set_winner === meId ? 'You took the set' : g.set_winner === 'draw' ? 'Draw — next set' : 'Friend took the set')
+      setSetMsg(g.set_winner === meId ? 'You took the set' : g.set_winner === 'draw' ? 'Draw - next set' : 'Friend took the set')
     } else {
       setStatus('play')
     }
@@ -615,7 +615,7 @@ export function TicTacToe({ onClose, initialGameId }: Props) {
                       <p className="text-[10px] font-bold text-gray-400">You</p>
                       <p className="text-2xl font-black text-brand-purple">{scores.me}</p>
                     </div>
-                    <p className="text-sm font-black text-gray-300">—</p>
+                    <p className="text-sm font-black text-gray-300">-</p>
                     <div>
                       <p className="text-[10px] font-bold text-gray-400">{mode === 'solo' ? 'AI' : 'Friend'}</p>
                       <p className="text-2xl font-black text-[#E3404C]">{scores.opp}</p>

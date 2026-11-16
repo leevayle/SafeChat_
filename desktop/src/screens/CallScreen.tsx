@@ -471,7 +471,7 @@ export function CallScreen({
           setStatusText(
             st === 'checking' || st === ('connected' as string)
               ? 'Connecting…'
-              : 'Still connecting — use same Wi‑Fi or enable TURN on the server',
+              : 'Still connecting - use same Wi-Fi or enable TURN on the server',
           )
         }, 12000)
       } catch (e: any) {

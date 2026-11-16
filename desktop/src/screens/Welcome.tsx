@@ -94,7 +94,7 @@ export function Welcome({
                 </button>
                 <div className="min-w-0 flex-1">
                   <p className="text-lg font-black text-ink">Referral code</p>
-                  <p className="text-[12px] font-semibold text-gray-400">Optional — enter if you have one</p>
+                  <p className="text-[12px] font-semibold text-gray-400">Optional - enter if you have one</p>
                 </div>
               </div>
               <input

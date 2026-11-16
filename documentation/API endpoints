@@ -1,0 +1,227 @@
+# SafeChat API Endpoints
+
+## Quick reference
+
+- **Base URL:** `https://<your-backend>/api/v1`
+- **Local base URL:** `http://localhost:8000/api/v1`
+- **JSON:** Send `Content-Type: application/json` for JSON request bodies.
+- **Authentication:** Feature endpoints require `Authorization: Bearer <access_token>` unless marked **Public**. Root, health, and docs endpoints are public.
+- **Success format:** Most endpoints return `{"success": true, "message": "...", "data": ...}`.
+- **Application error format:** `{"success": false, "message": "...", "error_code": "...", "details": ...}`.
+- **Admin access:** `/admin/*` requires an admin account. Endpoints marked **Superadmin** require the superadmin role.
+- **API explorer:** `/docs` (Swagger), `/redoc`, and `/openapi.json` are outside the `/api/v1` prefix.
+
+`{value}` in a path is a URL parameter. `?name=value` is a query parameter. Unless noted, inputs described below are JSON bodies.
+
+## Service health
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `GET /` | Identifies the service and links to docs and health. | None -> `name`, `version`, `docs`, `health`. |
+| `GET /health` | Checks that the API process responds. | None -> `status`, `service`, `version`. |
+| `GET /health/live` | Liveness probe for the API process. | None -> `status`. |
+| `GET /health/ready` | Checks API readiness and MongoDB connectivity. | None -> `status`, `mongodb`; returns HTTP 503 when not ready. |
+
+## Authentication
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `GET /auth/username/check` | Checks whether a username is available. **Public** | Query `username` -> `available` and, when relevant, `reason`. |
+| `GET /auth/phone/check` | Checks whether a phone number is available. **Public** | Query `phone` -> `available` and, when relevant, `reason`. |
+| `POST /auth/phone/send-code` | Starts phone verification. **Public; development stub** | `{phone_number}` or `{phone}` -> normalized number, `sent: true`, and `dev_code: "000000"`. |
+| `POST /auth/phone/verify-code` | Verifies the phone code. **Public; development stub** | `{phone_number, code}` (or `phone`; code must be at least 4 characters) -> `verified`, `registration_token`. |
+| `POST /auth/register` | Creates an account. **Public** | `{username, display_name, password, email?, phone_number?, profile_photo?, bio?}` -> `user` (HTTP 201). |
+| `POST /auth/login` | Signs in with username or phone. **Public** | `{username? or phone_number?, password, device_id?, device_name?}` -> user and access/refresh tokens. The refresh token is also set as an HttpOnly cookie. |
+| `POST /auth/password-reset/request` | Emails a temporary reset credential when the account exists. **Public** | `{email}` -> generic confirmation message (does not reveal whether the account exists). |
+| `POST /auth/password-reset/complete` | Sets a new password with a reset credential. **Public** | `{reset_login_token, new_password}` -> `revoked_sessions`. |
+| `POST /auth/refresh` | Renews the access token. **Public** | `{refresh_token?}` or the `sc_refresh` cookie -> new access token and the same refresh token. |
+| `POST /auth/logout` | Ends the refresh-token session. **Public** | `{refresh_token?}` or the `sc_refresh` cookie -> confirmation; clears the cookie. |
+| `GET /auth/me` | Returns the signed-in user and current account settings. | None -> user profile, role, plan, preferences, and premium settings. |
+| `POST /auth/change-password` | Changes the signed-in user's password and revokes sessions. | `{current_password, new_password}` -> `revoked_sessions`. |
+
+## Users, profiles, and settings
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `GET /users/me` | Reads the signed-in user's profile. | None -> profile, account status, privacy and notification settings. |
+| `PATCH /users/me` | Updates profile and appearance fields. | Any of `{display_name, bio, profile_photo, theme, chat_accent, color_mode, liquid_glass, wallpaper}` -> updated fields. |
+| `PATCH /users/me/preferences` | Saves client preferences. | JSON object with any subset of the keys listed below -> updated fields. |
+| `PATCH /users/me/privacy` | Updates profile visibility and read-receipt privacy. | Any of `{last_seen, profile_photo, status, read_receipts}`. Visibility values: `everyone`, `contacts`, `nobody`. -> updated fields. |
+| `PATCH /users/me/notifications` | Updates notification categories. | Any of `{messages, groups, calls, statuses, security}` -> updated fields. |
+| `GET /users/me/sessions` | Lists active sign-in sessions. | None -> session IDs, device details, IP, creation and expiry times. |
+| `DELETE /users/me/sessions/{session_id}` | Revokes one of the user's sessions. | None -> confirmation. |
+| `POST /users/me/deactivate` | Deactivates the account and revokes its sessions. | `{password}` -> confirmation. |
+| `GET /users/presence/{user_id}` | Reads a user's online and busy presence. | None -> `user_id`, `online`, `last_seen`, busy fields. |
+| `GET /users/{username}` | Reads a limited public profile (sign-in required). | None -> ID, username, display name, photo, bio. |
+| `GET /users/search/{query}` | Searches active users by name, username, or phone. | Path `query` (at least 2 characters) -> up to 20 profile matches, including `phone_match`. |
+| `PATCH /users/me/premium-settings` | Updates premium-only features. | Any of `{verified_badge, force_read_receipts, live_typing, status_ads_enabled}` -> updated fields. |
+
+Preference keys for `PATCH /users/me/preferences`:
+
+- **Appearance and app:** `theme`, `chat_accent`, `color_mode`, `liquid_glass`, `wallpaper`, `font_size`, `language`, `show_fab`, `time_format`, `auto_download`, `sound`, `enter_is_send`, `low_data_calls`.
+- **Notifications and messaging:** `msg_notif`, `group_notif`, `call_notif`, `status_like_notif`, `read_receipts`, `typing_indicator`, `previews`, `vibrate`.
+- **Status and privacy:** `status_privacy`, `status_selected_contacts`, `status_excluded_contacts`, `status_validity`, `last_seen`, `profile_photo`, `about_privacy`, `groups_add`, `disappearing`.
+- **Busy and Premium:** `busy_enabled`, `busy_message`, `busy_until`, `busy_scope`, `hide_live_typing`, `force_read_receipts`, `live_typing`, `status_ads_enabled`, `verified_badge`.
+
+## Contacts
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `GET /contacts` | Lists accepted contacts. | None -> contact list. |
+| `GET /contacts/blocked` | Lists blocked users. | None -> blocked-contact list. |
+| `POST /contacts/requests` | Sends a contact request. | `{to_username, message?, share_phone?, from_nickname?}` -> request details (HTTP 201). |
+| `GET /contacts/requests/incoming` | Lists received requests. | None -> request list. |
+| `GET /contacts/requests/outgoing` | Lists sent requests. | None -> request list. |
+| `POST /contacts/requests/{request_id}/accept` | Accepts a request. | None -> accepted request/contact details. |
+| `POST /contacts/requests/{request_id}/reject` | Rejects a request. | None -> request result. |
+| `POST /contacts/requests/{request_id}/cancel` | Cancels a pending request you sent. | None -> cancellation result. |
+| `DELETE /contacts/requests/{request_id}` | Deletes a request from your request history. | None -> confirmation. |
+| `DELETE /contacts/{contact_user_id}` | Removes a contact. | None -> confirmation. |
+| `PATCH /contacts/{contact_user_id}/nickname` | Sets or clears a saved contact nickname. | `{nickname}` (nullable) -> updated nickname. |
+| `POST /contacts/block/{user_id}` | Blocks a user. | None -> confirmation. |
+| `DELETE /contacts/block/{user_id}` | Unblocks a user. | None -> confirmation. |
+
+## Conversations and messages
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `GET /conversations` | Lists the signed-in user's conversations. | Query `limit?` (1-100, default 50), `cursor?`, `lean?` -> `{conversations, next_cursor}`. Cursor paging is not implemented yet; `next_cursor` is currently `null`. |
+| `POST /conversations/private` | Finds or creates a private conversation. | `{participant_username?}` or `{peer_user_id?}` (at least one) -> conversation. |
+| `GET /conversations/{conversation_id}` | Reads a conversation. | None -> conversation and participants. |
+| `DELETE /conversations/{conversation_id}` | Deletes the conversation for the signed-in user. | None -> confirmation; private-chat messages and receipts are also deleted. |
+| `PATCH /conversations/{conversation_id}/pin` | Pins or unpins the conversation. | `{pinned?}` (defaults to `true`) -> `{conversation_id, pinned}`. |
+| `POST /messages/conversations/{conversation_id}` | Sends a message. | `{content?, message_type?, reply_to_message_id?, media_attachments?, idempotency_key?}` -> saved message (HTTP 201). `message_type`: `text`, `image`, `file`, `voice`, `video`, or `system`; text requires `content`. |
+| `GET /messages/conversations/{conversation_id}` | Loads message history. | Query `limit?` (1-100, default 50), `before_id?` -> `{messages, next_cursor}`. |
+| `PATCH /messages/{message_id}` | Edits a message. | `{content}` -> updated message. |
+| `DELETE /messages/{message_id}` | Deletes a message. | None -> confirmation. |
+| `POST /messages/{message_id}/forward` | Forwards a message. | `{conversation_id}` or `{to_conversation_id}` -> forwarded message. |
+| `POST /messages/{message_id}/delivered` | Marks a message delivered. | None -> confirmation. |
+| `POST /messages/conversations/{conversation_id}/read` | Marks messages in a conversation read. | Query `up_to_message_id?` -> `{updated}` count. The current implementation marks all unread receipts in that conversation. |
+| `POST /messages/{message_id}/reactions` | Adds or changes a reaction. | `{emoji}` -> reaction result. |
+| `DELETE /messages/{message_id}/reactions/{emoji}` | Removes your reaction. | None -> confirmation. |
+
+## Groups
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `POST /groups` | Creates a group and its conversation. | `{group_name, group_description?, member_usernames?}` -> group and `conversation_id` (HTTP 201). |
+| `GET /groups` | Lists your groups. | None -> group list. |
+| `GET /groups/{group_id}` | Reads a group. | None -> group details and members. |
+| `PATCH /groups/{group_id}` | Updates group information. | Any of `{group_name, group_description, group_photo}` -> updated group. |
+| `POST /groups/{group_id}/members` | Adds members by username. | `{usernames: [...]}` -> IDs added. |
+| `DELETE /groups/{group_id}/members/{target_user_id}` | Removes a member. | None -> confirmation. |
+| `POST /groups/{group_id}/leave` | Leaves a group. | None -> confirmation. |
+| `POST /groups/{group_id}/admins/{target_user_id}` | Promotes a member to group admin. | None -> confirmation. |
+| `DELETE /groups/{group_id}/admins/{target_user_id}` | Removes group-admin privileges. | None -> confirmation. |
+| `DELETE /groups/{group_id}` | Deletes a group. | None -> confirmation. |
+| `PATCH /groups/{group_id}/permissions` | Changes group permissions. | Any of `{only_admins_can_post, only_admins_can_add_members, only_admins_can_edit_info}` -> updated group. |
+
+## Statuses
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `POST /statuses` | Publishes a status. | `{content?, status_type?, media_attachments?, visibility?, selected_viewer_ids?, excluded_viewer_ids?, expires_in_hours?, background?}` -> created status (HTTP 201). |
+| `GET /statuses/feed` | Loads the signed-in user's status feed. | None -> status feed. |
+| `GET /statuses/user/{user_id}` | Lists a user's visible statuses. | None -> status list. |
+| `GET /statuses/{status_id}` | Opens a status and records a view. | None -> status. |
+| `DELETE /statuses/{status_id}` | Deletes your status. | None -> confirmation. |
+| `GET /statuses/{status_id}/viewers` | Lists status viewers. | None -> viewer list. |
+| `POST /statuses/{status_id}/like` | Toggles your like. | None -> like state/result. |
+
+## Support tickets
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `GET /support/tickets` | Lists your tickets. | Query `page?` (default 1), `page_size?` (default 25, max 100) -> `{items, total, page, page_size}`. |
+| `POST /support/tickets` | Creates a support ticket. | `{subject, body}` -> ticket with status and replies (HTTP 201). Tickets are assigned to active admins automatically. |
+| `POST /support/tickets/{ticket_id}/replies` | Adds a reply to your open ticket. | `{body}` -> updated ticket. Closed tickets cannot be replied to. |
+
+## Notes, checklists, and reminders
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `GET /notes` | Lists your synced notes. | Query `kind?` (`note`, `checklist`, `reminder`) -> `{notes}`. |
+| `POST /notes` | Creates a note, checklist, or reminder. | `{kind?, title?, body?, items?, remind_at?, pinned?, color?, id?}` -> saved note. Checklist items use `{id?, text, done?}`. |
+| `PUT /notes/{note_id}` | Updates a note. | Any of `{kind, title, body, items, remind_at, pinned, color}` -> updated note. |
+| `DELETE /notes/{note_id}` | Soft-deletes a note. | None -> confirmation. |
+| `POST /notes/sync` | Imports or updates local notes, then returns the server copy. | `{notes: [...]}` -> `{notes}`. |
+
+## Notifications and calls
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `GET /notifications` | Lists recent notifications. | Query `limit?` (1-100, default 50) -> notification list. |
+| `GET /notifications/unread-count` | Counts unread notifications. | None -> `{count}`. |
+| `POST /notifications/{notif_id}/read` | Marks one notification read. | None -> `{ok}`. |
+| `POST /notifications/read-all` | Marks all notifications read. | None -> `{ok}`. |
+| `GET /calls` | Lists recent call history. | None -> `{calls}` (up to 100). |
+| `POST /calls` | Saves a call-history entry. | `{peer_id, kind?, direction?, status?, duration_seconds?, call_id?}` -> saved call entry. `kind`: `audio`/`video`; `direction`: `in`/`out`/`missed`; `status`: `completed`/`missed`/`declined`/`failed`/`cancelled`. |
+
+## Games
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `POST /games/tictactoe/invite` | Invites an online user to tic-tac-toe. | `{peer_user_id, game?}` -> game state. `game` defaults to `tictactoe`. |
+| `POST /games/tictactoe/{game_id}/accept` | Accepts an invite. | None -> game state. |
+| `POST /games/tictactoe/{game_id}/decline` | Declines an invite. | None -> `{ok}`. |
+| `GET /games/tictactoe/{game_id}` | Reads a game you are in. | None -> game state. |
+| `POST /games/tictactoe/{game_id}/move` | Plays a board cell. | `{cell}` (0-8) -> updated game state. |
+| `POST /games/tictactoe/{game_id}/leave` | Leaves the game. | None -> `{ok}`. |
+
+## Payments
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `POST /payments/mpesa/stk` | Starts a Premium payment request. | `{phone, plan?}`; plan is `daily`, `weekly`, or `monthly` (default `monthly`) -> checkout IDs, amount, plan. |
+| `GET /payments/mpesa/status/{checkout_request_id}` | Checks your payment status. | None -> `{paid, plan, status}`. |
+| `POST /payments/mpesa/verify` | Verifies a checkout and applies Premium. | `{checkoutRequestId}` -> payment result, plan, subscription expiry when activated. |
+
+> **Payment note:** The current M-Pesa routes use demo behavior and can mark payments paid after a short delay. Connect and verify real provider callbacks/status queries before relying on them for live payments.
+
+## Admin portal
+
+All `/admin/*` endpoints require an admin token. Regular admins can see their assigned support tickets; superadmins can see all tickets. **Superadmin**-marked actions are restricted further.
+
+| Method and path | What it does | Input -> response |
+|---|---|---|
+| `GET /admin/overview` | Shows users, online accounts, plans, payments, reports, and tickets totals. | None -> dashboard counts. |
+| `GET /admin/health` | Checks API and MongoDB status. | None -> `api`, `mongodb`, `checked_at`. |
+| `PUT /admin/presence` | Marks the admin active and triggers pending ticket assignment. | None -> `{assigned_to_you}`. |
+| `DELETE /admin/presence` | Clears active-admin presence. | None -> confirmation. |
+| `GET /admin/users` | Searches and pages through users. | Query `q?`, `status?` (`active`, `deactivated`, `banned`, `pending_review`, `deleted`), `plan?` (`pro`/`premium`), `page?`, `page_size?` -> `{items, total, page, page_size}`. |
+| `PATCH /admin/users/{user_id}/status` | Activates, deactivates, or bans a user. | Query `status` (`active`, `deactivated`, `banned`); body `{reason}` -> user ID and status. |
+| `PATCH /admin/users/{user_id}/subscription` | Grants or revokes Premium. | `{plan: "pro" or "premium", days?, reason}` -> plan and expiry. `days` defaults to 30. |
+| `POST /admin/users/{user_id}/revoke-sessions` | Signs a user out of all active sessions. | `{reason}` -> revoked-session count. |
+| `POST /admin/users/reset-password` | Issues a temporary password and emails the user. | `{username, reason}` -> username, one-time temporary password, revoked-session count. |
+| `POST /admin/users/{user_id}/revoke-admin` | Removes an admin role. **Superadmin** | `{reason}` -> user ID and restored role. |
+| `GET /admin/payments` | Lists payments. | Query `status?`, `page?`, `page_size?` -> paginated payment records. |
+| `GET /admin/role-requests` | Lists admin-role nominations. | Query `status?` (`pending`, `approved`, `rejected`) -> request list. |
+| `POST /admin/role-requests` | Nominates a user for admin approval. | `{user_id, reason}` -> submission confirmation. |
+| `POST /admin/role-requests/{request_id}/approve` | Approves a nomination. **Superadmin** | `{reason}` -> user ID and new role. |
+| `POST /admin/role-requests/{request_id}/reject` | Rejects a nomination. **Superadmin** | `{reason}` -> confirmation. |
+| `GET /admin/audit` | Lists privileged actions with admin usernames. | Query `page?`, `page_size?` -> paginated audit entries. |
+| `GET /admin/support/tickets` | Lists tickets and assignment details. | Query `status?` (`pending`, `in_progress`, `closed`), `page?`, `page_size?` -> paginated tickets. Superadmins see all tickets. |
+| `POST /admin/support/tickets/{ticket_id}/replies` | Replies to an assigned ticket. | `{body}` -> updated ticket and reply. |
+| `PATCH /admin/support/tickets/{ticket_id}/status` | Moves a ticket to in-progress or closed. | `{status: "in_progress" or "closed", reason}` -> new status. |
+| `GET /admin/reports` | Lists user reports. | Query `status?`, `page?`, `page_size?` -> paginated reports. |
+| `PATCH /admin/reports/{report_id}` | Updates a report decision. | `{status: "under_review", "resolved", or "dismissed", reason}` -> new status. |
+| `GET /admin/backups/scopes` | Lists available backup scopes. | None -> scope IDs and collection names. |
+| `GET /admin/backups` | Lists backup files and recent jobs. | None -> `{files, jobs}`. |
+| `GET /admin/backups/jobs/{job_id}` | Checks a backup job. | None -> job details and status. |
+| `POST /admin/backups` | Starts a database backup. | `{scope?, until?}`; scope defaults to `full`, `until` is an optional ISO-8601 cutoff -> backup job. |
+| `GET /admin/backups/download/{filename}` | Downloads a backup file. | None -> gzip file download. |
+| `DELETE /admin/backups/{filename}` | Deletes a backup file. | None -> deleted filename. |
+
+## Realtime WebSocket
+
+Connect to `wss://<your-backend>/api/v1/ws?token=<access_token>` (use `ws://` locally). The access token is required in the query string.
+
+| Client packet | What it does | Server response |
+|---|---|---|
+| `{"t":"ping"}` | Keeps the connection and presence alive. | `{"t":"pong","ts":"..."}`. |
+| `{"t":"send","c":"<conversation_id>","text":"Hello","ck":"<client_key>"}` | Sends a text message; `img`, `reply_to`, or `reply_to_message_id` can also be supplied. | `ack` packet with `ok`, message `id`, conversation `c`, and timestamp; failures include `err`. |
+| `{"t":"rcpt","id":"<message_id>","c":"<conversation_id>","s":"delivered"}` | Reports delivery or read state (`s` is `delivered` or `read`). | Relays receipt updates to the sender. |
+| `{"t":"typing","to":"<user_id>","typing":true,"draft":"..."}` | Sends typing/live-draft presence to a peer. | Peer receives a `typing` packet. |
+| `{"t":"call","a":"offer","to":"<user_id>","callId":"...","sdp":"..."}` | Relays call signaling. Actions include `offer`, `answer`, `ice`, `ring`, and `hangup`; fields vary by action. | Peer receives a `call` packet; offline ring attempts return `unavailable`. |
+
+The server also sends message, receipt, presence, typing, and call events over the open connection.

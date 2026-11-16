@@ -27,10 +27,16 @@ from app.core.limiter import limiter
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 def _attach_refresh_cookie(response: Response, refresh: str) -> None:
-    """HttpOnly refresh cookie (cross-site friendly for Pages ↔ Render)."""
+    """HttpOnly refresh cookie (cross-site friendly for Pages ↔ Render).
+
+    SameSite=None + Secure is required for cross-origin SPAs.
+    Partitioned (CHIPS) helps when the browser treats the API as a third party.
+    Clients also receive refresh_token in the JSON body as a fallback when
+    third-party cookies are blocked.
+    """
     from app.core.config import settings
     max_age = int(settings.REFRESH_TOKEN_EXPIRE_DAYS) * 86400
-    response.set_cookie(
+    kwargs = dict(
         key="sc_refresh",
         value=refresh,
         httponly=True,
@@ -39,10 +45,20 @@ def _attach_refresh_cookie(response: Response, refresh: str) -> None:
         max_age=max_age,
         path="/",
     )
+    # Starlette/FastAPI may support Partitioned cookies (CHIPS)
+    try:
+        response.set_cookie(**kwargs, partitioned=True)
+    except TypeError:
+        response.set_cookie(**kwargs)
 
 
 def _clear_refresh_cookie(response: Response) -> None:
-    response.delete_cookie(key="sc_refresh", path="/", samesite="none", secure=True)
+    try:
+        response.delete_cookie(
+            key="sc_refresh", path="/", samesite="none", secure=True, partitioned=True
+        )
+    except TypeError:
+        response.delete_cookie(key="sc_refresh", path="/", samesite="none", secure=True)
 
 
 
@@ -299,12 +315,10 @@ async def complete_password_reset(
 @router.post("/refresh")
 @limiter.limit("30/minute")
 async def refresh_token(request: Request, body: RefreshRequest = RefreshRequest()):
-    # Prefer HttpOnly cookie; fall back to body for older clients
-    token = None
-    if body and getattr(body, "refresh_token", None):
+    # Prefer HttpOnly cookie; fall back to body (needed when third-party cookies blocked)
+    token = request.cookies.get("sc_refresh") or None
+    if not token and body and getattr(body, "refresh_token", None):
         token = body.refresh_token
-    if not token:
-        token = request.cookies.get("sc_refresh")
     if not token:
         from app.core.exceptions import UnauthorizedError
         raise UnauthorizedError("Missing refresh token")

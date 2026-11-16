@@ -16,6 +16,7 @@ class Settings(BaseSettings):
 
     # Application
     APP_NAME: str = "SafeChat"
+    APP_VERSION: str = "1.0.0"
     APP_ENV: str = "development"
     APP_DEBUG: bool = True
     APP_HOST: str = "0.0.0.0"

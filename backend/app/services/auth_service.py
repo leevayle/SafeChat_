@@ -334,6 +334,13 @@ class AuthService:
 
     @staticmethod
     async def refresh(refresh_token: str) -> Tuple[str, str]:
+        """
+        Validate refresh token and issue a new access token.
+
+        Refresh tokens are NOT rotated on every call (stable multi-tab / multi-request).
+        The same refresh stays valid until logout, expiry, or password change.
+        Cookie + body clients can both present the same token without racing.
+        """
         try:
             payload = decode_token(refresh_token)
         except ValueError:
@@ -349,14 +356,35 @@ class AuthService:
 
         db = get_database()
         token_h = hash_token(refresh_token)
+        now = datetime.now(timezone.utc)
         session = await db.sessions.find_one(
-            {"token_hash": token_h, "user_id": user_id, "revoked": False}
+            {"token_hash": token_h, "user_id": user_id}
         )
         if not session:
             raise UnauthorizedError("Session not found or revoked")
 
-        if session["expires_at"].replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
-            raise UnauthorizedError("Session expired")
+        if session.get("revoked"):
+            # Short grace after explicit logout / password revoke only helps
+            # concurrent in-flight requests; still reject if fully revoked.
+            revoked_at = session.get("revoked_at")
+            if revoked_at is not None:
+                try:
+                    ra = revoked_at.replace(tzinfo=timezone.utc) if revoked_at.tzinfo is None else revoked_at
+                except Exception:
+                    ra = None
+                if ra is None or (now - ra).total_seconds() > 90:
+                    raise UnauthorizedError("Session not found or revoked")
+            else:
+                raise UnauthorizedError("Session not found or revoked")
+
+        exp = session.get("expires_at")
+        if exp is not None:
+            try:
+                exp_aware = exp.replace(tzinfo=timezone.utc) if exp.tzinfo is None else exp
+            except Exception:
+                exp_aware = exp
+            if exp_aware < now:
+                raise UnauthorizedError("Session expired")
 
         user = await db.users.find_one({"_id": ObjectId(user_id)})
         if not user:
@@ -368,15 +396,12 @@ class AuthService:
         if status not in (AccountStatus.ACTIVE.value,):
             raise AccountRestrictedError("Account restricted")
 
-        # Rotate: revoke old, issue new
+        # Touch session; keep the same refresh token (no rotate race)
         await db.sessions.update_one(
             {"_id": session["_id"]},
-            {"$set": {"revoked": True, "revoked_at": datetime.now(timezone.utc)}},
+            {"$set": {"last_used_at": now, "revoked": False, "revoked_at": None}},
         )
 
-        new_session_id = generate_session_id()
-        now = datetime.now(timezone.utc)
-        expires_at = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
         new_access = create_access_token(
             subject=user_id,
             extra_claims={
@@ -385,24 +410,8 @@ class AuthService:
                 "auth_version": user.get("auth_version", 0),
             },
         )
-        new_refresh = create_refresh_token(subject=user_id, session_id=new_session_id)
-
-        await db.sessions.insert_one(
-            {
-                "user_id": user_id,
-                "token_hash": hash_token(new_refresh),
-                "auth_version": user.get("auth_version", 0),
-                "device_id": session.get("device_id"),
-                "device_name": session.get("device_name"),
-                "user_agent": session.get("user_agent"),
-                "ip_address": session.get("ip_address"),
-                "created_at": now,
-                "expires_at": expires_at,
-                "revoked": False,
-                "revoked_at": None,
-            }
-        )
-        return new_access, new_refresh
+        # Return the same refresh token so cookie and body stay in sync
+        return new_access, refresh_token
 
     @staticmethod
     async def logout(refresh_token: str) -> None:

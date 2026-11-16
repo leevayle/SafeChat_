@@ -1974,7 +1974,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     const { access_token, refresh_token, user } = session
     if (!access_token || !user?.id) {
-      throw new Error('Login succeeded but session was incomplete — try again')
+      throw new Error('Login succeeded but session was incomplete - try again')
     }
 
     // Account switch: clear foreign prefs BEFORE writing new tokens

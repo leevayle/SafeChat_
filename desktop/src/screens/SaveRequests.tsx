@@ -280,7 +280,7 @@ export function SaveRequests({ onClose, onChat }: Props) {
             <p className="text-sm font-semibold text-gray-400">
               {tab === 'incoming'
                 ? 'When someone wants to save you as a contact, their request will show up here.'
-                : 'Requests you send appear here — from the first to the latest.'}
+                : 'Requests you send appear here - from the first to the latest.'}
             </p>
           </div>
         ) : (

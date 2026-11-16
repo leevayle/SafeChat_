@@ -22,6 +22,7 @@ import { ImageCropper } from '../components/ImageCropper'
 import { LogoIcon, Wordmark } from '../components/Logo'
 import { fileToDataUrl } from '../lib/imageProcess'
 import { StatusAudiencePicker } from '../components/StatusAudiencePicker'
+import { APP_VERSION } from '../config'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 const WHO = ['Everyone', 'My contacts', 'Nobody']
@@ -2203,7 +2204,7 @@ export function Settings({
                 />
                 <div className="flex items-center justify-between px-4 py-3">
                   <span className="text-sm font-semibold text-ink">App version</span>
-                  <span className="text-sm font-normal text-gray-400">1.0.0</span>
+                  <span className="text-sm font-normal text-gray-400">{APP_VERSION}</span>
                 </div>
               </Card>
             </motion.div>

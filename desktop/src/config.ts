@@ -19,3 +19,8 @@ function normalizeOrigin(value: string | undefined): string {
 
 export const API_ORIGIN = normalizeOrigin(import.meta.env.VITE_API_URL)
 export const API_BASE = import.meta.env.DEV ? '' : API_ORIGIN
+
+/** App version from build env (VITE_APP_VERSION) or default. */
+export const APP_VERSION = String(
+  import.meta.env.VITE_APP_VERSION || import.meta.env.VITE_SAFECHAT_VERSION || '1.0.0',
+).trim() || '1.0.0'

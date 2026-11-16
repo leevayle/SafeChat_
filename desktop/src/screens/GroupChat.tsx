@@ -66,7 +66,7 @@ export function GroupChat({
       refreshGroups().catch(() => {})
     } catch (e: any) {
       setMsgs((m) => m.map((x) => (x.id === localId ? { ...x, state: 'failed' } : x)))
-      showToast(e?.message || 'Message failed — tap to retry')
+      showToast(e?.message || 'Message failed - tap to retry')
     }
   }
 
@@ -161,7 +161,7 @@ export function GroupChat({
                       {m.state === 'pending' ? (
                         <Clock size={13} strokeWidth={2.5} aria-label="Sending" />
                       ) : m.state === 'failed' ? (
-                        <RotateCcw size={13} strokeWidth={2.5} className="text-red-200" aria-label="Failed — tap to retry" />
+                        <RotateCcw size={13} strokeWidth={2.5} className="text-red-200" aria-label="Failed - tap to retry" />
                       ) : (
                         <Check size={13} strokeWidth={2.5} aria-label="Sent" />
                       )}
