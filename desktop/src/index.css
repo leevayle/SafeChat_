@@ -371,6 +371,19 @@ html[data-mode="dark"] .dark\:block {
   display: block !important;
 }
 
+
+/* Unread badge outer ring follows shell surface in dark mode */
+html.dark .sc-badge-ring,
+html[data-mode="dark"] .sc-badge-ring {
+  --tw-ring-color: #121821 !important;
+  box-shadow: 0 0 0 2px #121821 !important;
+}
+html.dark .sc-badge-ring-surface,
+html[data-mode="dark"] .sc-badge-ring-surface {
+  --tw-ring-color: #0b1220 !important;
+  box-shadow: 0 0 0 2px #0b1220 !important;
+}
+
 /* Live typing caret — hard blink */
 @keyframes sc-caret {
   0%, 49% { opacity: 1; }

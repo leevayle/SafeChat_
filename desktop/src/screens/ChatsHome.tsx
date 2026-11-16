@@ -373,7 +373,7 @@ export function ChatsHome({
                   <span className="relative">
                     <MoreVertical size={22} />
                     {systemNotifCount > 0 ? (
-                      <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-brand-red ring-2 ring-white" />
+                      <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 sc-badge-ring-surface rounded-full bg-brand-red ring-2 ring-white dark:ring-[#0b1220]" />
                     ) : null}
                   </span>
                 </IconBtn>

@@ -458,15 +458,27 @@ export function Settings({
                         <img
                           src="/pixeldroid-light.png"
                           alt="PixelDroid"
-                          className="h-7 w-auto max-w-[120px] object-contain"
+                          className="h-7 w-auto max-w-[120px] object-contain dark:hidden"
+                        />
+                        <img
+                          src="/pixeldroid-dark.png"
+                          alt="PixelDroid"
+                          className="hidden h-7 w-auto max-w-[120px] object-contain dark:block"
                         />
                       </a>
                     ) : (
-                      <img
-                        src="/pixeldroid-light.png"
-                        alt="PixelDroid"
-                        className="h-7 w-auto max-w-[120px] object-contain"
-                      />
+                      <>
+                        <img
+                          src="/pixeldroid-light.png"
+                          alt="PixelDroid"
+                          className="h-7 w-auto max-w-[120px] object-contain dark:hidden"
+                        />
+                        <img
+                          src="/pixeldroid-dark.png"
+                          alt="PixelDroid"
+                          className="hidden h-7 w-auto max-w-[120px] object-contain dark:block"
+                        />
+                      </>
                     )}
                   </div>
                 </div>

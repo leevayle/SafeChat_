@@ -83,3 +83,5 @@ Fix those issues and do not break anything else. do not use the ai dash, check u
 --------------------->>>>>>>>>>
 - When user sends support ticket send with user app version info.
 - Fonts not rendering properly (fonts take longer to load we need offline options - download some major fonts)
+- Take me to the status i have not viewed do not start from scratch when i have some i have  already viewed.
+- 

@@ -68,7 +68,7 @@ export function NavRail({ active, badges = {}, onSelect, onLogout, loading }: Pr
             >
               <Icon size={22} strokeWidth={isActive ? 2.25 : 1.9} />
               {badge > 0 && (
-                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-red px-1 text-[10px] font-black text-white">
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center sc-badge-ring-surface rounded-full bg-brand-red px-1 text-[10px] font-black text-white ring-2 ring-white dark:ring-[#0b1220]">
                   {badge > 9 ? '9+' : badge}
                 </span>
               )}

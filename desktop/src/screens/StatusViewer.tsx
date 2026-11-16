@@ -796,19 +796,22 @@ export function StatusViewer({
         <Avatar contact={user} size={40} />
         <div className="min-w-0 flex-1">
           <p className={`truncate font-extrabold ${fg.text}`}>{user.name}</p>
-          <p className={`flex flex-wrap items-center gap-1 text-xs font-semibold ${fg.muted}`}>
-            <span>
+          <p className={`flex items-center gap-1.5 text-xs font-semibold leading-none ${fg.muted}`}>
+            <span className="leading-none">
               {formatStatusTime(current.createdAt || current.ago) ||
                 formatLocalTime(current.createdAt || current.ago) ||
                 ''}
             </span>
             {isRepost ? (
-              <span className={`inline-flex items-center gap-0.5 ${fg.muted}`} title="Reposted">
-                <Repeat2 size={12} strokeWidth={2.4} />
-                <span className="text-[10px] font-bold">Reposted</span>
+              <span
+                className={`inline-flex items-center gap-1 leading-none ${fg.muted}`}
+                title="Reposted"
+              >
+                <Repeat2 size={12} strokeWidth={2.5} className="shrink-0 translate-y-[0.5px]" />
+                <span className="text-xs font-semibold leading-none">Reposted</span>
               </span>
             ) : null}
-            {paused ? <span>· paused</span> : null}
+            {paused ? <span className="leading-none">· paused</span> : null}
           </p>
         </div>
         <button

@@ -54,7 +54,7 @@ export function BottomNav({
                 strokeWidth={active ? 2.4 : 2}
               />
               {count > 0 ? (
-                <span className="absolute -right-2.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand-red px-1 text-[10px] font-black leading-none text-white ring-2 ring-white">
+                <span className="absolute -right-2.5 -top-1.5 flex h-4 min-w-4 items-center justify-center sc-badge-ring rounded-full bg-brand-red px-1 text-[10px] font-black leading-none text-white ring-2 ring-white dark:ring-[#121821]">
                   {count > 9 ? '9+' : count}
                 </span>
               ) : null}
