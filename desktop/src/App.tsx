@@ -51,7 +51,7 @@ export default function App() {
 }
 
 function Shell() {
-  const { ready, listsReady, me, logout, contacts, toast, clearToast, settings, chats, groups, calls } = useStore()
+  const { ready, listsReady, me, logout, contacts, toast, clearToast, settings, chats, groups, calls, markStatusesViewed } = useStore()
   const [logoutConfirm, setLogoutConfirm] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT)
@@ -101,6 +101,12 @@ function Shell() {
   const groupUnread = (groups || []).reduce((n, g: any) => n + (g.unread > 0 ? 1 : 0), 0)
 
   const requestLogout = () => setLogoutConfirm(true)
+  const openStatus = (userId: string, statusId?: string) => {
+    if (!userId) return
+    // Clear ring color immediately; StatusViewer will hit the API
+    if (me?.id && userId !== me.id) markStatusesViewed(userId, me.id)
+    setStatusUser({ userId, statusId })
+  }
   const confirmLogout = async () => {
     setLogoutConfirm(false)
     setLoggingOut(true)
@@ -118,9 +124,33 @@ function Shell() {
       setLoginBackVisible(false)
       setStage('login')
     } finally {
+      // Keep the farewell screen visible briefly so session-expiry logouts feel intentional
+      await new Promise((r) => setTimeout(r, 480))
       setLoggingOut(false)
     }
   }
+
+  // Session forced dead (refresh fail / revoked): show farewell screen while wiping
+  useEffect(() => {
+    const onFail = () => {
+      setLogoutConfirm(false)
+      setLoggingOut(true)
+      void (async () => {
+        try {
+          setChat(null)
+          setGroup(null)
+          setCall(null)
+          setOverlay(null)
+          setStage('login')
+        } finally {
+          await new Promise((r) => setTimeout(r, 700))
+          setLoggingOut(false)
+        }
+      })()
+    }
+    window.addEventListener('sc:auth-failed', onFail)
+    return () => window.removeEventListener('sc:auth-failed', onFail)
+  }, [])
 
   const [stage, setStage] = useState<Stage>('splash')
   const [loginBackVisible, setLoginBackVisible] = useState(false)
@@ -540,40 +570,36 @@ function Shell() {
           )}
           
         {logoutConfirm && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
-            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
-              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
-              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
-                You will need to sign in again to use SafeChat on this device.
+          <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setLogoutConfirm(false)}>
+            <div
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:rounded-3xl sm:p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gray-200 dark:bg-white/15 sm:hidden" />
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out of SafeChat?</p>
+              <p className="mt-1.5 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                Your chats stay on this device cache. Sign in again anytime.
               </p>
-              <div className="mt-6 flex gap-3">
-                <button
-                  type="button"
-                  className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200"
-                  onClick={() => setLogoutConfirm(false)}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white"
-                  onClick={() => void confirmLogout()}
-                >
-                  Log out
-                </button>
+              <div className="mt-5 flex flex-col gap-2.5">
+                <button type="button" className="w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+                <button type="button" className="w-full rounded-full bg-gray-100 py-3.5 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Stay signed in</button>
               </div>
             </div>
           </div>
         )}
         {loggingOut && (
-          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
-            <div className="flex flex-col items-center gap-4">
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center px-6">
+            <div className="flex flex-col items-center gap-5">
+              <p className="bg-gradient-to-r from-[#E3404C] via-[#8A2BE2] to-[#5984F2] bg-clip-text text-3xl font-black tracking-tight text-transparent">
+                SafeChat.
+              </p>
               <div className="flex gap-2">
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
               </div>
-              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
+              <p className="text-center text-sm font-extrabold text-gray-600 dark:text-gray-300">See you soon :)</p>
+              <p className="text-center text-xs font-semibold text-gray-400">Signing you out safely…</p>
             </div>
           </div>
         )}
@@ -659,7 +685,7 @@ function Shell() {
     onSettings: () => setOverlay('settings'),
     onContacts: () => setOverlay('contacts'),
     onSaveRequests: () => setOverlay('saveRequests'),
-    onOpenStatus: (id: string) => id && setStatusUser({ userId: id }),
+    onOpenStatus: (id: string) => id && openStatus(id),
     onNotifications: () => setOverlay('notifications'),
     onSupport: () => setOverlay('support'),
   }
@@ -701,7 +727,7 @@ function Shell() {
             <Settings
               onBack={() => setOverlay(null)}
               onSupport={() => setOverlay('support')}
-              onLogout={requestLogout}
+              onLogout={() => void confirmLogout()}
               onPasswordChanged={handlePasswordChanged}
             />
           </div>
@@ -713,7 +739,7 @@ function Shell() {
             <Settings
               onBack={() => setOverlay(null)}
               onSupport={() => setOverlay('support')}
-              onLogout={requestLogout}
+              onLogout={() => void confirmLogout()}
               onPasswordChanged={handlePasswordChanged}
             />
           </div>
@@ -768,7 +794,7 @@ function Shell() {
               }}
               onOpenStatus={(userId, statusId) => {
                 setOverlay(null)
-                setStatusUser({ userId, statusId })
+                openStatus(userId, statusId)
               }}
             />
           </div>
@@ -787,7 +813,12 @@ function Shell() {
             userId={statusUser.userId}
             initialStatusId={statusUser.statusId}
             onClose={() => setStatusUser(null)}
-            onReplyToStatus={(peerId) => {
+            onOpenChat={(peerId) => {
+            setStatusUser(null)
+            setTab('chats')
+            setChat(peerId)
+          }}
+          onReplyToStatus={(peerId) => {
               setStatusUser(null)
               setChat(peerId)
             }}
@@ -852,7 +883,7 @@ function Shell() {
       tab === 'groups' ? (
         <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
       ) : tab === 'status' ? (
-        <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
+        <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && openStatus(id, statusId)} />
       ) : tab === 'calls' ? (
         <CallsTab
           onCall={placeCall}
@@ -884,7 +915,7 @@ function Shell() {
               setChat(null)
               setTab('calls')
             }}
-            onOpenStatus={(userId, statusId) => setStatusUser({ userId, statusId })}
+            onOpenStatus={(userId, statusId) => openStatus(userId, statusId)}
           />
         </ErrorBoundary>
       )
@@ -934,7 +965,7 @@ function Shell() {
         <Settings
           onBack={() => setOverlay(null)}
           onSupport={() => setOverlay('support')}
-          onLogout={requestLogout}
+          onLogout={() => void confirmLogout()}
           onPasswordChanged={handlePasswordChanged}
         />
       )
@@ -954,7 +985,7 @@ function Shell() {
           }}
           onOpenStatus={(userId, statusId) => {
             setOverlay(null)
-            setStatusUser({ userId, statusId })
+            openStatus(userId, statusId)
           }}
         />
       )
@@ -1038,7 +1069,12 @@ function Shell() {
               userId={statusUser.userId}
               initialStatusId={statusUser.statusId}
               onClose={() => setStatusUser(null)}
-              onReplyToStatus={(peerId) => {
+              onOpenChat={(peerId) => {
+            setStatusUser(null)
+            setTab('chats')
+            setChat(peerId)
+          }}
+          onReplyToStatus={(peerId) => {
                 setStatusUser(null)
                 setChat(peerId)
               }}
@@ -1124,28 +1160,36 @@ function Shell() {
         />
 
         {logoutConfirm && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
-            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
-              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
-              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
-                You will need to sign in again to use SafeChat on this device.
+          <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setLogoutConfirm(false)}>
+            <div
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:rounded-3xl sm:p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gray-200 dark:bg-white/15 sm:hidden" />
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out of SafeChat?</p>
+              <p className="mt-1.5 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                Your chats stay on this device cache. Sign in again anytime.
               </p>
-              <div className="mt-6 flex gap-3">
-                <button type="button" className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Cancel</button>
-                <button type="button" className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+              <div className="mt-5 flex flex-col gap-2.5">
+                <button type="button" className="w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+                <button type="button" className="w-full rounded-full bg-gray-100 py-3.5 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Stay signed in</button>
               </div>
             </div>
           </div>
         )}
         {loggingOut && (
-          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
-            <div className="flex flex-col items-center gap-4">
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center px-6">
+            <div className="flex flex-col items-center gap-5">
+              <p className="bg-gradient-to-r from-[#E3404C] via-[#8A2BE2] to-[#5984F2] bg-clip-text text-3xl font-black tracking-tight text-transparent">
+                SafeChat.
+              </p>
               <div className="flex gap-2">
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
               </div>
-              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
+              <p className="text-center text-sm font-extrabold text-gray-600 dark:text-gray-300">See you soon :)</p>
+              <p className="text-center text-xs font-semibold text-gray-400">Signing you out safely…</p>
             </div>
           </div>
         )}
@@ -1185,7 +1229,7 @@ function Shell() {
         <Settings
           onBack={() => setOverlay(null)}
           onSupport={() => setOverlay('support')}
-          onLogout={requestLogout}
+          onLogout={() => void confirmLogout()}
           onPasswordChanged={handlePasswordChanged}
         />
       )
@@ -1198,7 +1242,7 @@ function Shell() {
             setChat(id)
           }}
           onOpenStatus={(userId, statusId) => {
-            setStatusUser({ userId, statusId })
+            openStatus(userId, statusId)
           }}
         />
       )
@@ -1255,7 +1299,7 @@ function Shell() {
               setChat(null)
               setTab('calls')
             }}
-            onOpenStatus={(userId, statusId) => setStatusUser({ userId, statusId })}
+            onOpenStatus={(userId, statusId) => openStatus(userId, statusId)}
           />
         </ErrorBoundary>
       )
@@ -1279,7 +1323,7 @@ function Shell() {
               <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
             </div>
             <div className={tab === 'status' ? 'h-full' : 'hidden'}>
-              <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
+              <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && openStatus(id, statusId)} />
             </div>
             <div className={tab === 'calls' ? 'h-full' : 'hidden'}>
               <CallsTab
@@ -1328,7 +1372,12 @@ function Shell() {
                 userId={statusUser.userId}
                 initialStatusId={statusUser.statusId}
                 onClose={() => setStatusUser(null)}
-                onReplyToStatus={(peerId) => {
+                onOpenChat={(peerId) => {
+            setStatusUser(null)
+            setTab('chats')
+            setChat(peerId)
+          }}
+          onReplyToStatus={(peerId) => {
                   setStatusUser(null)
                   setChat(peerId)
                   setTab('chats')
@@ -1365,28 +1414,36 @@ function Shell() {
         )}
 
         {logoutConfirm && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
-            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
-              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
-              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
-                You will need to sign in again to use SafeChat on this device.
+          <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setLogoutConfirm(false)}>
+            <div
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:rounded-3xl sm:p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gray-200 dark:bg-white/15 sm:hidden" />
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out of SafeChat?</p>
+              <p className="mt-1.5 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                Your chats stay on this device cache. Sign in again anytime.
               </p>
-              <div className="mt-6 flex gap-3">
-                <button type="button" className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Cancel</button>
-                <button type="button" className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+              <div className="mt-5 flex flex-col gap-2.5">
+                <button type="button" className="w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+                <button type="button" className="w-full rounded-full bg-gray-100 py-3.5 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Stay signed in</button>
               </div>
             </div>
           </div>
         )}
         {loggingOut && (
-          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
-            <div className="flex flex-col items-center gap-4">
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center px-6">
+            <div className="flex flex-col items-center gap-5">
+              <p className="bg-gradient-to-r from-[#E3404C] via-[#8A2BE2] to-[#5984F2] bg-clip-text text-3xl font-black tracking-tight text-transparent">
+                SafeChat.
+              </p>
               <div className="flex gap-2">
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
               </div>
-              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
+              <p className="text-center text-sm font-extrabold text-gray-600 dark:text-gray-300">See you soon :)</p>
+              <p className="text-center text-xs font-semibold text-gray-400">Signing you out safely…</p>
             </div>
           </div>
         )}
@@ -1414,7 +1471,7 @@ function Shell() {
             <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
           </div>
           <div className={tab === 'status' ? 'h-full' : 'hidden'}>
-            <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && setStatusUser({ userId: id, statusId })} />
+            <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && openStatus(id, statusId)} />
           </div>
           <div className={tab === 'calls' ? 'h-full' : 'hidden'}>
             <CallsTab
@@ -1449,7 +1506,7 @@ function Shell() {
                   setChat(null)
                   setTab('calls')
                 }}
-                onOpenStatus={(userId, statusId) => setStatusUser({ userId, statusId })}
+                onOpenStatus={(userId, statusId) => openStatus(userId, statusId)}
               />
             </ErrorBoundary>
           </div>
@@ -1464,28 +1521,36 @@ function Shell() {
         {renderOverlays(true)}
         
         {logoutConfirm && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 px-4 backdrop-blur-sm">
-            <div className="w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl dark:bg-[#1a222d]">
-              <p className="text-lg font-black text-ink dark:text-gray-100">Log out?</p>
-              <p className="mt-2 text-sm font-semibold text-gray-500 dark:text-gray-400">
-                You will need to sign in again to use SafeChat on this device.
+          <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setLogoutConfirm(false)}>
+            <div
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:rounded-3xl sm:p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gray-200 dark:bg-white/15 sm:hidden" />
+              <p className="text-lg font-black text-ink dark:text-gray-100">Log out of SafeChat?</p>
+              <p className="mt-1.5 text-sm font-semibold text-gray-500 dark:text-gray-400">
+                Your chats stay on this device cache. Sign in again anytime.
               </p>
-              <div className="mt-6 flex gap-3">
-                <button type="button" className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Cancel</button>
-                <button type="button" className="flex-1 rounded-full bg-brand-red py-3 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+              <div className="mt-5 flex flex-col gap-2.5">
+                <button type="button" className="w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white" onClick={() => void confirmLogout()}>Log out</button>
+                <button type="button" className="w-full rounded-full bg-gray-100 py-3.5 text-sm font-extrabold text-gray-700 dark:bg-white/10 dark:text-gray-200" onClick={() => setLogoutConfirm(false)}>Stay signed in</button>
               </div>
             </div>
           </div>
         )}
         {loggingOut && (
-          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center">
-            <div className="flex flex-col items-center gap-4">
+          <div className="sc-auth-gradient fixed inset-0 z-[210] flex flex-col items-center justify-center px-6">
+            <div className="flex flex-col items-center gap-5">
+              <p className="bg-gradient-to-r from-[#E3404C] via-[#8A2BE2] to-[#5984F2] bg-clip-text text-3xl font-black tracking-tight text-transparent">
+                SafeChat.
+              </p>
               <div className="flex gap-2">
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#E3404C]" style={{ animationDelay: '0ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#8A2BE2]" style={{ animationDelay: '150ms' }} />
                 <span className="h-2.5 w-2.5 animate-bounce rounded-full bg-[#5984F2]" style={{ animationDelay: '300ms' }} />
               </div>
-              <p className="text-sm font-extrabold text-gray-600 dark:text-gray-300">Logging you out…</p>
+              <p className="text-center text-sm font-extrabold text-gray-600 dark:text-gray-300">See you soon :)</p>
+              <p className="text-center text-xs font-semibold text-gray-400">Signing you out safely…</p>
             </div>
           </div>
         )}

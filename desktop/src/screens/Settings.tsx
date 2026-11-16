@@ -393,7 +393,7 @@ export function Settings({
               </div>
 
               <div>
-                <SectionLabel>Support</SectionLabel>
+                <SectionLabel>Customer care</SectionLabel>
                 <Card>
                   <Row label="Help" onClick={() => setPage('help')} />
                   <Row label="Blocked contacts" onClick={() => setPage('blocked')} />
@@ -658,7 +658,8 @@ export function Settings({
                     'Only share with…',
                   ])}
                 />
-                {s.statusPrivacy !== 'My contacts' && (
+                {(s.statusPrivacy === 'Only share with…' ||
+                  s.statusPrivacy === 'Contacts except…') && (
                   <div className="space-y-2 px-4 pb-4">
                     <p className="text-xs font-semibold text-gray-500">
                       {s.statusPrivacy === 'Only share with…'
@@ -1506,15 +1507,15 @@ export function Settings({
           
           {page === 'premium' && (
             <motion.div key="premium" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="space-y-4">
-              <div className="rounded-3xl bg-gradient-to-br from-brand-purple/15 to-brand-orange/10 p-4">
+              <div className="rounded-3xl bg-gradient-to-br from-brand-purple/15 to-brand-orange/10 p-4 ring-1 ring-brand-purple/10">
                 <p className="text-sm font-extrabold text-ink">
                   {((s as any).subscriptionPlan || me?.subscriptionPlan) === 'premium' ? 'Premium member' : 'Pro · Free plan'}
                 </p>
-                {((s as any).subscriptionPlan) === 'premium' && (s as any).premiumExpiresAt ? (
-                  <p className="mt-1 text-xs font-bold text-brand-purple/80">
+                {((s as any).subscriptionPlan || me?.subscriptionPlan) === 'premium' ? (
+                  <p className="mt-1 text-xs font-bold text-brand-purple">
                     {(() => {
-                      const exp = Date.parse((s as any).premiumExpiresAt)
-                      if (!exp || Number.isNaN(exp)) return 'Active'
+                      const exp = Date.parse((s as any).premiumExpiresAt || '')
+                      if (!exp || Number.isNaN(exp)) return "You're on Premium"
                       const ms = exp - Date.now()
                       if (ms <= 0) return 'Expired - renew to keep Premium'
                       const h = Math.floor(ms / 3600000)
@@ -1525,9 +1526,9 @@ export function Settings({
                       return `${h}h ${m}m remaining`
                     })()}
                   </p>
-                ) : ((s as any).subscriptionPlan) !== 'premium' ? (
+                ) : (
                   <p className="mt-1 text-xs font-bold text-gray-500">Upgrade via M-Pesa to unlock Premium</p>
-                ) : null}
+                )}
                 <p className="mt-1 text-xs font-semibold text-gray-500">
                   Unlock live presence and stronger messaging tools.
                 </p>
@@ -1775,7 +1776,7 @@ export function Settings({
                   </div>
                 )}
               </Card>
-              {((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium' && (
+              {((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium' ? (
                 <button
                   type="button"
                   className="w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white shadow-md"
@@ -1783,7 +1784,25 @@ export function Settings({
                 >
                   Upgrade to Premium
                 </button>
-              )}
+              ) : null}
+
+              <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/[0.06] dark:bg-[#1a222d] dark:ring-white/[0.06]">
+                <p className="text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Gift Premium</p>
+                <p className="mt-1 text-sm font-extrabold text-ink">Sponsor a friend</p>
+                <p className="mt-0.5 text-xs font-semibold text-gray-500">
+                  Pay Premium for someone by username. Same checkout flow as your own plan.
+                </p>
+                <button
+                  type="button"
+                  className="mt-3 w-full rounded-full bg-brand-orange/15 py-3 text-sm font-extrabold text-brand-orange"
+                  onClick={() => setPage('sponsor' as any)}
+                >
+                  Choose a friend
+                </button>
+                <p className="mt-2 text-center text-[11px] font-semibold text-gray-400">
+                  Checkout is paused until payments go live. Admins can still grant Premium.
+                </p>
+              </div>
             </motion.div>
           )}
 
@@ -1838,30 +1857,22 @@ export function Settings({
               <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]">
                 <button
                   type="button"
-                  disabled={mpesaPaying || mpesaPaid}
-                  className="w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white shadow-md active:scale-[0.99] disabled:opacity-70"
-                  onClick={() => {
-                    if (!mpesaPhone.trim()) {
-                      setMpesaPhone(String(me?.phone || s.phone || ''))
-                    }
-                    setMpesaConfirmOpen(true)
-                  }}
+                  disabled
+                  className="w-full rounded-full bg-brand-purple/50 py-3.5 text-sm font-extrabold text-white shadow-md cursor-not-allowed opacity-70"
+                  title="Payments coming soon"
                 >
-                  {mpesaPaid
-                    ? "You're a Premium user"
-                    : mpesaPaying
-                      ? 'Initiating payment…'
-                      : 'Pay with M-Pesa'}
+                  {mpesaPaid ? "You're a Premium user" : 'Pay with M-Pesa (coming soon)'}
                 </button>
                 <p className="mt-2 text-center text-[11px] font-semibold text-gray-400">
-                  Selected: <span className="font-extrabold text-ink capitalize">{mpesaPlan}</span>
+                  Premium unlock is admin-only until payments go live.
                 </p>
               </div>
 
               <button
                 type="button"
-                onClick={() => setPage('sponsor')}
-                className="flex w-full items-center gap-3 rounded-3xl bg-white px-4 py-4 text-left shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06] active:scale-[0.99]"
+                disabled
+                className="flex w-full items-center gap-3 rounded-3xl bg-white px-4 py-4 text-left shadow-sm ring-1 ring-black/[0.06] opacity-60 cursor-not-allowed dark:ring-white/[0.06]"
+                title="Payments coming soon"
               >
                 <span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-orange/15 text-brand-orange">
                   <User size={20} />
@@ -1869,7 +1880,7 @@ export function Settings({
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-extrabold text-ink">Sponsor a friend</span>
                   <span className="block text-[11px] font-semibold text-gray-400">
-                    Pay Premium for someone by username
+                    Coming soon - admin can grant Premium for now
                   </span>
                 </span>
                 <ChevronRight size={18} className="text-gray-300" />
@@ -2030,8 +2041,33 @@ export function Settings({
               {sponsorPick && (
                 <div className="rounded-3xl bg-white p-4 shadow-sm ring-1 ring-black/[0.06] dark:ring-white/[0.06]">
                   <p className="text-sm font-extrabold text-ink">
-                    Sponsoring @{sponsorPick.username} · <span className="capitalize">{mpesaPlan}</span>
+                    Sponsoring @{sponsorPick.username}
                   </p>
+                  <p className="mt-3 text-[11px] font-extrabold uppercase tracking-wide text-gray-400">Plan</p>
+                  <div className="mt-2 grid gap-2">
+                    {(
+                      [
+                        { id: 'daily' as const, label: 'Daily', price: 99 },
+                        { id: 'weekly' as const, label: 'Weekly', price: 499 },
+                        { id: 'monthly' as const, label: 'Monthly', price: 2999 },
+                      ] as const
+                    ).map((plan) => {
+                      const active = mpesaPlan === plan.id
+                      return (
+                        <button
+                          key={plan.id}
+                          type="button"
+                          onClick={() => setMpesaPlan(plan.id)}
+                          className={`flex w-full items-center justify-between rounded-2xl px-3 py-3 text-left ring-2 transition ${
+                            active ? 'bg-brand-purple/10 ring-brand-purple' : 'bg-gray-50 ring-transparent'
+                          }`}
+                        >
+                          <span className="text-sm font-extrabold text-ink">{plan.label}</span>
+                          <span className="text-sm font-black text-ink">KES {plan.price}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
                   <label className="mt-3 block text-[11px] font-extrabold text-gray-400">Your M-Pesa number</label>
                   <input
                     value={mpesaPhone}
@@ -2198,8 +2234,8 @@ export function Settings({
               <Card>
                 <Row label="FAQ" hint="Coming soon" />
                 <Row
-                  label="Contact support"
-                  hint="Open a support ticket"
+                  label="Contact customer care"
+                  hint="Open a customer care ticket"
                   onClick={() => onSupport?.()}
                 />
                 <div className="flex items-center justify-between px-4 py-3">

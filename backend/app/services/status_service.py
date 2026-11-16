@@ -283,7 +283,8 @@ class StatusService:
                 class _R:
                     upserted_id = None
                 result = _R()
-            # Notify owner of a new unique view so their count updates live
+            # Notify owner of a new unique view with FULL viewer payload first
+            # so the owner can cache the row before relying on view_count alone.
             if result.upserted_id is not None:
                 try:
                     from app.websocket.manager import manager
@@ -291,22 +292,31 @@ class StatusService:
                         {"_id": ObjectId(viewer_id)},
                         {"username": 1, "display_name": 1, "profile_photo": 1},
                     )
-                    # Count after insert
+                    liked_doc = await db.status_likes.find_one(
+                        {"status_id": status_id, "user_id": viewer_id}
+                    )
+                    viewer_payload = {
+                        "viewer_id": viewer_id,
+                        "id": viewer_id,
+                        "username": (viewer or {}).get("username"),
+                        "display_name": (viewer or {}).get("display_name"),
+                        "name": (viewer or {}).get("display_name")
+                        or (viewer or {}).get("username")
+                        or "User",
+                        "profile_photo": (viewer or {}).get("profile_photo"),
+                        "photo": (viewer or {}).get("profile_photo"),
+                        "viewed_at": now.isoformat(),
+                        "liked": bool(liked_doc),
+                    }
+                    # Payload is complete before count is computed/sent
                     view_count = await db.status_views.count_documents({"status_id": status_id})
                     await manager.send_user(
                         str(s["owner_user_id"]),
                         {
                             "t": "status_view",
                             "status_id": status_id,
+                            "viewer": viewer_payload,
                             "view_count": view_count,
-                            "viewer": {
-                                "viewer_id": viewer_id,
-                                "username": (viewer or {}).get("username"),
-                                "display_name": (viewer or {}).get("display_name"),
-                                "profile_photo": (viewer or {}).get("profile_photo"),
-                                "viewed_at": now.isoformat(),
-                                "liked": False,
-                            },
                         },
                     )
                 except Exception:

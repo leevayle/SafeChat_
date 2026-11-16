@@ -81,8 +81,9 @@ export function ContactInfoPanel({ contactId, onCall, onChat }: Props) {
     const phone = c.phone || (c as any).phone_number || ''
     if (!phone) return
     try {
-      await navigator.clipboard.writeText(String(phone))
-      showToast?.('Copied to clipboard')
+      const { copyText } = await import('../../lib/clipboard')
+      const ok = await copyText(String(phone))
+      showToast?.(ok ? 'Copied to clipboard' : 'Could not copy')
     } catch {
       showToast?.('Could not copy')
     }

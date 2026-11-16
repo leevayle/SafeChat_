@@ -651,11 +651,27 @@ export function Notifications({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-8 pt-3">
         {loading && !filtered.length ? (
-          <div className="space-y-2">
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="h-[72px] animate-pulse rounded-2xl bg-white" />
+          <ul className="space-y-2" aria-busy="true" aria-label="Loading notifications">
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <li
+                key={i}
+                className="flex items-center gap-3 rounded-2xl bg-white px-3 py-3 shadow-sm ring-1 ring-black/[0.04] dark:bg-white/[0.06] dark:ring-white/10"
+              >
+                <div className="sk-shimmer h-11 w-11 shrink-0 rounded-full" />
+                <div className="min-w-0 flex-1 space-y-2">
+                  <div
+                    className="sk-shimmer h-3.5 rounded"
+                    style={{ width: `${58 + (i % 3) * 10}%` }}
+                  />
+                  <div
+                    className="sk-shimmer h-2.5 rounded"
+                    style={{ width: `${42 + (i % 4) * 8}%` }}
+                  />
+                </div>
+                <div className="sk-shimmer h-2.5 w-8 shrink-0 rounded" />
+              </li>
             ))}
-          </div>
+          </ul>
         ) : !filtered.length ? (
           <div className="flex flex-col items-center justify-center px-8 pt-20 text-center">
             <div className="flex h-16 w-16 items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-black/5">

@@ -460,7 +460,7 @@ export function ChatsHome({
                     },
                     Icon: RefreshCw,
                   },
-                  { label: 'Support', fn: onSupport, Icon: Headphones },
+                  { label: 'Customer care', fn: onSupport, Icon: Headphones },
                   { label: 'Settings', fn: onSettings, Icon: Settings2 },
                 ] as const
               ).map(({ label, fn, Icon, ...rest }, i, arr) => {

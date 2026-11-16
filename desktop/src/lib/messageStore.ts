@@ -12,6 +12,7 @@ import {
   removeConversationCache,
   setCachedMessages,
 } from './messageCache'
+import { statusReplyPreviewLabel } from './statusReply'
 
 type Listener = (msgs: ApiMsg[]) => void
 
@@ -182,11 +183,7 @@ export function previewFromThread(conversationId: string | null | undefined): {
   if (!lastText && last.deleted) lastText = 'Message deleted'
   if (!lastText) lastText = 'Message'
   // Strip status-reply envelope for the home row
-  const sr = lastText.match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
-  if (sr) {
-    const replyBody = (sr[4] || '').trim()
-    lastText = replyBody ? `Status reply: ${replyBody}` : 'Status reply'
-  }
+  lastText = statusReplyPreviewLabel(lastText)
   return {
     last: lastText,
     iso: last.time,

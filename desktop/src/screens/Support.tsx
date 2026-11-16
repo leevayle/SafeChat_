@@ -32,7 +32,7 @@ export function Support({ onClose }: Props) {
         for (const ticket of result.items) {
           const seen = knownReplies.current.get(ticket.id) || new Set<string>()
           if (ticket.replies.some((reply) => reply.authorRole !== 'USER' && !seen.has(reply.id))) {
-            showToast(`SafeChat Support replied: ${ticket.subject}`)
+            showToast(`Customer care replied: ${ticket.subject}`)
           }
         }
       }
@@ -64,7 +64,7 @@ export function Support({ onClose }: Props) {
       knownReplies.current.set(ticket.id, new Set())
       setSubject('')
       setBody('')
-      showToast('Support request sent')
+      showToast('Customer care request sent')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to send your support request.')
     } finally {
@@ -92,7 +92,7 @@ export function Support({ onClose }: Props) {
 
   return (
     <div className="flex h-full flex-col bg-white">
-      <ScreenHeader title="Support" onBack={onClose} />
+      <ScreenHeader title="Customer care" onBack={onClose} />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-4">
         <div className="mb-5 flex items-start gap-3 rounded-2xl bg-brand-purple/5 px-4 py-3">
           <LifeBuoy className="mt-0.5 shrink-0 text-brand-purple" size={22} />
@@ -119,13 +119,13 @@ export function Support({ onClose }: Props) {
           className="mb-3 w-full resize-none rounded-2xl border border-gray-200 px-4 py-3 font-semibold outline-none focus:border-brand-purple"
         />
         <PillButton
-          variant="orange"
+          variant="purple"
           onClick={submitTicket}
           loading={sending}
           disabled={!subject.trim() || !body.trim()}
         >
           <span className="inline-flex items-center gap-2">
-            <Send size={16} /> Send to support
+            <Send size={16} /> Send to customer care
           </span>
         </PillButton>
 
@@ -163,7 +163,7 @@ export function Support({ onClose }: Props) {
                       ? 'bg-gray-200 text-gray-600'
                       : 'bg-amber-100 text-amber-700'
                 }`}>
-                  {ticket.status === 'replied' ? 'Support replied' : ticket.status}
+                  {ticket.status === 'replied' ? 'Customer care replied' : ticket.status}
                 </span>
               </div>
               <p className="mt-1 whitespace-pre-wrap text-sm font-semibold text-gray-600">{ticket.body}</p>
@@ -173,7 +173,7 @@ export function Support({ onClose }: Props) {
                   <p className={`mb-1 flex items-center gap-1 text-xs font-extrabold ${
                     reply.authorRole === 'USER' ? 'text-gray-500' : 'text-brand-purple'
                   }`}>
-                    <MessageCircle size={12} />{reply.authorRole === 'USER' ? 'You' : 'SafeChat Support'}
+                    <MessageCircle size={12} />{reply.authorRole === 'USER' ? 'You' : 'Customer care'}
                   </p>
                   <p className="whitespace-pre-wrap text-sm font-semibold text-gray-700">{reply.body}</p>
                   <p className="mt-1 text-[11px] font-bold text-gray-400">{ticketTime(reply.createdAt)}</p>

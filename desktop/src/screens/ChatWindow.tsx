@@ -34,6 +34,8 @@ import { warmPhoto } from '../lib/photoCache'
 import { putOutbox, removeOutbox } from '../lib/appCache'
 import { API_ORIGIN } from '../config'
 import { linkifyText } from '../lib/linkify'
+import { copyText } from '../lib/clipboard'
+import { encodeStatusReply, parseStatusReply } from '../lib/statusReply'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 type Props = { contactId: string; onBack: () => void; onCall: (kind: 'audio' | 'video') => void; onOpenCalls?: () => void; onOpenStatus?: (userId: string, statusId?: string) => void }
@@ -187,6 +189,14 @@ const MessageBubble = memo(function MessageBubble({
   const startY = useRef(0)
   const [dx, setDx] = useState(0)
   const [hoverReact, setHoverReact] = useState(false)
+
+  // Always surface quoted status card even if cache still has the raw envelope
+  if (!m.statusReply && m.text) {
+    const parsed = parseStatusReply(String(m.text))
+    if (parsed.statusReply) {
+      m = { ...m, text: parsed.text, statusReply: parsed.statusReply }
+    }
+  }
 
   if (m.callLog) {
     const missed = m.callLog.status === 'missed' || m.callLog.direction === 'missed'
@@ -1045,10 +1055,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       if (!text && detail.m.image) text = '📷 Photo'
       if (!text) text = 'Message'
       let statusReply: { preview: string; time?: string; statusId?: string } | null = null
-      const sr = text.match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
-      if (sr) {
-        statusReply = { preview: sr[1], time: sr[2] || undefined, statusId: sr[3] || undefined }
-        text = sr[4] || 'Status reply'
+      {
+        const parsed = parseStatusReply(text)
+        if (parsed.statusReply) {
+          statusReply = parsed.statusReply
+          text = parsed.text || 'Status reply'
+        }
       }
       const ck = (detail.m as any).client_key || (detail.m as any).clientKey || detail.m.id
       const incoming = {
@@ -1493,8 +1505,11 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       // Prefer persistent WebSocket (no new HTTP handshake)
       let wsText = body || ''
       if (opts?.statusReply) {
-        const sid = opts.statusReply.statusId ? `⟦id⟧${opts.statusReply.statusId}` : ''
-        wsText = `⟦status⟧${opts.statusReply.preview || ''}⟦t⟧${opts.statusReply.time || ''}${sid}⟦/⟧${wsText}`
+        wsText = encodeStatusReply(wsText, {
+          preview: opts.statusReply.preview || '',
+          time: opts.statusReply.time,
+          statusId: opts.statusReply.statusId,
+        })
       }
       const usedWs = isRealtimeOpen() && wsSendMessage({
         conversationId: cid,
@@ -3076,12 +3091,15 @@ return (
             {(c.phone || (c as any).phone_number) ? (
               <button
                 type="button"
-                className="mt-1 text-sm font-semibold text-gray-500 hover:text-brand-purple"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(String(c.phone || (c as any).phone_number || ''))
-                    showToast?.('Copied to clipboard')
-                  } catch { showToast?.('Could not copy') }
+                className="mt-1 touch-manipulation text-sm font-semibold text-gray-500 hover:text-brand-purple active:text-brand-purple"
+                onPointerUp={(e) => {
+                  e.stopPropagation()
+                }}
+                onClick={async (e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
+                  const ok = await copyText(String(c.phone || (c as any).phone_number || ''))
+                  showToast?.(ok ? 'Copied to clipboard' : 'Could not copy')
                 }}
               >
                 {c.phone || (c as any).phone_number}
@@ -3164,12 +3182,12 @@ return (
               {(c.phone || (c as any).phone_number) ? (
                 <button
                   type="button"
-                  className="w-full rounded-2xl bg-gray-50 px-4 py-3 text-left transition hover:bg-gray-100"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(String(c.phone || (c as any).phone_number || ''))
-                      showToast?.('Copied to clipboard')
-                    } catch { showToast?.('Could not copy') }
+                  className="w-full touch-manipulation rounded-2xl bg-gray-50 px-4 py-3 text-left transition hover:bg-gray-100 active:bg-gray-100"
+                  onClick={async (e) => {
+                    e.stopPropagation()
+                    e.preventDefault()
+                    const ok = await copyText(String(c.phone || (c as any).phone_number || ''))
+                    showToast?.(ok ? 'Copied to clipboard' : 'Could not copy')
                   }}
                 >
                   <p className="text-[11px] font-black uppercase tracking-wide text-gray-400">Phone</p>

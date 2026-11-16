@@ -456,7 +456,11 @@ export function saveUserAppearance(userId: string | null | undefined, a: Partial
   }
 }
 
-/** Resolve appearance: server settings > per-user cache > defaults. Apply CSS immediately. */
+/**
+ * Resolve appearance for paint.
+ * Order: defaults → server → local cache.
+ * Local cache wins so optimistic theme changes never snap back when /me lags.
+ */
 export function resolveAndApplyAppearance(
   userId: string | null | undefined,
   server?: Partial<Appearance> | null,
@@ -464,11 +468,12 @@ export function resolveAndApplyAppearance(
   const cached = loadUserAppearance(userId)
   const merged: Appearance = {
     ...defaultAppearance(),
-    ...(cached || {}),
     ...(server?.theme ? { theme: String(server.theme) } : {}),
     ...(server?.chatAccent ? { chatAccent: String(server.chatAccent) } : {}),
     ...(server?.colorMode ? { colorMode: String(server.colorMode) } : {}),
     ...(server?.liquidGlass != null ? { liquidGlass: !!server.liquidGlass } : {}),
+    // Optimistic local choice always wins over a stale server payload
+    ...(cached || {}),
   }
   applyAppearance(merged)
   if (userId) saveUserAppearance(userId, merged)
@@ -561,6 +566,8 @@ type Store = {
   refreshSaveRequests: () => Promise<void>
   /** Optimistic local updates to status feed (UI-first) */
   patchStatusList: (fn: (list: any[]) => any[]) => void
+  /** Mark a user's statuses viewed immediately (clears ring color on open) */
+  markStatusesViewed: (ownerUserId: string, viewerId?: string | null) => void
   /** Optimistic upsert of a chat preview so ChatsHome updates instantly on send */
   upsertChatPreview: (preview: Partial<ChatPreview> & { contactId: string }) => void
   typingPeers: Record<string, boolean>
@@ -741,7 +748,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           isPremium &&
           (ps.status_ads_enabled !== false) &&
           ((s as any)?.statusAdsEnabled !== false),
-        // Appearance always wins from resolve (server > cache > defaults)
+        // Appearance: resolve already prefers local cache over stale server
         theme: appearance.theme,
         chatAccent: appearance.chatAccent,
         colorMode: appearance.colorMode,
@@ -1021,6 +1028,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const tb = b.createdAt ? Date.parse(b.createdAt) : 0
           return ta - tb
         })
+      // Prefetch viewers for my statuses so the sheet opens from cache
+      const myId = meRef.current?.id
+      if (myId) {
+        const mine = active.filter((s: any) => String(s.userId) === String(myId) && s.id)
+        void (async () => {
+          try {
+            const { saveCachedViewers } = await import('./lib/appCache')
+            await Promise.all(
+              mine.slice(0, 12).map(async (s: any) => {
+                try {
+                  const { viewers } = await api.statusViewers(String(s.id))
+                  if (Array.isArray(viewers)) await saveCachedViewers(String(s.id), viewers)
+                } catch {
+                  /* soft */
+                }
+              }),
+            )
+          } catch {
+            /* soft */
+          }
+        })()
+      }
       // Cheap equality: id + views length + text/image — avoid full JSON.stringify on every poll
       setStatusList((prev) => {
         // Keep optimistic / pending local statuses so they never flash away
@@ -1081,6 +1110,36 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  /** Prefetch full notification list into IDB so the screen paints from cache. */
+  const prefetchNotifications = useCallback(async () => {
+    if (!hasAccessToken() || isSessionDead()) return
+    try {
+      const { notifications } = await api.listNotifications()
+      const now = Date.now()
+      const list = (notifications || []).filter((n: any) => {
+        const exp = n.expires_at || n.expiresAt || n.metadata?.expires_at
+        if (!exp) return true
+        try {
+          let s = String(exp)
+          if (/^\d{4}-\d{2}-\d{2}T/.test(s) && !/[zZ]|[+\-]\d{2}:?\d{2}$/.test(s)) s += 'Z'
+          const t = Date.parse(s)
+          return Number.isNaN(t) || t > now
+        } catch {
+          return true
+        }
+      })
+      try {
+        const { saveCachedNotifications } = await import('./lib/appCache')
+        await saveCachedNotifications(list)
+      } catch { /* */ }
+      try {
+        ;(window as any).__sc_server_notifs = list
+      } catch { /* */ }
+    } catch {
+      /* soft */
+    }
+  }, [])
+
   const refreshSaveRequests = useCallback(async () => {
     if (!hasAccessToken() || isSessionDead()) return
     try {
@@ -1117,6 +1176,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return next
     })
   }, [])
+
+  /** Optimistic: mark a peer's statuses as viewed the moment the viewer opens (ring clears immediately). */
+  const markStatusesViewed = useCallback(
+    (ownerUserId: string, viewerId?: string | null) => {
+      const vid = String(viewerId || meRef.current?.id || '')
+      if (!ownerUserId || !vid) return
+      patchStatusList((list) =>
+        list.map((s: any) => {
+          if (String(s.userId || s.owner_user_id) !== String(ownerUserId)) return s
+          if (String(s.userId || s.owner_user_id) === vid) return s
+          const views = Array.isArray(s.views) ? s.views : []
+          if (views.includes(vid)) return s
+          return { ...s, views: [...views, vid] }
+        }),
+      )
+    },
+    [patchStatusList],
+  )
 
   const upsertChatPreview = useCallback(
     (preview: Partial<ChatPreview> & { contactId: string }) => {
@@ -1298,6 +1375,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshGroups(),
       refreshSaveRequests(),
       refreshNotifCount(),
+      prefetchNotifications(),
       refreshSubscription(),
     ])
     await refreshRecentMessages(false)
@@ -1393,8 +1471,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshGroups(),
       refreshSaveRequests(),
       refreshNotifCount(),
+      prefetchNotifications(),
     ]).then(() => {
-      // Phase 4 — warm photos after secondary data lands
+      // Phase 4 - warm photos after secondary data lands
       try {
         const origin = String((import.meta as any).env?.VITE_API_URL || '')
           .trim()
@@ -1415,7 +1494,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         /* */
       }
     })
-  }, [refreshChats, refreshCalls, refreshStatus, refreshGroups, refreshSaveRequests, refreshNotifCount, refreshContacts, refreshRecentMessages])
+  }, [refreshChats, refreshCalls, refreshStatus, refreshGroups, refreshSaveRequests, refreshNotifCount, prefetchNotifications, refreshContacts, refreshRecentMessages])
 
   const bootStarted = useRef(false)
   useEffect(() => {
@@ -2566,57 +2645,63 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         likeOnly?: boolean
       }
       if (!d?.statusId) return
-      patchStatusList((list) =>
-        list.map((s: any) => {
-          if (s.id !== d.statusId) return s
-          const views = Array.isArray(s.views) ? [...s.views] : []
-          const vid = d.viewer?.viewer_id
-          if (vid && !views.includes(vid)) views.push(vid)
-          return {
-            ...s,
-            views,
-            viewCount: d.viewCount ?? views.length,
-          }
-        }),
-      )
-      if (d.viewer?.viewer_id) {
-        void (async () => {
+      // 1) Cache full viewer payload FIRST so the viewers sheet never waits on a network fetch
+      const run = async () => {
+        if (d.viewer?.viewer_id) {
           try {
             const { loadCachedViewers, saveCachedViewers } = await import('./lib/appCache')
             const prev = (await loadCachedViewers<any>(d.statusId!)) || []
-            const idx = prev.findIndex((v: any) => v.viewer_id === d.viewer.viewer_id || v.id === d.viewer.viewer_id)
+            const vid = String(d.viewer.viewer_id)
+            const idx = prev.findIndex(
+              (v: any) => String(v.viewer_id || v.id) === vid,
+            )
+            const row = {
+              ...d.viewer,
+              id: vid,
+              viewer_id: vid,
+              name:
+                d.viewer.display_name ||
+                d.viewer.name ||
+                d.viewer.username ||
+                'User',
+              username: d.viewer.username || '',
+              photo: d.viewer.profile_photo ?? d.viewer.photo ?? null,
+              liked: !!d.viewer.liked,
+              viewed_at: d.viewer.viewed_at || d.viewer.viewedAt || null,
+            }
             let next: any[]
             if (idx >= 0) {
-              // Update liked flag / fields in place (do not drop cache)
-              next = prev.map((v, i) =>
-                i === idx
-                  ? {
-                      ...v,
-                      ...d.viewer,
-                      liked: d.viewer.liked ?? v.liked,
-                      name: d.viewer.display_name || d.viewer.name || v.name,
-                      photo: d.viewer.profile_photo ?? d.viewer.photo ?? v.photo,
-                    }
-                  : v,
-              )
+              next = prev.map((v, i) => (i === idx ? { ...v, ...row } : v))
             } else {
-              next = [
-                {
-                  ...d.viewer,
-                  id: d.viewer.viewer_id,
-                  name: d.viewer.display_name || d.viewer.username || 'User',
-                  photo: d.viewer.profile_photo || null,
-                  liked: !!d.viewer.liked,
-                },
-                ...prev,
-              ]
+              next = [row, ...prev]
             }
-            // Likers first
             next.sort((a, b) => Number(!!b.liked) - Number(!!a.liked))
             await saveCachedViewers(d.statusId!, next)
+            try {
+              window.dispatchEvent(
+                new CustomEvent('sc:status-viewers-cache', {
+                  detail: { statusId: d.statusId, viewers: next, viewCount: d.viewCount },
+                }),
+              )
+            } catch { /* */ }
           } catch { /* */ }
-        })()
+        }
+        // 2) Then bump view count on the status list
+        patchStatusList((list) =>
+          list.map((s: any) => {
+            if (s.id !== d.statusId) return s
+            const views = Array.isArray(s.views) ? [...s.views] : []
+            const vid = d.viewer?.viewer_id
+            if (vid && !views.includes(vid)) views.push(vid)
+            return {
+              ...s,
+              views,
+              viewCount: d.viewCount ?? Math.max(views.length, Number(s.viewCount) || 0),
+            }
+          }),
+        )
       }
+      void run()
     }
 
     const onNew = (ev: Event) => {
@@ -2723,6 +2808,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshSaveRequests,
       refreshNotifCount,
       patchStatusList,
+      markStatusesViewed,
       upsertChatPreview,
       login,
       register,
@@ -2768,6 +2854,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshSaveRequests,
       refreshNotifCount,
       patchStatusList,
+      markStatusesViewed,
       upsertChatPreview,
       login,
       register,

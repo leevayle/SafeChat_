@@ -1,5 +1,5 @@
 import { statusBgCss, statusFgClasses } from '../lib/statusBg'
-import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Volume2, VolumeX, Heart, Trash2, Eye, Download, Repeat2, Copy } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
@@ -58,6 +58,8 @@ type Props = {
   initialStatusId?: string | null
   onClose: () => void
   onReplyToStatus?: (peerId: string) => void
+  /** Open chat with a status viewer */
+  onOpenChat?: (peerId: string) => void
 }
 
 function loadLikes(): Record<string, boolean> {
@@ -95,12 +97,11 @@ function saveMuted(ids: string[]) {
 type ViewerRow = { id: string; username: string; name: string; photo: string | null; viewedAt: string | null; liked?: boolean }
 
 export function StatusViewer({
-  userId, initialStatusId, onClose, onReplyToStatus }: Props) {
+  userId, initialStatusId, onClose, onReplyToStatus, onOpenChat }: Props) {
   const likeInFlight = useRef(false)
   const lastLikeAt = useRef(0)
   const viewSentRef = useRef<Set<string>>(new Set())
-  const { statusList, refreshStatus, showToast, patchStatusList, me, settings } = useStore()
-  // Only non-expired statuses for this user, oldest first (play order)
+  const { statusList, refreshStatus, showToast, patchStatusList, me, settings, markStatusesViewed } = useStore()
   // Treat naive ISO timestamps as UTC (backend sends without Z)
   const parseUtc = (raw?: string | null) => {
     if (!raw) return NaN
@@ -108,12 +109,40 @@ export function StatusViewer({
     if (/^\d{4}-\d{2}-\d{2}T/.test(s) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z'
     return Date.parse(s)
   }
+  const isActiveStatus = (s: any) => {
+    if (!s?.expiresAt) return true
+    const t = parseUtc(s.expiresAt)
+    return Number.isNaN(t) || t > Date.now()
+  }
+  // Feed order of OTHER users with active status (never include my own in swipe list)
+  const userOrder = useMemo(() => {
+    const seen = new Set<string>()
+    const order: string[] = []
+    const myId = me?.id ? String(me.id) : ''
+    for (const s of statusList) {
+      if (!isActiveStatus(s)) continue
+      const uid = String(s.userId || '')
+      if (!uid || seen.has(uid)) continue
+      if (myId && uid === myId) continue
+      if (loadMuted().includes(uid)) continue
+      seen.add(uid)
+      order.push(uid)
+    }
+    // Keep the opened peer in the list even if muted, but still never inject self
+    if (userId && userId !== myId && !seen.has(userId)) order.unshift(userId)
+    return order
+  }, [statusList, userId, me?.id])
+
+  const [activeUserId, setActiveUserId] = useState(userId)
+  useEffect(() => {
+    setActiveUserId(userId)
+  }, [userId])
+
+  // Only non-expired statuses for the active user, oldest first (play order)
   const items = statusList
     .filter((s) => {
-      if (s.userId !== userId) return false
-      if (!s.expiresAt) return true
-      const t = parseUtc(s.expiresAt)
-      return Number.isNaN(t) || t > Date.now()
+      if (s.userId !== activeUserId) return false
+      return isActiveStatus(s)
     })
     .slice()
     .sort((a, b) => {
@@ -123,10 +152,11 @@ export function StatusViewer({
     })
   const [idx, setIdx] = useState(0)
   const jumpedRef = useRef(false)
+
   useEffect(() => {
     if (jumpedRef.current || !items.length) return
-    // Explicit status reply target wins
-    if (initialStatusId) {
+    // Explicit status reply target wins (only for the original user open)
+    if (initialStatusId && activeUserId === userId) {
       const i = items.findIndex((s) => s.id === initialStatusId)
       if (i >= 0) {
         setIdx(i)
@@ -136,7 +166,7 @@ export function StatusViewer({
     }
     // Jump to first unviewed when some (not all) are already viewed
     const meId = me?.id
-    if (!meId || meId === userId) {
+    if (!meId || meId === activeUserId) {
       jumpedRef.current = true
       return
     }
@@ -151,15 +181,26 @@ export function StatusViewer({
       if (firstUnseen >= 0) setIdx(firstUnseen)
     }
     jumpedRef.current = true
-  }, [initialStatusId, items, me?.id, userId])
+  }, [initialStatusId, items, me?.id, activeUserId, userId])
   const [paused, setPaused] = useState(false)
   const [progress, setProgress] = useState(0)
-  const [muted, setMuted] = useState(() => loadMuted().includes(userId))
+  const [muted, setMuted] = useState(() => loadMuted().includes(activeUserId))
   const [likes, setLikes] = useState<Record<string, boolean>>(() => loadLikes())
   const [likePulse, setLikePulse] = useState(false)
   const [viewersOpen, setViewersOpen] = useState(false)
-  const swipeStartY = useRef(0)
+  const swipeStartY = useRef<number | null>(null)
+  const swipeStartX = useRef<number | null>(null)
+  const swipeDyRef = useRef(0)
+  const swipeDxRef = useRef(0)
+  const replyGestureRef = useRef(false)
   const [swipeDy, setSwipeDy] = useState(0)
+  const isDesktopPointer = useMemo(() => {
+    try {
+      return window.matchMedia('(pointer: fine)').matches && window.matchMedia('(min-width: 900px)').matches
+    } catch {
+      return false
+    }
+  }, [])
   const [viewers, setViewers] = useState<ViewerRow[]>([])
   const [viewersLoading, setViewersLoading] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -184,6 +225,14 @@ export function StatusViewer({
   itemsLenRef.current = items.length
   progressRef.current = progress
 
+  // Reset slide index when switching users
+  useEffect(() => {
+    jumpedRef.current = false
+    setIdx(0)
+    setProgress(0)
+    progressRef.current = 0
+  }, [activeUserId])
+
   // Default segment length when slide changes; video onLoadedMetadata may override
   useEffect(() => {
     segmentMsRef.current = SEGMENT_MS
@@ -205,18 +254,56 @@ export function StatusViewer({
 
   const current = items[idx]
   const liked = current ? !!likes[current.id] : false
-  const isOwner = !!(me?.id && me.id === userId)
+  const isOwner = !!(me?.id && me.id === activeUserId)
   const viewCount = Array.isArray(current?.views) ? current.views.length : 0
 
+  const switchUser = useCallback(
+    (nextUid: string) => {
+      if (!nextUid || nextUid === activeUserId) return
+      if (me?.id && nextUid !== me.id) markStatusesViewed?.(nextUid, me.id)
+      setActiveUserId(nextUid)
+      setMuted(loadMuted().includes(nextUid))
+      setIdx(0)
+      setProgress(0)
+      progressRef.current = 0
+    },
+    [activeUserId, me?.id, markStatusesViewed],
+  )
+
+  // Left / right: next USER in the feed (not next slide of the same person)
+  const goNextUser = useCallback(() => {
+    const order = userOrder
+    const i = order.indexOf(activeUserId)
+    if (i >= 0 && i < order.length - 1) {
+      switchUser(order[i + 1])
+      return
+    }
+    onClose()
+  }, [userOrder, activeUserId, switchUser, onClose])
+
+  const goPrevUser = useCallback(() => {
+    const order = userOrder
+    const i = order.indexOf(activeUserId)
+    if (i > 0) {
+      switchUser(order[i - 1])
+      return
+    }
+    // Stay on first user's first slide
+    setIdx(0)
+    setProgress(0)
+    progressRef.current = 0
+  }, [userOrder, activeUserId, switchUser])
+
+  // Auto-advance within the current user's stack; after last slide go to next user
   const goNext = useCallback(() => {
     if (idxRef.current < itemsLenRef.current - 1) {
       setIdx((i) => i + 1)
       setProgress(0)
       progressRef.current = 0
     } else {
-      onClose()
+      goNextUser()
     }
-  }, [onClose])
+  }, [goNextUser])
 
   const goPrev = useCallback(() => {
     if (idxRef.current > 0) {
@@ -224,10 +311,23 @@ export function StatusViewer({
       setProgress(0)
       progressRef.current = 0
     } else {
+      // Stay on this user's first status (user change is horizontal swipe only)
       setProgress(0)
       progressRef.current = 0
     }
   }, [])
+
+  // Live viewer rows from WS cache (owner side) - update list without a network wait
+  useEffect(() => {
+    if (!isOwner) return
+    const onCache = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as { statusId?: string; viewers?: ViewerRow[] }
+      if (!d?.statusId || !current?.id || d.statusId !== current.id) return
+      if (Array.isArray(d.viewers)) setViewers(d.viewers)
+    }
+    window.addEventListener('sc:status-viewers-cache', onCache as EventListener)
+    return () => window.removeEventListener('sc:status-viewers-cache', onCache as EventListener)
+  }, [current?.id, isOwner])
 
   // From notification: open viewers sheet for this status
   useEffect(() => {
@@ -237,25 +337,37 @@ export function StatusViewer({
       if (want && want === current.id) {
         sessionStorage.removeItem('sc_open_viewers')
         setViewersOpen(true)
-        setViewersLoading(true)
         void (async () => {
           try {
             const cached = await loadCachedViewers<ViewerRow>(current.id)
             if (cached?.length) {
               setViewers(cached)
               setViewersLoading(false)
+            } else {
+              setViewersLoading(true)
             }
             const { viewers: list } = await api.statusViewers(current.id)
             setViewers(list)
             void saveCachedViewers(current.id, list)
           } catch {
-            setViewers([])
+            /* keep cache if any */
           } finally {
             setViewersLoading(false)
           }
         })()
       }
     } catch { /* */ }
+  }, [current?.id, isOwner])
+
+  // Owner: warm viewers cache when opening own status so the sheet is ready
+  useEffect(() => {
+    if (!current?.id || !isOwner) return
+    void (async () => {
+      try {
+        const cached = await loadCachedViewers<ViewerRow>(current.id)
+        if (cached?.length) setViewers(cached)
+      } catch { /* */ }
+    })()
   }, [current?.id, isOwner])
 
   // Register view only for OTHER people's statuses, never for your own
@@ -284,13 +396,14 @@ export function StatusViewer({
       )
     }
 
-    // Server register only, local list already patched above (no full refresh flash)
+    // Server register only; keep optimistic viewed state even if the request fails
     if (viewSentRef.current.has(current.id)) return
     viewSentRef.current.add(current.id)
     void api.viewStatus(current.id).catch(() => {
+      // Retry later without wiping local viewed state
       viewSentRef.current.delete(current.id)
     })
-  }, [current?.id, current?.views, isOwner, me?.id, patchStatusList])
+  }, [current?.id, isOwner, me?.id, patchStatusList])
 
   // Sync video element with pause / resume
   useEffect(() => {
@@ -363,13 +476,13 @@ export function StatusViewer({
     const held = Date.now() - pressStartRef.current
     const side = pressSideRef.current
     pressSideRef.current = null
-    const wasPaused = pausedRef.current
     setPaused(false)
+    // Swipes are handled in the root pointer-up path; taps only here
+    if (Math.abs(swipeDxRef.current) > 24 || swipeDyRef.current > 24) return
     if (held < HOLD_MS && side) {
+      // TAP left/right: next / previous status for THIS user (WhatsApp-style)
       if (side === 'left') goPrev()
       else if (side === 'right') goNext()
-    } else if (wasPaused) {
-      // long hold released, resume
     }
   }
 
@@ -377,8 +490,8 @@ export function StatusViewer({
     e.stopPropagation()
     const next = !muted
     setMuted(next)
-    const list = loadMuted().filter((id) => id !== userId)
-    if (next) list.push(userId)
+    const list = loadMuted().filter((id) => id !== activeUserId)
+    if (next) list.push(activeUserId)
     saveMuted(list)
     showToast(next ? 'Status muted' : 'Status unmuted')
   }
@@ -388,22 +501,29 @@ export function StatusViewer({
     if (!current || !isOwner) return
     setPaused(true)
     setViewersOpen(true)
-    setViewersLoading(true)
-    // Instant from cache, then refresh
+    // Instant from cache - no spinner if we already have rows from live views
+    let hadCache = false
     try {
       const cached = await loadCachedViewers<ViewerRow>(current.id)
       if (cached?.length) {
         setViewers(cached)
         setViewersLoading(false)
+        hadCache = true
+      } else {
+        setViewersLoading(true)
       }
-    } catch { /* */ }
+    } catch {
+      setViewersLoading(true)
+    }
+    // Background reconcile with server (does not clear cache on failure)
     try {
       const { viewers: list } = await api.statusViewers(current.id)
-      setViewers(list)
-      void saveCachedViewers(current.id, list)
+      if (Array.isArray(list)) {
+        setViewers(list)
+        void saveCachedViewers(current.id, list)
+      }
     } catch {
-      showToast('Could not load viewers')
-      setViewers((v) => v)
+      if (!hadCache) showToast('Could not load viewers')
     } finally {
       setViewersLoading(false)
     }
@@ -511,13 +631,14 @@ export function StatusViewer({
   }
 
   const user = current.user || {
-    id: userId,
-    name: userId,
+    id: activeUserId,
+    name: activeUserId,
     hue: ['#7B2CBF', '#6389EB'] as [string, string],
   }
 
   const commitStatusReply = () => {
     if (isOwner) return
+    const peer = activeUserId
     const preview = current?.text || (current?.image ? '📷 Status' : 'Status')
     let time = ''
     try {
@@ -528,7 +649,7 @@ export function StatusViewer({
       }
     } catch { /* */ }
     const payload = {
-      peerId: userId,
+      peerId: peer,
       preview,
       time,
       statusId: current?.id || undefined,
@@ -540,7 +661,7 @@ export function StatusViewer({
       window.dispatchEvent(new CustomEvent('sc:status-reply', { detail: payload }))
     } catch { /* */ }
     onClose()
-    onReplyToStatus?.(userId)
+    onReplyToStatus?.(peer)
   }
 
   const bgCode = (current as any)?.background || 'theme_purple_grad'
@@ -550,30 +671,93 @@ export function StatusViewer({
   return (
     <div
       className={`relative flex h-full flex-col select-none ${fg.text}`}
-      style={{ background: bgCss }}
+      style={{ background: bgCss, touchAction: 'pan-y' }}
       onContextMenu={(e) => e.preventDefault()}
-      onPointerCancel={(e) => onPressEnd(e)}
+      onPointerCancel={() => {
+        if (holdTimerRef.current) {
+          clearTimeout(holdTimerRef.current)
+          holdTimerRef.current = null
+        }
+        swipeStartY.current = null
+        swipeStartX.current = null
+        swipeDyRef.current = 0
+        swipeDxRef.current = 0
+        setSwipeDy(0)
+        pressSideRef.current = null
+        setPaused(false)
+      }}
       onPointerDown={(e) => {
+        // Never capture pointers - capture blocks like / reply / modal clicks on desktop
         if ((e.target as HTMLElement).closest('[data-status-action]')) return
         if (e.pointerType === 'mouse' && e.button !== 0) return
         swipeStartY.current = e.clientY
+        swipeStartX.current = e.clientX
+        swipeDyRef.current = 0
+        swipeDxRef.current = 0
+        setSwipeDy(0)
       }}
       onPointerMove={(e) => {
-        if (!swipeStartY.current) return
+        if (swipeStartY.current == null || swipeStartX.current == null) return
         if ((e.target as HTMLElement).closest('[data-status-action]')) return
         const dy = swipeStartY.current - e.clientY
-        if (dy > 0) setSwipeDy(Math.min(80, dy))
+        const dx = e.clientX - swipeStartX.current
+        swipeDxRef.current = dx
+        if (dy > 0) {
+          swipeDyRef.current = Math.min(140, dy)
+          setSwipeDy(swipeDyRef.current)
+          if (dy > 14) setPaused(true)
+        }
       }}
       onPointerUp={(e) => {
-        onPressEnd(e)
         if ((e.target as HTMLElement).closest('[data-status-action]')) {
+          // Let the control handle its own click; only clear hold timer
+          if (holdTimerRef.current) {
+            clearTimeout(holdTimerRef.current)
+            holdTimerRef.current = null
+          }
+          swipeStartY.current = null
+          swipeStartX.current = null
+          swipeDyRef.current = 0
+          swipeDxRef.current = 0
           setSwipeDy(0)
-          swipeStartY.current = 0
           return
         }
-        if (swipeDy > 48 && !isOwner) commitStatusReply()
+        const dx = swipeDxRef.current
+        const dy = swipeDyRef.current
+        const absDx = Math.abs(dx)
+        const absDy = Math.abs(dy)
+
+        // Horizontal swipe → next / previous USER (owner excluded from list)
+        if (absDx > 56 && absDx > absDy + 12) {
+          if (dx < 0) goNextUser()
+          else goPrevUser()
+          swipeStartY.current = null
+          swipeStartX.current = null
+          swipeDyRef.current = 0
+          swipeDxRef.current = 0
+          setSwipeDy(0)
+          setPaused(false)
+          return
+        }
+
+        // Vertical swipe up → reply (mobile / foldable)
+        if (!isOwner && dy > 40 && absDy > absDx) {
+          commitStatusReply()
+          swipeStartY.current = null
+          swipeStartX.current = null
+          swipeDyRef.current = 0
+          swipeDxRef.current = 0
+          setSwipeDy(0)
+          return
+        }
+
+        // Otherwise treat as tap (same-user next / prev status)
+        onPressEnd(e)
+        swipeStartY.current = null
+        swipeStartX.current = null
+        swipeDyRef.current = 0
+        swipeDxRef.current = 0
         setSwipeDy(0)
-        swipeStartY.current = 0
       }}
     >
       {/* progress: completed full, current partial, future empty */}
@@ -595,7 +779,7 @@ export function StatusViewer({
         <div className="min-w-0 flex-1">
           <p className={`truncate font-extrabold ${fg.text}`}>{user.name}</p>
           <p className={`text-xs font-semibold ${fg.muted}`}>
-            {current.ago || ''}
+            {formatLocalTime(current.createdAt || current.ago) || current.ago || ''}
             {paused ? ' · paused' : ''}
           </p>
         </div>
@@ -666,7 +850,7 @@ export function StatusViewer({
         </AnimatePresence>
       </div>
 
-      <div className="relative z-30 flex items-end justify-between px-5 pb-8 safe-pb pointer-events-auto" data-status-action>
+      <div className="relative z-40 flex items-end justify-between px-5 pb-8 safe-pb pointer-events-auto" data-status-action>
         {isOwner ? (
           <>
             <button
@@ -733,12 +917,15 @@ export function StatusViewer({
               <button
                 type="button"
                 data-status-action
+                onPointerDown={(e) => e.stopPropagation()}
+                onPointerUp={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation()
+                  e.preventDefault()
                   setPaused(true)
                   setConfirmRepost(true)
                 }}
-                className={`flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-sm ${fg.chip}`}
+                className={`relative z-[60] flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-sm ${fg.chip}`}
                 aria-label="Repost"
               >
                 <Repeat2 size={20} />
@@ -748,25 +935,19 @@ export function StatusViewer({
                 data-status-action
                 onPointerDown={(e) => {
                   e.stopPropagation()
-                  e.preventDefault()
                 }}
                 onPointerUp={(e) => {
                   e.stopPropagation()
-                  e.preventDefault()
-                  const now = Date.now()
-                  if (now - lastLikeAt.current < 450) return
-                  lastLikeAt.current = now
-                  toggleLike(e as unknown as MouseEvent)
                 }}
                 onClick={(e) => {
                   e.stopPropagation()
                   e.preventDefault()
                   const now = Date.now()
-                  if (now - lastLikeAt.current < 450) return
+                  if (now - lastLikeAt.current < 350) return
                   lastLikeAt.current = now
                   toggleLike(e)
                 }}
-                className={`flex h-14 w-14 items-center justify-center rounded-full backdrop-blur-sm transition-transform duration-200 ${
+                className={`relative z-[60] flex h-14 w-14 items-center justify-center rounded-full backdrop-blur-sm transition-transform duration-200 ${
                   liked ? 'bg-brand-red/90 text-white' : fg.chip
                 } ${likePulse ? 'scale-125' : 'scale-100'}`}
                 aria-label={liked ? 'Unlike' : 'Like'}
@@ -781,25 +962,64 @@ export function StatusViewer({
 
       {!isOwner && (
         <div
-          className="absolute inset-x-0 bottom-0 z-30 flex justify-center pb-[max(0.75rem,env(safe-area-inset-bottom))]"
-          style={{ opacity: 0.55 + swipeDy / 120, transform: `translateY(${-swipeDy * 0.25}px)` }}
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-[55] flex justify-center px-16 pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+          style={{
+            opacity: Math.min(1, 0.65 + swipeDy / 100),
+            transform: `translateY(${-Math.min(56, swipeDy * 0.4)}px)`,
+          }}
         >
           <button
             type="button"
             data-status-action
+            onPointerDown={(e) => {
+              // Track swipe on the chip itself (root ignores data-status-action targets)
+              e.stopPropagation()
+              swipeStartY.current = e.clientY
+              swipeStartX.current = e.clientX
+              swipeDyRef.current = 0
+              swipeDxRef.current = 0
+              setSwipeDy(0)
+            }}
+            onPointerMove={(e) => {
+              if (swipeStartY.current == null) return
+              const dy = swipeStartY.current - e.clientY
+              const dx = swipeStartX.current != null ? e.clientX - swipeStartX.current : 0
+              swipeDxRef.current = dx
+              if (dy > 0) {
+                swipeDyRef.current = Math.min(140, dy)
+                setSwipeDy(swipeDyRef.current)
+              }
+            }}
+            onPointerUp={(e) => {
+              e.stopPropagation()
+              const dy = swipeDyRef.current
+              const dx = Math.abs(swipeDxRef.current)
+              swipeStartY.current = null
+              swipeStartX.current = null
+              swipeDyRef.current = 0
+              swipeDxRef.current = 0
+              setSwipeDy(0)
+              // Swipe up on the chip launches reply
+              if (dy > 28 && dy > dx) {
+                e.preventDefault()
+                replyGestureRef.current = true
+                commitStatusReply()
+              }
+            }}
             onClick={(e) => {
               e.preventDefault()
               e.stopPropagation()
+              // Avoid double-fire after a swipe-up on the same gesture
+              if (replyGestureRef.current) {
+                replyGestureRef.current = false
+                return
+              }
               commitStatusReply()
             }}
-            onPointerUp={(e) => {
-              // Tap/click works on phone, tablet, and desktop
-              e.preventDefault()
-              e.stopPropagation()
-            }}
-            className="pointer-events-auto rounded-full bg-black/35 px-4 py-1.5 text-xs font-bold text-white/95 transition hover:bg-black/50 active:scale-95"
+            className="pointer-events-auto animate-pulse rounded-full bg-black/40 px-4 py-2 text-xs font-bold text-white shadow-lg backdrop-blur-sm transition hover:bg-black/55 active:scale-95"
+            style={{ animationDuration: '2.2s', touchAction: 'none' }}
           >
-            Swipe up or tap to reply
+            {isDesktopPointer ? 'Click to reply' : 'Swipe up to reply'}
           </button>
         </div>
       )}
@@ -807,7 +1027,10 @@ export function StatusViewer({
       
       {confirmDelete && (
         <div
-          className="absolute inset-0 z-[70] flex items-end justify-center bg-black/50 px-4 pb-10"
+          data-status-action
+          className="absolute inset-0 z-[80] flex items-end justify-center bg-black/50 px-4 pb-10 sm:items-center"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation()
             setConfirmDelete(false)
@@ -815,8 +1038,10 @@ export function StatusViewer({
           }}
         >
           <div
+            data-status-action
             className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
           >
             <p className="text-lg font-black text-ink">Delete this status?</p>
             <p className="mt-1 text-sm font-semibold text-gray-500">
@@ -825,8 +1050,12 @@ export function StatusViewer({
             <div className="mt-5 flex gap-2">
               <button
                 type="button"
+                data-status-action
                 className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-ink"
-                onClick={() => {
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
                   setConfirmDelete(false)
                   setPaused(false)
                 }}
@@ -851,7 +1080,10 @@ export function StatusViewer({
 
       {confirmRepost && (
         <div
-          className="absolute inset-0 z-[70] flex items-end justify-center bg-black/50 px-4 pb-10"
+          data-status-action
+          className="absolute inset-0 z-[80] flex items-end justify-center bg-black/50 px-4 pb-10 sm:items-center"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation()
             setConfirmRepost(false)
@@ -859,8 +1091,10 @@ export function StatusViewer({
           }}
         >
           <div
+            data-status-action
             className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
           >
             <p className="text-lg font-black text-ink">Repost this status?</p>
             <p className="mt-1 text-sm font-semibold text-gray-500">
@@ -869,8 +1103,12 @@ export function StatusViewer({
             <div className="mt-5 flex gap-2">
               <button
                 type="button"
+                data-status-action
                 className="flex-1 rounded-full bg-gray-100 py-3 text-sm font-extrabold text-ink"
-                onClick={() => {
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
                   setConfirmRepost(false)
                   setPaused(false)
                 }}
@@ -879,8 +1117,12 @@ export function StatusViewer({
               </button>
               <button
                 type="button"
+                data-status-action
                 className="flex-1 rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
-                onClick={async () => {
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={async (e) => {
+                  e.stopPropagation()
+                  e.preventDefault()
                   setConfirmRepost(false)
                   if (!current) {
                     setPaused(false)
@@ -931,15 +1173,15 @@ export function StatusViewer({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', stiffness: 340, damping: 34 }}
-              className="absolute inset-x-0 bottom-0 z-50 max-h-[55%] overflow-hidden rounded-t-3xl bg-white shadow-[0_-12px_40px_rgba(0,0,0,0.35)] md:inset-x-auto md:left-1/2 md:bottom-[8%] md:max-h-[50vh] md:w-full md:max-w-md md:-translate-x-1/2 md:rounded-3xl"
+              className="absolute inset-x-0 bottom-0 z-50 max-h-[55%] overflow-hidden rounded-t-3xl bg-white shadow-[0_-12px_40px_rgba(0,0,0,0.35)] dark:bg-[#1a222d] dark:shadow-[0_-12px_40px_rgba(0,0,0,0.55)] md:inset-x-auto md:left-1/2 md:bottom-[8%] md:max-h-[50vh] md:w-full md:max-w-md md:-translate-x-1/2 md:rounded-3xl"
               data-status-action
             >
-              <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3.5">
-                <h3 className="text-base font-black text-ink">Viewed by</h3>
+              <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3.5 dark:border-white/10">
+                <h3 className="text-base font-black text-ink dark:text-gray-100">Viewed by</h3>
                 <button
                   type="button"
                   onClick={closeViewers}
-                  className="flex h-9 w-9 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100"
+                  className="flex h-9 w-9 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
                   aria-label="Close viewers"
                 >
                   <X size={18} />
@@ -947,29 +1189,53 @@ export function StatusViewer({
               </div>
               <div className="max-h-[55vh] overflow-y-auto px-3 pb-6 pt-2">
                 {viewersLoading ? (
-                  <p className="py-8 text-center text-sm font-bold text-gray-400">Loading…</p>
+                  <ul className="space-y-1 py-2" aria-busy="true" aria-label="Loading viewers">
+                    {[0, 1, 2, 3, 4].map((i) => (
+                      <li key={i} className="flex items-center gap-3 rounded-2xl px-3 py-2.5">
+                        <div className="sk-shimmer h-10 w-10 shrink-0 rounded-full" />
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <div
+                            className="sk-shimmer h-3.5 rounded"
+                            style={{ width: `${52 + (i % 3) * 12}%` }}
+                          />
+                          <div className="sk-shimmer h-2.5 w-1/3 rounded" />
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
                 ) : viewers.length === 0 ? (
-                  <p className="py-8 text-center text-sm font-bold text-gray-400">No views yet</p>
+                  <p className="py-8 text-center text-sm font-bold text-gray-400 dark:text-gray-500">No views yet</p>
                 ) : (
                   <ul className="space-y-0.5">
                     {viewers.map((v) => (
-                      <li
-                        key={v.id}
-                        className="flex items-center gap-3 rounded-2xl px-3 py-2.5"
-                      >
-                        <Avatar
-                          contact={{ id: v.id, name: v.name, photo: v.photo }}
-                          size={40}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-[15px] font-bold text-ink">{v.name}</p>
-                          {v.username ? (
-                            <p className="truncate text-xs font-semibold text-gray-400">@{v.username}</p>
+                      <li key={v.id}>
+                        <button
+                          type="button"
+                          data-status-action
+                          className="flex w-full items-center gap-3 rounded-2xl px-3 py-2.5 text-left transition hover:bg-gray-50 active:bg-gray-100 dark:hover:bg-white/5 dark:active:bg-white/10"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            const peer = String(v.id || (v as any).viewer_id || '')
+                            if (!peer) return
+                            closeViewers()
+                            onClose()
+                            onOpenChat?.(peer)
+                          }}
+                        >
+                          <Avatar
+                            contact={{ id: v.id, name: v.name, photo: v.photo }}
+                            size={40}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[15px] font-bold text-ink dark:text-gray-100">{v.name}</p>
+                            {v.username ? (
+                              <p className="truncate text-xs font-semibold text-gray-400">@{v.username}</p>
+                            ) : null}
+                          </div>
+                          {v.liked ? (
+                            <Heart size={18} className="shrink-0 text-brand-red" fill="currentColor" />
                           ) : null}
-                        </div>
-                        {v.liked ? (
-                          <Heart size={18} className="shrink-0 text-brand-red" fill="currentColor" />
-                        ) : null}
+                        </button>
                       </li>
                     ))}
                   </ul>

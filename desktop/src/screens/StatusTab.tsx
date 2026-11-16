@@ -8,7 +8,7 @@ import { api } from '../api'
 import { STATUS_BG_OPTIONS, statusBgCss, statusBgIsLight, themeDefaultStatusBg } from '../lib/statusBg'
 import { useStore } from '../store'
 import { PillButton } from '../components/PillButton'
-import { parseUtc } from '../time'
+import { parseUtc, formatLocalTime } from '../time'
 import { compressForWeb } from '../lib/imageProcess'
 import { StatusAudiencePicker } from '../components/StatusAudiencePicker'
 
@@ -218,11 +218,11 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
                 ...status,
                 id: status?.id || s.id,
                 pending: false,
-                ago: 'Just now',
+                ago: formatLocalTime(status?.createdAt || s.createdAt) || formatLocalTime(new Date().toISOString()),
                 text: status?.text ?? s.text,
                 image: status?.image ?? s.image,
                 background: status?.background ?? s.background,
-                createdAt: status?.createdAt || s.createdAt,
+                createdAt: status?.createdAt || s.createdAt || new Date().toISOString(),
                 expiresAt: status?.expiresAt || s.expiresAt,
                 user: s.user,
                 views: status?.views || [],
@@ -333,7 +333,9 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
                   {s.text || (s.image ? 'Photo' : '')}
                   {g.total > 1 ? ` · ${g.total} updates` : ''}
                 </p>
-                <p className="text-xs font-bold text-gray-400">{s.ago}</p>
+                <p className="text-xs font-bold text-gray-400">
+                  {formatLocalTime(s.createdAt || s.ago) || s.ago || ''}
+                </p>
               </div>
               {s.image && (
                 <img src={mediaUrl(s.image)} alt="" className="h-12 w-12 rounded-xl object-cover" />
@@ -615,7 +617,8 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
                   </button>
                 ))}
               </div>
-              {settings.statusPrivacy !== 'My contacts' && (
+              {(settings.statusPrivacy === 'Only share with…' ||
+                settings.statusPrivacy === 'Contacts except…') && (
                 <div className="mt-4 space-y-2">
                   <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">
                     {settings.statusPrivacy === 'Only share with…'

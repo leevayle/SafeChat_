@@ -1,6 +1,7 @@
 import { formatLocalTime } from './time'
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from './lib/kv'
 import { API_BASE } from './config'
+import { encodeStatusReply, parseStatusReply, statusReplyPreviewLabel } from './lib/statusReply'
 /**
  * SafeChat API client — talks to FastAPI backend at /api/v1
  * Response shape: { success, message, data }
@@ -439,10 +440,10 @@ function mapMessage(m: any, meId?: string): ApiMsg {
   if (state !== 'sent' && state !== 'delivered' && state !== 'read') state = 'sent'
   let text = String(m.content ?? m.text ?? '')
   let statusReply: ApiMsg['statusReply'] = null
-  const sr = text.match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
-  if (sr) {
-    statusReply = { preview: sr[1], time: sr[2] || undefined, statusId: sr[3] || undefined }
-    text = sr[4]
+  const parsed = parseStatusReply(text)
+  if (parsed.statusReply) {
+    statusReply = parsed.statusReply
+    text = parsed.text
   }
   const clientKey = m.client_key || m.clientKey || m.idempotency_key || undefined
   return {
@@ -470,12 +471,7 @@ function mapMessage(m: any, meId?: string): ApiMsg {
 
 function formatChatPreviewLast(raw: string): string {
   if (!raw) return ''
-  const sr = raw.match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
-  if (sr) {
-    const body = (sr[4] || '').trim()
-    return body ? `Status reply: ${body}` : 'Status reply'
-  }
-  return raw
+  return statusReplyPreviewLabel(raw)
 }
 
 function mapConversation(c: any, meId?: string): ChatPreview {
@@ -541,6 +537,15 @@ function mapStatus(s: any): any {
     s.owner_username ||
     owner.username ||
     'Contact'
+  const createdAt = s.created_at || s.createdAt || null
+  // Clock time in the user's preferred 12h/24h format (from settings via formatLocalTime)
+  let ago = ''
+  try {
+    // lazy import avoided - format via dynamic requires would cycle; set empty and let UI format
+    ago = createdAt ? String(createdAt) : ''
+  } catch {
+    ago = ''
+  }
   return {
     id: String(s.id || s._id),
     userId,
@@ -548,13 +553,15 @@ function mapStatus(s: any): any {
     image: (s.media_attachments && s.media_attachments.find((m: any) => m.type === 'image')?.url) || s.image || null,
     video: (s.media_attachments && s.media_attachments.find((m: any) => m.type === 'video')?.url) || s.video || null,
     background: s.background || 'theme_purple_grad',
-    createdAt: s.created_at || s.createdAt,
+    createdAt,
     expiresAt: s.expires_at || s.expiresAt,
     type: s.status_type || s.type || 'text',
     views: Array.isArray(s.viewer_ids) ? s.viewer_ids : Array.isArray(s.views) ? s.views : [],
     viewCount: s.view_count ?? s.viewCount ?? (Array.isArray(s.viewer_ids) ? s.viewer_ids.length : Array.isArray(s.views) ? s.views.length : 0),
     isAd: !!(s.is_ad || s.isAd),
     adReach: s.ad_reach || s.adReach || null,
+    // Prefer ISO; UI formats with formatLocalTime so 12h/24h settings apply
+    ago,
     user: {
       id: userId,
       name,
@@ -1450,9 +1457,12 @@ rejectContactRequest: async (requestId: string) => {
   ) => {
     let content = text || (image ? '' : '')
     if (opts?.statusReply) {
-      // Encode status reply so peers can render the tag without schema changes
-      const sid = opts.statusReply.statusId ? `⟦id⟧${opts.statusReply.statusId}` : ''
-      content = `⟦status⟧${opts.statusReply.preview || ''}⟦t⟧${opts.statusReply.time || ''}${sid}⟦/⟧${content}`
+      // ASCII-safe envelope so peers always parse the quoted status card
+      content = encodeStatusReply(content, {
+        preview: opts.statusReply.preview || '',
+        time: opts.statusReply.time,
+        statusId: opts.statusReply.statusId,
+      })
     }
     const payload: Record<string, unknown> = {
       content,
