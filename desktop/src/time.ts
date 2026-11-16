@@ -51,6 +51,42 @@ export function formatLocalTime(input?: string | number | Date | null): string {
   })
 }
 
+/**
+ * Status header time: just now / N min ago / N hr ago /
+ * today 10:23 / yesterday 4:20 / short date + time.
+ * Respects the user's 12h/24h setting.
+ */
+export function formatStatusTime(input?: string | number | Date | null): string {
+  const d = parseUtc(input)
+  if (!d) return ''
+  const diff = Date.now() - d.getTime()
+  if (diff < 45_000) return 'just now'
+  if (diff < 3600_000) {
+    const m = Math.max(1, Math.floor(diff / 60_000))
+    return m === 1 ? '1 min ago' : `${m} min ago`
+  }
+  if (diff < 5 * 3600_000) {
+    const h = Math.floor(diff / 3600_000)
+    return h === 1 ? '1 hr ago' : `${h} hr ago`
+  }
+  const now = new Date()
+  const time = formatLocalTime(d)
+  if (d.toDateString() === now.toDateString()) return `today ${time}`
+  const y = new Date(now)
+  y.setDate(y.getDate() - 1)
+  if (d.toDateString() === y.toDateString()) return `yesterday ${time}`
+  if (diff < 7 * 86_400_000) {
+    const weekday = d.toLocaleDateString(undefined, { weekday: 'short' })
+    return `${weekday} ${time}`
+  }
+  const date = d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
+  })
+  return `${date} ${time}`
+}
+
 /** Relative / absolute local label for list rows. */
 export function formatLocalDateTime(input?: string | number | Date | null): string {
   const d = parseUtc(input)

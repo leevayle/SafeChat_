@@ -45,6 +45,9 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
   const [searching, setSearching] = useState(false)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const searchGen = useRef(0)
+  const searchAbort = useRef<AbortController | null>(null)
+  const searchCache = useRef<Map<string, any[]>>(new Map())
+  const lastSearchQ = useRef('')
   /** idle | loading | sent | saved */
   const [requestState, setRequestState] = useState<Record<string, 'loading' | 'sent' | 'saved'>>({})
 
@@ -143,25 +146,52 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
     const searchValue = phoneMode ? trimmed.replace(/\D/g, '') : trimmed.replace(/^@/, '')
     if (searchValue.length < 2) {
       if (searchTimer.current) clearTimeout(searchTimer.current)
+      searchAbort.current?.abort()
       setSearchHits([])
       setSearching(false)
+      lastSearchQ.current = ''
       return
     }
+    const cacheKey = `${phoneMode ? 'p' : 'u'}:${searchValue.toLowerCase()}`
+    // Instant cache hit - no spinner
+    const cached = searchCache.current.get(cacheKey)
+    if (cached) {
+      setSearchHits(cached)
+      setSearching(false)
+    }
     if (searchTimer.current) clearTimeout(searchTimer.current)
-    setSearching(true)
+    // Skip duplicate in-flight query
+    if (lastSearchQ.current === cacheKey && !cached) {
+      setSearching(true)
+      return
+    }
+    if (!cached) setSearching(true)
     const q = trimmed
+    // Debounce network; local contacts list already filters instantly via `list`
     searchTimer.current = setTimeout(async () => {
+      if (gen !== searchGen.current) return
+      lastSearchQ.current = cacheKey
+      searchAbort.current?.abort()
+      const ac = new AbortController()
+      searchAbort.current = ac
       try {
         const { users } = await api.searchUsers(q)
-        if (gen !== searchGen.current) return
-        setSearchHits(users)
+        if (gen !== searchGen.current || ac.signal.aborted) return
+        const next = users || []
+        searchCache.current.set(cacheKey, next)
+        // Cap cache size
+        if (searchCache.current.size > 40) {
+          const first = searchCache.current.keys().next().value
+          if (first) searchCache.current.delete(first)
+        }
+        setSearchHits(next)
       } catch {
-        if (gen !== searchGen.current) return
-        setSearchHits([])
+        if (gen !== searchGen.current || ac.signal.aborted) return
+        if (!cached) setSearchHits([])
       } finally {
         if (gen === searchGen.current) setSearching(false)
       }
-    }, 280)
+    }, 420)
   }
 
   const addContact = async (peer?: { id: string; username: string; phone: string; name: string }) => {

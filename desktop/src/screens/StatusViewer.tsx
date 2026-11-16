@@ -1,10 +1,10 @@
-import { statusBgCss, statusFgClasses } from '../lib/statusBg'
+import { statusBgCss, statusFgClasses, statusLightPlateOverlay } from '../lib/statusBg'
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Volume2, VolumeX, Heart, Trash2, Eye, Download, Repeat2, Copy } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { api } from '../api'
-import { formatLocalTime } from '../time'
+import { formatLocalTime, formatStatusTime } from '../time'
 import { useStore } from '../store'
 import { loadCachedViewers, saveCachedViewers } from '../lib/appCache'
 
@@ -134,6 +134,8 @@ export function StatusViewer({
   }, [statusList, userId, me?.id])
 
   const [activeUserId, setActiveUserId] = useState(userId)
+  const [userSlideDir, setUserSlideDir] = useState<1 | -1>(1)
+  const [userAnimKey, setUserAnimKey] = useState(0)
   useEffect(() => {
     setActiveUserId(userId)
   }, [userId])
@@ -164,22 +166,19 @@ export function StatusViewer({
         return
       }
     }
-    // Jump to first unviewed when some (not all) are already viewed
-    const meId = me?.id
-    if (!meId || meId === activeUserId) {
+    // First unviewed status; if all viewed, start from the beginning
+    const meId = me?.id ? String(me.id) : ''
+    if (!meId || meId === String(activeUserId)) {
       jumpedRef.current = true
       return
     }
-    const viewedFlags = items.map(
-      (s) => Array.isArray(s.views) && s.views.includes(meId),
-    )
-    const someViewed = viewedFlags.some(Boolean)
-    const allViewed = viewedFlags.every(Boolean)
-    const noneViewed = viewedFlags.every((v) => !v)
-    if (someViewed && !allViewed && !noneViewed) {
-      const firstUnseen = viewedFlags.findIndex((v) => !v)
-      if (firstUnseen >= 0) setIdx(firstUnseen)
+    const hasViewed = (s: any) => {
+      if (!Array.isArray(s.views)) return false
+      return s.views.some((v: any) => String(v) === meId || String(v?.id || v?.userId || '') === meId)
     }
+    const firstUnseen = items.findIndex((s) => !hasViewed(s))
+    if (firstUnseen >= 0) setIdx(firstUnseen)
+    else setIdx(0)
     jumpedRef.current = true
   }, [initialStatusId, items, me?.id, activeUserId, userId])
   const [paused, setPaused] = useState(false)
@@ -258,9 +257,11 @@ export function StatusViewer({
   const viewCount = Array.isArray(current?.views) ? current.views.length : 0
 
   const switchUser = useCallback(
-    (nextUid: string) => {
+    (nextUid: string, dir: 1 | -1 = 1) => {
       if (!nextUid || nextUid === activeUserId) return
       if (me?.id && nextUid !== me.id) markStatusesViewed?.(nextUid, me.id)
+      setUserSlideDir(dir)
+      setUserAnimKey((k) => k + 1)
       setActiveUserId(nextUid)
       setMuted(loadMuted().includes(nextUid))
       setIdx(0)
@@ -275,7 +276,7 @@ export function StatusViewer({
     const order = userOrder
     const i = order.indexOf(activeUserId)
     if (i >= 0 && i < order.length - 1) {
-      switchUser(order[i + 1])
+      switchUser(order[i + 1], 1)
       return
     }
     onClose()
@@ -285,7 +286,7 @@ export function StatusViewer({
     const order = userOrder
     const i = order.indexOf(activeUserId)
     if (i > 0) {
-      switchUser(order[i - 1])
+      switchUser(order[i - 1], -1)
       return
     }
     // Stay on first user's first slide
@@ -667,11 +668,18 @@ export function StatusViewer({
   const bgCode = (current as any)?.background || 'theme_purple_grad'
   const bgCss = statusBgCss(bgCode)
   const fg = statusFgClasses(bgCode)
+  const lightOverlay = statusLightPlateOverlay(bgCode)
+  const isRepost = !!(current as any)?.isRepost
 
   return (
     <div
-      className={`relative flex h-full flex-col select-none ${fg.text}`}
-      style={{ background: bgCss, touchAction: 'pan-y' }}
+      className={`relative flex h-full flex-col select-none overflow-hidden ${fg.text}`}
+      style={{
+        background: lightOverlay ? undefined : bgCss,
+        backgroundColor: bgCss,
+        backgroundImage: lightOverlay,
+        touchAction: 'pan-y',
+      }}
       onContextMenu={(e) => e.preventDefault()}
       onPointerCancel={() => {
         if (holdTimerRef.current) {
@@ -760,6 +768,16 @@ export function StatusViewer({
         setSwipeDy(0)
       }}
     >
+      <AnimatePresence initial={false} custom={userSlideDir} mode="wait">
+        <motion.div
+          key={`user-${activeUserId}-${userAnimKey}`}
+          custom={userSlideDir}
+          initial={{ opacity: 0, x: userSlideDir * 72, scale: 0.97 }}
+          animate={{ opacity: 1, x: 0, scale: 1 }}
+          exit={{ opacity: 0, x: userSlideDir * -48, scale: 0.98 }}
+          transition={{ type: 'spring', stiffness: 380, damping: 34, mass: 0.85 }}
+          className="absolute inset-0 flex flex-col"
+        >
       {/* progress: completed full, current partial, future empty */}
       <div className="flex gap-1 px-3 pt-3 safe-pt">
         {items.map((s, i) => {
@@ -778,9 +796,19 @@ export function StatusViewer({
         <Avatar contact={user} size={40} />
         <div className="min-w-0 flex-1">
           <p className={`truncate font-extrabold ${fg.text}`}>{user.name}</p>
-          <p className={`text-xs font-semibold ${fg.muted}`}>
-            {formatLocalTime(current.createdAt || current.ago) || current.ago || ''}
-            {paused ? ' · paused' : ''}
+          <p className={`flex flex-wrap items-center gap-1 text-xs font-semibold ${fg.muted}`}>
+            <span>
+              {formatStatusTime(current.createdAt || current.ago) ||
+                formatLocalTime(current.createdAt || current.ago) ||
+                ''}
+            </span>
+            {isRepost ? (
+              <span className={`inline-flex items-center gap-0.5 ${fg.muted}`} title="Reposted">
+                <Repeat2 size={12} strokeWidth={2.4} />
+                <span className="text-[10px] font-bold">Reposted</span>
+              </span>
+            ) : null}
+            {paused ? <span>· paused</span> : null}
           </p>
         </div>
         <button
@@ -959,6 +987,8 @@ export function StatusViewer({
           </>
         )}
       </div>
+        </motion.div>
+      </AnimatePresence>
 
       {!isOwner && (
         <div
@@ -1138,6 +1168,7 @@ export function StatusViewer({
                       {
                         video: (current as any).video || undefined,
                         expiresInHours: hours,
+                        isRepost: true,
                       },
                     )
                     showToast('Reposted to your status')

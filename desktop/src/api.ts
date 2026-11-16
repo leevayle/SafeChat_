@@ -549,7 +549,7 @@ function mapStatus(s: any): any {
   return {
     id: String(s.id || s._id),
     userId,
-    text: s.content || s.text || '',
+    text: String(s.content || s.text || '').replace(/^\u2063repost\u2063/, ''),
     image: (s.media_attachments && s.media_attachments.find((m: any) => m.type === 'image')?.url) || s.image || null,
     video: (s.media_attachments && s.media_attachments.find((m: any) => m.type === 'video')?.url) || s.video || null,
     background: s.background || 'theme_purple_grad',
@@ -560,6 +560,14 @@ function mapStatus(s: any): any {
     viewCount: s.view_count ?? s.viewCount ?? (Array.isArray(s.viewer_ids) ? s.viewer_ids.length : Array.isArray(s.views) ? s.views.length : 0),
     isAd: !!(s.is_ad || s.isAd),
     adReach: s.ad_reach || s.adReach || null,
+    isRepost: !!(
+      s.is_repost ||
+      s.isRepost ||
+      s.repost_of_status_id ||
+      s.repostOfStatusId ||
+      s.repost_of ||
+      (typeof s.content === 'string' && s.content.startsWith('\u2063repost\u2063'))
+    ),
     // Prefer ISO; UI formats with formatLocalTime so 12h/24h settings apply
     ago,
     user: {
@@ -1589,16 +1597,22 @@ rejectContactRequest: async (requestId: string) => {
       selectedViewerIds?: string[]
       excludedViewerIds?: string[]
       video?: string
+      isRepost?: boolean
     },
   ) => {
+    let content = text || ''
+    if (opts?.isRepost && !content.startsWith('\u2063repost\u2063')) {
+      content = `\u2063repost\u2063${content}`
+    }
     const payload: Record<string, unknown> = {
-      content: text || '',
+      content,
       status_type: opts?.video ? 'video' : image ? 'image' : 'text',
       visibility: opts?.visibility || 'contacts',
       selected_viewer_ids: opts?.selectedViewerIds || [],
       excluded_viewer_ids: opts?.excludedViewerIds || [],
       expires_in_hours: opts?.expiresInHours ?? 24,
       background: background || 'theme_purple_grad',
+      ...(opts?.isRepost ? { is_repost: true } : {}),
     }
     const media: any[] = []
     if (image) media.push({ type: 'image', url: image })

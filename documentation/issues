@@ -70,4 +70,16 @@ Fix those issues and do not break anything else. do not use the ai dash, check u
 4. Notifications also need to cache on fetch so we do not wait to view. also use a cool skeleton responsive to dark and light theme incase we're waiting.
 
 ------------------>>>>>>>>>>
-1. 
+1. Status polish
+ - if a user has 4 statuses and i have viewed one already, when i click on the status take me to the first one i have not viewed, if i have viewed all then start from the beginning.
+ - swiping left and right from one status user to the next make an animation to differenciate different users like a page reveal or some kind of coola nimation.
+ - On posted status time just below the name of the owner, use (just now, 1 minute ago, 2,3, 1 hr ago....today 10:23, yesterday 4:20 <use time format of user 12/24?>) so a user can know very fast without being confused.
+ - In dark theme the white statuses are not optimized well for good viewing.
+- if a status is reposted, just after the time it was posted put a small reposted icon
+
+2. User search in contacts could use some optimization, it's really slow.
+
+
+--------------------->>>>>>>>>>
+- When user sends support ticket send with user app version info.
+- Fonts not rendering properly (fonts take longer to load we need offline options - download some major fonts)
