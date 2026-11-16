@@ -1088,10 +1088,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         api.incomingContactRequests(),
         api.outgoingContactRequests().catch(() => ({ requests: [] as any[] })),
       ])
-      const n = (inRes.requests || []).filter((r: any) => r.status === 'pending').length
+      const incoming = inRes.requests || []
+      const outgoing = outRes.requests || []
+      const n = incoming.filter((r: any) => r.status === 'pending').length
       setSaveRequestPending(n)
+      // IDB cache so both tabs follow the same lists offline / across reloads
+      try {
+        const { saveCachedSaveRequestsBundle } = await import('./lib/appCache')
+        await saveCachedSaveRequestsBundle({ incoming, outgoing })
+      } catch {
+        /* */
+      }
       // When someone accepted our request, pull contacts so messaging works immediately
-      const newlyAccepted = (outRes.requests || []).some((r: any) => r.status === 'accepted')
+      const newlyAccepted = outgoing.some((r: any) => r.status === 'accepted')
       if (newlyAccepted) {
         await refreshContacts()
       }

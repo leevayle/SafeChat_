@@ -6,6 +6,10 @@ import { ScreenHeader } from '../components/ui'
 import { useStore } from '../store'
 import { api } from '../api'
 import { kvGet, kvSet } from '../lib/kv'
+import {
+  loadCachedSaveRequestsBundle,
+  saveCachedSaveRequestsBundle,
+} from '../lib/appCache'
 
 type RequestItem = {
   id: string
@@ -71,12 +75,16 @@ export function SaveRequests({ onClose, onChat }: Props) {
         api.incomingContactRequests(),
         api.outgoingContactRequests(),
       ])
-      // Full history — first to latest (API already sorts newest first)
+      // Full history from DB (newest first); cache so other devices / reloads match
       const nextIncoming = inRes.requests || []
       const nextOutgoing = outRes.requests || []
       setIncoming(nextIncoming)
       setOutgoing(nextOutgoing)
       try {
+        await saveCachedSaveRequestsBundle({
+          incoming: nextIncoming,
+          outgoing: nextOutgoing,
+        })
         kvSet(
           CACHE_KEY,
           JSON.stringify({
@@ -96,18 +104,30 @@ export function SaveRequests({ onClose, onChat }: Props) {
   }, [showToast])
 
   useEffect(() => {
-    // Instant paint from local cache
-    try {
-      const raw = kvGet(CACHE_KEY)
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        if (Array.isArray(parsed?.incoming)) setIncoming(parsed.incoming)
-        if (Array.isArray(parsed?.outgoing)) setOutgoing(parsed.outgoing)
-        setLoading(false)
+    // Instant paint from IDB + kv cache (same data the server stores per user)
+    void (async () => {
+      try {
+        const bundle = await loadCachedSaveRequestsBundle<RequestItem>()
+        if (bundle.incoming.length || bundle.outgoing.length) {
+          setIncoming(bundle.incoming)
+          setOutgoing(bundle.outgoing)
+          setLoading(false)
+        }
+      } catch {
+        /* */
       }
-    } catch {
-      /* */
-    }
+      try {
+        const raw = kvGet(CACHE_KEY)
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          if (Array.isArray(parsed?.incoming) && parsed.incoming.length) setIncoming(parsed.incoming)
+          if (Array.isArray(parsed?.outgoing) && parsed.outgoing.length) setOutgoing(parsed.outgoing)
+          setLoading(false)
+        }
+      } catch {
+        /* */
+      }
+    })()
     void load()
   }, [load])
 

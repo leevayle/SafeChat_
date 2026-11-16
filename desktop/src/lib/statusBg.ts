@@ -28,6 +28,41 @@ export function statusBgCss(id?: string | null): string {
   return STATUS_BG.purple
 }
 
+/** True when status background is light (needs dark text / chrome). */
+export function statusBgIsLight(id?: string | null): boolean {
+  if (!id) return false
+  const key = String(id).toLowerCase()
+  if (key === 'white' || key.includes('white') || key.includes('cloud')) return true
+  const css = statusBgCss(id).toLowerCase()
+  return css === '#f5f5f5' || css === '#ffffff' || css === '#fff' || css === 'white'
+}
+
+/** Text / icon classes so white backgrounds stay readable on viewer side. */
+export function statusFgClasses(id?: string | null): {
+  text: string
+  muted: string
+  barTrack: string
+  barFill: string
+  chip: string
+} {
+  if (statusBgIsLight(id)) {
+    return {
+      text: 'text-ink',
+      muted: 'text-gray-500',
+      barTrack: 'bg-black/15',
+      barFill: 'bg-ink',
+      chip: 'bg-black/10 text-ink',
+    }
+  }
+  return {
+    text: 'text-white',
+    muted: 'text-white/60',
+    barTrack: 'bg-white/25',
+    barFill: 'bg-white',
+    chip: 'bg-white/10 text-white',
+  }
+}
+
 export function themeDefaultStatusBg(themeId?: string): string {
   const t = (themeId || 'purple').toLowerCase()
   // Mono theme id is "white" in settings — default status template is black

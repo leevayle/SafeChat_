@@ -628,16 +628,43 @@ async function tryRefresh(): Promise<boolean> {
   return refreshInflight
 }
 
-/** Refresh access token periodically — failure alone does NOT kill the session. */
+/**
+ * Proactive session watch:
+ * - refresh before access JWT expires
+ * - if access is already expired and refresh fails, log out immediately
+ *   (do not wait for the next API call to surface "session expired")
+ */
 let refreshTimer: ReturnType<typeof setInterval> | null = null
 export function startProactiveRefresh() {
   if (refreshTimer) return
-  // Access tokens last longer now; refresh well before expiry without thrashing
-  refreshTimer = setInterval(() => {
+  const tick = async () => {
     if (sessionDead) return
-    // Cookie may hold refresh even when memory is empty
-    void tryRefresh()
-  }, 25 * 60 * 1000) // every 25 minutes
+    const access = accessToken()
+    const exp = tokenExpiresAt(access)
+    const now = Math.floor(Date.now() / 1000)
+    // No access token in memory: try refresh; hard logout if that fails
+    if (!access) {
+      const ok = await tryRefresh()
+      if (!ok) markSessionDead()
+      return
+    }
+    if (!exp) return
+    // Already past expiry: refresh or logout now
+    if (exp <= now) {
+      const ok = await tryRefresh()
+      if (!ok) markSessionDead()
+      return
+    }
+    // Expiring within 2 minutes: refresh quietly
+    if (exp - now <= 120) {
+      const ok = await tryRefresh()
+      if (!ok && exp - now <= 15) markSessionDead()
+    }
+  }
+  void tick()
+  refreshTimer = setInterval(() => {
+    void tick()
+  }, 20 * 1000) // every 20s so expiry is caught without waiting on API errors
 }
 export function stopProactiveRefresh() {
   if (refreshTimer) {

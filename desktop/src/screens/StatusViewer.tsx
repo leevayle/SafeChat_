@@ -1,4 +1,4 @@
-import { statusBgCss } from '../lib/statusBg'
+import { statusBgCss, statusFgClasses } from '../lib/statusBg'
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type PointerEvent } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, Volume2, VolumeX, Heart, Trash2, Eye, Download, Repeat2, Copy } from 'lucide-react'
@@ -545,10 +545,11 @@ export function StatusViewer({
 
   const bgCode = (current as any)?.background || 'theme_purple_grad'
   const bgCss = statusBgCss(bgCode)
+  const fg = statusFgClasses(bgCode)
 
   return (
     <div
-      className="relative flex h-full flex-col select-none text-white"
+      className={`relative flex h-full flex-col select-none ${fg.text}`}
       style={{ background: bgCss }}
       onContextMenu={(e) => e.preventDefault()}
       onPointerCancel={(e) => onPressEnd(e)}
@@ -582,8 +583,8 @@ export function StatusViewer({
           if (i < idx) w = '100%'
           else if (i === idx) w = `${Math.round(progress * 100)}%`
           return (
-            <div key={s.id} className="h-1 flex-1 overflow-hidden rounded-full bg-white/25">
-              <div className="h-full bg-white" style={{ width: w }} />
+            <div key={s.id} className={`h-1 flex-1 overflow-hidden rounded-full ${fg.barTrack}`}>
+              <div className={`h-full ${fg.barFill}`} style={{ width: w }} />
             </div>
           )
         })}
@@ -592,8 +593,8 @@ export function StatusViewer({
       <div className="relative z-20 flex items-center gap-3 px-4 py-3" data-status-action>
         <Avatar contact={user} size={40} />
         <div className="min-w-0 flex-1">
-          <p className="truncate font-extrabold">{user.name}</p>
-          <p className="text-xs font-semibold text-white/60">
+          <p className={`truncate font-extrabold ${fg.text}`}>{user.name}</p>
+          <p className={`text-xs font-semibold ${fg.muted}`}>
             {current.ago || ''}
             {paused ? ' · paused' : ''}
           </p>
@@ -605,7 +606,7 @@ export function StatusViewer({
             e.stopPropagation()
             onClose()
           }}
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10"
+          className={`flex h-9 w-9 items-center justify-center rounded-full ${fg.chip}`}
           aria-label="Close"
         >
           <X size={18} />
@@ -657,7 +658,7 @@ export function StatusViewer({
               />
             ) : null}
             {current.text && (
-              <p className="pointer-events-auto text-center text-2xl font-bold leading-snug whitespace-pre-wrap break-words">
+              <p className={`pointer-events-auto text-center text-2xl font-bold leading-snug whitespace-pre-wrap break-words ${fg.text}`}>
                 {linkifyStatusText(current.text)}
               </p>
             )}
@@ -673,7 +674,7 @@ export function StatusViewer({
               data-status-action
               onClick={(e) => { e.stopPropagation(); setPaused(true); setConfirmDelete(true) }}
               disabled={deleting}
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm disabled:opacity-50"
+              className={`flex h-12 w-12 items-center justify-center rounded-full backdrop-blur-sm disabled:opacity-50 ${fg.chip}`}
               aria-label="Delete status"
             >
               <Trash2 size={22} />
@@ -682,7 +683,7 @@ export function StatusViewer({
               type="button"
               data-status-action
               onClick={openViewers}
-              className="flex min-w-12 items-center justify-center gap-1.5 rounded-full bg-white/10 px-3 py-2.5 text-white backdrop-blur-sm"
+              className={`flex min-w-12 items-center justify-center gap-1.5 rounded-full px-3 py-2.5 backdrop-blur-sm ${fg.chip}`}
               aria-label="Viewers"
             >
               <Eye size={18} />
@@ -720,7 +721,7 @@ export function StatusViewer({
                     showToast('Could not save')
                   }
                 }}
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm"
+                className={`flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-sm ${fg.chip}`}
                 aria-label={current?.image ? 'Download' : 'Copy text'}
               >
                 {current?.image ? <Download size={20} /> : <Copy size={20} />}
@@ -737,7 +738,7 @@ export function StatusViewer({
                   setPaused(true)
                   setConfirmRepost(true)
                 }}
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm"
+                className={`flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-sm ${fg.chip}`}
                 aria-label="Repost"
               >
                 <Repeat2 size={20} />
@@ -766,7 +767,7 @@ export function StatusViewer({
                   toggleLike(e)
                 }}
                 className={`flex h-14 w-14 items-center justify-center rounded-full backdrop-blur-sm transition-transform duration-200 ${
-                  liked ? 'bg-brand-red/90 text-white' : 'bg-white/10 text-white'
+                  liked ? 'bg-brand-red/90 text-white' : fg.chip
                 } ${likePulse ? 'scale-125' : 'scale-100'}`}
                 aria-label={liked ? 'Unlike' : 'Like'}
                 style={{ touchAction: 'manipulation' }}

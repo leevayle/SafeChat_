@@ -704,10 +704,14 @@ class ContactService:
 
     @staticmethod
     async def list_incoming_requests(user_id: str) -> List[dict]:
+        """Incoming save requests for this user (pending + history). Stored in DB so all devices see the same list."""
         db = get_database()
         rows = (
             await db.contact_requests.find(
-                {"to_user_id": user_id, "status": ContactRequestStatus.PENDING.value}
+                {
+                    "to_user_id": user_id,
+                    "hidden_by_recipient": {"$ne": True},
+                }
             )
             .sort("created_at", -1)
             .to_list(length=200)

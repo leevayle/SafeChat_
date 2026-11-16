@@ -5,7 +5,7 @@ import { BrandMark } from '../components/AppHeaderLogo'
 import { Avatar } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
 import { api } from '../api'
-import { STATUS_BG_OPTIONS, statusBgCss, themeDefaultStatusBg } from '../lib/statusBg'
+import { STATUS_BG_OPTIONS, statusBgCss, statusBgIsLight, themeDefaultStatusBg } from '../lib/statusBg'
 import { useStore } from '../store'
 import { PillButton } from '../components/PillButton'
 import { parseUtc } from '../time'
@@ -58,7 +58,7 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
 
   // Derived from bgCode - must come AFTER useState (TDZ)
-  const lightBg = bgCode === 'white'
+  const lightBg = statusBgIsLight(bgCode)
   const onLight = lightBg
     ? 'bg-black/10 text-ink ring-black/15'
     : 'bg-white/25 text-white ring-white/40'
@@ -274,7 +274,7 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
                   <img src={mediaUrl(s.image)} alt="" className="h-full w-full object-cover" />
                 ) : (
                   <div className="flex h-full items-center justify-center px-2 text-center">
-                    <p className={`line-clamp-4 text-[11px] font-bold leading-snug ${(s.background || '') === 'white' ? 'text-ink' : 'text-white'}`}>
+                    <p className={`line-clamp-4 text-[11px] font-bold leading-snug ${statusBgIsLight(s.background) ? 'text-ink' : 'text-white'}`}>
                       {s.text || 'Status'}
                     </p>
                   </div>

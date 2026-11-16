@@ -233,7 +233,7 @@ export async function saveCachedNotifications<T>(items: T[]) {
   await idbPut('notifications', { id: 'list', items, updatedAt: Date.now() })
 }
 
-// Save requests
+// Save requests (incoming + outgoing) - durable across reloads; server is source of truth cross-device
 export async function loadCachedSaveRequests<T>(): Promise<T[]> {
   const row = await idbGet<{ id: string; items: T[] }>('saveRequests', 'list')
   return row?.items || []
@@ -241,6 +241,36 @@ export async function loadCachedSaveRequests<T>(): Promise<T[]> {
 
 export async function saveCachedSaveRequests<T>(items: T[]) {
   await idbPut('saveRequests', { id: 'list', items, updatedAt: Date.now() })
+}
+
+export type SaveRequestsBundle<T = unknown> = {
+  incoming: T[]
+  outgoing: T[]
+  updatedAt?: number
+}
+
+export async function loadCachedSaveRequestsBundle<T = unknown>(): Promise<SaveRequestsBundle<T>> {
+  const row = await idbGet<{ id: string; incoming?: T[]; outgoing?: T[]; updatedAt?: number }>(
+    'saveRequests',
+    'bundle',
+  )
+  return {
+    incoming: Array.isArray(row?.incoming) ? row!.incoming! : [],
+    outgoing: Array.isArray(row?.outgoing) ? row!.outgoing! : [],
+    updatedAt: row?.updatedAt,
+  }
+}
+
+export async function saveCachedSaveRequestsBundle<T = unknown>(bundle: {
+  incoming: T[]
+  outgoing: T[]
+}) {
+  await idbPut('saveRequests', {
+    id: 'bundle',
+    incoming: bundle.incoming || [],
+    outgoing: bundle.outgoing || [],
+    updatedAt: Date.now(),
+  })
 }
 
 // Status viewers

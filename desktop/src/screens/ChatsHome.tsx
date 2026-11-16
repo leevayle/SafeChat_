@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Search,
@@ -19,7 +19,9 @@ import {
   Trash2,
   EyeOff,
   Archive,
+  WifiOff,
 } from 'lucide-react'
+
 import { Wordmark } from '../components/Logo'
 import { Avatar, VerifiedCheck } from '../components/Avatar'
 import { StatusRing } from '../components/StatusRing'
@@ -91,6 +93,21 @@ export function ChatsHome({
   })
   const [lockUi, setLockUi] = useState<'none' | 'set' | 'confirm' | 'unlock' | 'lock-apply'>('none')
   const [pendingPin, setPendingPin] = useState('')
+  const [offline, setOffline] = useState(() =>
+    typeof navigator !== 'undefined' ? !navigator.onLine : false,
+  )
+
+  useEffect(() => {
+    const goOff = () => setOffline(true)
+    const goOn = () => setOffline(false)
+    window.addEventListener('offline', goOff)
+    window.addEventListener('online', goOn)
+    setOffline(typeof navigator !== 'undefined' ? !navigator.onLine : false)
+    return () => {
+      window.removeEventListener('offline', goOff)
+      window.removeEventListener('online', goOn)
+    }
+  }, [])
 
   const pendingCount = saveRequestPending
   const showSkeleton = !listsReady && chats.length === 0
@@ -339,7 +356,16 @@ export function ChatsHome({
           ) : (
             <div className="flex w-full items-center justify-between">
               <Wordmark className="text-2xl leading-none" />
-              <div className="flex gap-1">
+              <div className="flex items-center gap-1">
+                {offline ? (
+                  <span
+                    className="flex h-10 w-10 items-center justify-center text-red-500"
+                    title="No internet connection"
+                    aria-label="No internet connection"
+                  >
+                    <WifiOff size={20} strokeWidth={2.25} />
+                  </span>
+                ) : null}
                 <IconBtn label="Search" onClick={() => setSearching(true)}>
                   <Search size={22} />
                 </IconBtn>
@@ -746,7 +772,7 @@ export function ChatsHome({
                             ) : null}
                             <span className="truncate">
                               {me?.id && c.contactId === me.id
-                                ? `me(${me.username ? `@${String(me.username).replace(/^@/, '')}` : 'you'})`
+                                ? 'me'
                                 : ((ct as any).savedName || ct.name)}
                             </span>
                             {!!(ct as any).verifiedBadge && !(me?.id && c.contactId === me.id) && (
@@ -763,11 +789,27 @@ export function ChatsHome({
                         </div>
                         <div className="mt-0.5 flex items-end justify-between gap-3">
                           <p className="min-w-0 flex-1 truncate text-sm font-semibold text-gray-500">
-                            {lastMine ? 'You: ' : ''}
-                            {(typingPeers?.[ct.id] || typingPeers?.[c.contactId] || typingPeers?.[(ct as any).peerId]) ? (
+                            {me?.id && c.contactId === me.id ? (
+                              (() => {
+                                const uname = String(me.username || ct.username || '').replace(/^@/, '')
+                                const preview = String(lastText || '').trim()
+                                if (preview && preview !== ' ') {
+                                  return (
+                                    <>
+                                      {lastMine ? 'You: ' : ''}
+                                      {preview}
+                                    </>
+                                  )
+                                }
+                                return uname ? `@${uname}` : 'Personal space'
+                              })()
+                            ) : (typingPeers?.[ct.id] || typingPeers?.[c.contactId] || typingPeers?.[(ct as any).peerId]) ? (
                               <span className="font-bold text-brand-blue">typing…</span>
                             ) : (
-                              lastText
+                              <>
+                                {lastMine ? 'You: ' : ''}
+                                {lastText}
+                              </>
                             )}
                           </p>
                           <div className="flex min-h-[1.15rem] shrink-0 items-end justify-end gap-1.5 pb-0.5">
