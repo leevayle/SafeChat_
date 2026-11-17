@@ -226,6 +226,8 @@ export function StatusViewer({
   const [deleting, setDeleting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [confirmRepost, setConfirmRepost] = useState(false)
+  /** Hours selected in the repost duration menu (1 | 6 | 12 | 24) */
+  const [repostHours, setRepostHours] = useState<1 | 6 | 12 | 24>(24)
 
   const viewedRef = useRef<Set<string>>(new Set())
   const rafRef = useRef<number | null>(null)
@@ -1024,6 +1026,23 @@ export function StatusViewer({
                   e.stopPropagation()
                   e.preventDefault()
                   setPaused(true)
+                  // Smart default: original duration of the status being reposted (closest of 1/6/12/24)
+                  let hours: 1 | 6 | 12 | 24 = 24
+                  if (current?.createdAt && current?.expiresAt) {
+                    const created = parseUtc(current.createdAt)
+                    const expires = parseUtc(current.expiresAt)
+                    if (!Number.isNaN(created) && !Number.isNaN(expires) && expires > created) {
+                      const h = (expires - created) / (60 * 60 * 1000)
+                      const opts: Array<1 | 6 | 12 | 24> = [1, 6, 12, 24]
+                      hours = opts.reduce((best, o) =>
+                        Math.abs(o - h) < Math.abs(best - h) ? o : best,
+                      )
+                    }
+                  } else {
+                    const configured = Number.parseInt(settings.statusValidity || '', 10)
+                    if ([1, 6, 12, 24].includes(configured)) hours = configured as 1 | 6 | 12 | 24
+                  }
+                  setRepostHours(hours)
                   setConfirmRepost(true)
                 }}
                 className={`relative z-[60] flex h-11 w-11 items-center justify-center rounded-full backdrop-blur-sm ${fg.chip}`}
@@ -1199,10 +1218,33 @@ export function StatusViewer({
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
           >
-            <p className="text-lg font-black text-ink">Repost this status?</p>
+            <p className="text-lg font-black text-ink">How long should it stay?</p>
             <p className="mt-1 text-sm font-semibold text-gray-500">
-              It will be shared to your status with your privacy settings.
+              Pick how long this repost stays on your status.
             </p>
+            <div className="mt-4 flex flex-col gap-2">
+              {([1, 6, 12, 24] as const).map((h) => (
+                <button
+                  key={h}
+                  type="button"
+                  data-status-action
+                  className={`flex w-full items-center justify-between rounded-2xl px-4 py-3 text-left text-sm font-extrabold transition ${
+                    repostHours === h
+                      ? 'bg-brand-purple text-white'
+                      : 'bg-gray-100 text-ink'
+                  }`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    e.preventDefault()
+                    setRepostHours(h)
+                  }}
+                >
+                  <span>{h === 1 ? '1 hour' : `${h} hours`}</span>
+                  {repostHours === h ? <span aria-hidden>✓</span> : null}
+                </button>
+              ))}
+            </div>
             <div className="mt-5 flex gap-2">
               <button
                 type="button"
@@ -1231,10 +1273,43 @@ export function StatusViewer({
                     setPaused(false)
                     return
                   }
+                  const hours = repostHours
+                  const localId = `local-status-${Date.now()}`
+                  const createdAt = new Date().toISOString()
+                  const expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString()
+                  const optimistic = {
+                    id: localId,
+                    userId: me?.id || '',
+                    text: current.text || '',
+                    image: current.image || null,
+                    background: (current as any).background || 'solid_1',
+                    createdAt,
+                    expiresAt,
+                    type: (current as any).video
+                      ? 'video'
+                      : current.image
+                        ? 'image'
+                        : 'text',
+                    video: (current as any).video || null,
+                    views: [] as string[],
+                    ago: 'Posting…',
+                    isRepost: true,
+                    pending: true,
+                    user: me
+                      ? {
+                          id: me.id,
+                          name: me.name,
+                          username: me.username,
+                          photo: me.photo,
+                          hue: (me as any).hue || (['#7B2CBF', '#6389EB'] as [string, string]),
+                          online: false,
+                        }
+                      : undefined,
+                  }
+                  // Optimistic: show in UI immediately
+                  patchStatusList((list) => [...list, optimistic])
                   try {
-                    const configuredHours = Number.parseInt(settings.statusValidity || '', 10)
-                    const hours = [1, 6, 12, 24].includes(configuredHours) ? configuredHours : 24
-                    await api.postStatus(
+                    const { status } = await api.postStatus(
                       current.text || '',
                       current.image || null,
                       (current as any).background || 'solid_1',
@@ -1245,16 +1320,38 @@ export function StatusViewer({
                         repostOfStatusId: String(current.id),
                       },
                     )
-                    showToast('Reposted to your status')
-                    void refreshStatus?.()
+                    // Swap local slot with server status; update time from Posting… → just now
+                    patchStatusList((list) =>
+                      list.map((s) =>
+                        s.id === localId
+                          ? {
+                              ...s,
+                              ...status,
+                              id: status?.id || s.id,
+                              pending: false,
+                              isRepost: true,
+                              ago: 'just now',
+                              text: status?.text ?? s.text,
+                              image: status?.image ?? s.image,
+                              background: status?.background ?? s.background,
+                              createdAt: status?.createdAt || s.createdAt || createdAt,
+                              expiresAt: status?.expiresAt || s.expiresAt,
+                              user: s.user,
+                              views: status?.views || [],
+                            }
+                          : s,
+                      ),
+                    )
+                    // Quiet success — no extra toast after the optimistic insert
                   } catch {
+                    patchStatusList((list) => list.filter((s) => s.id !== localId))
                     showToast('Could not repost')
                   } finally {
                     setPaused(false)
                   }
                 }}
               >
-                Repost
+                Repost now
               </button>
             </div>
           </div>

@@ -754,11 +754,31 @@ export function ChatsHome({
                           aria-label="View status"
                         >
                           <StatusRing total={meta.total} viewed={meta.viewed} size={56}>
-                            <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online) }} size={46} />
+                            <Avatar
+                              contact={{
+                                ...ct,
+                                // Never show online green dot on the user's own chat row
+                                online:
+                                  me?.id && ct.id === me.id
+                                    ? false
+                                    : !!(presenceMap?.[ct.id] ?? ct.online),
+                              }}
+                              size={46}
+                            />
                           </StatusRing>
                         </span>
                       ) : (
-                        <Avatar contact={{ ...ct, online: !!(presenceMap?.[ct.id] ?? ct.online) }} size={52} />
+                        <Avatar
+                          contact={{
+                            ...ct,
+                            // Never show online green dot on the user's own chat row
+                            online:
+                              me?.id && ct.id === me.id
+                                ? false
+                                : !!(presenceMap?.[ct.id] ?? ct.online),
+                          }}
+                          size={52}
+                        />
                       )}
                       <div className="min-w-[12rem] flex-1 overflow-hidden pb-0.5">
                         <div className="flex items-start justify-between gap-3">
