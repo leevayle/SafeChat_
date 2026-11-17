@@ -122,7 +122,7 @@ async def _handle_send(user_id: str, websocket: WebSocket, data: dict) -> None:
         )
         # Fan-out already done inside send_message via packet_msg
     except Exception as e:
-        logger.exception("ws send failed")
+        logger.debug("ws send failed", exc_info=True)
         await websocket.send_json(
             {"t": "ack", "ck": client_key, "ok": False, "err": str(e)[:120]}
         )

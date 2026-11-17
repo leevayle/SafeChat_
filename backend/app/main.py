@@ -33,35 +33,32 @@ logger = logging.getLogger(__name__)
 
 
 def _print_ready_banner() -> None:
-    """CLI banner: continuous SafeChat. with blue ellipsis."""
+    """CLI wordmark: Safe (red) + Chat (purple), columns aligned."""
     RED = "\033[38;2;227;64;76m"      # #E3404C Safe
     PURPLE = "\033[38;2;138;43;226m"  # #8A2BE2 Chat
     BLUE = "\033[38;2;89;132;242m"    # #5984F2 ellipsis
     R = "\033[0m"
-    # One continuous wordmark (no gap between Safe and Chat)
+    # Chat column kept level with Safe (fixed widths, no wobble)
     art = [
-        RED + "  ____         __      " + PURPLE + "____ _           _" + R,
+        RED + "  ____         __      " + PURPLE + " ____ _           _" + R,
         RED + " / ___|  __ _ / _| ___ " + PURPLE + "/ ___| |__   __ _| |_" + R,
-        RED + " \\___ \\ / _` | |_ / _ \\\\" + PURPLE + "| |   | '_ \\ / _` | __|" + R,
+        RED + " \\___ \\ / _` | |_ / _ \\" + PURPLE + "| |   | '_ \\ / _` | __|" + R,
         RED + "  ___) | (_| |  _|  __/" + PURPLE + "| |___| | | | (_| | |_" + R,
         RED + " |____/ \\__,_|_|  \\___|" + PURPLE + " \\____|_| |_|\\__,_|\\__|" + R,
     ]
     print()
     for i, line in enumerate(art):
-        # trailing period on last glyph row only
         if i == len(art) - 1:
             print(line + PURPLE + "." + R + " " + BLUE + "..." + R)
         else:
             print(line)
-    print()
-    print()
     print()
     taglines = [
         "Your conversations.",
         "Your people.",
         "Your space.",
     ]
-    width = 44
+    width = 46
     for line in taglines:
         pad = max(0, (width - len(line)) // 2)
         print(" " * pad + line)
@@ -86,15 +83,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("MongoDB connection failed: %s", e)
             raise
-        try:
-            _print_ready_banner()
-        except Exception:
-            pass
-        # Version line after index / DB checks (connect_to_mongo logs "checking indexes")
+        # Version right after mongo/indexes, then logo once
         try:
             ver = (settings.APP_VERSION or "0.0.0").strip()
-            print(f"safechat version {ver}")
+            print(f"safechat version {ver}", flush=True)
             logger.info("safechat version %s", ver)
+        except Exception:
+            pass
+        try:
+            _print_ready_banner()
         except Exception:
             pass
         _boot_done = True
@@ -196,7 +193,7 @@ app.include_router(ws_router, prefix=settings.API_V1_PREFIX)
 async def root():
     return {
         "name": settings.APP_NAME,
-        "version": "1.0.0",
+        "version": settings.APP_VERSION,
         "docs": "/docs",
         "health": "/health",
     }

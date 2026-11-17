@@ -439,7 +439,7 @@ export function Settings({
                       )}
                     </p>
                     <p className="mt-2 text-left text-[11px] font-normal text-gray-400">
-                      Version 2.0.0
+                      Version {APP_VERSION}
                     </p>
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-2">

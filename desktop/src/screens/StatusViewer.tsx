@@ -784,10 +784,10 @@ export function StatusViewer({
         <motion.div
           key={`user-${activeUserId}-${userAnimKey}`}
           custom={userSlideDir}
-          initial={{ opacity: 0, x: userSlideDir * 72, scale: 0.97 }}
-          animate={{ opacity: 1, x: 0, scale: 1 }}
-          exit={{ opacity: 0, x: userSlideDir * -48, scale: 0.98 }}
-          transition={{ type: 'spring', stiffness: 380, damping: 34, mass: 0.85 }}
+          initial={{ opacity: 0.65, x: userSlideDir * 36 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0.65, x: userSlideDir * -28 }}
+          transition={{ type: 'tween', duration: 0.16, ease: [0.25, 0.9, 0.3, 1] }}
           className="absolute inset-0 flex flex-col"
         >
       {/* progress: completed full, current partial, future empty */}

@@ -70,6 +70,8 @@ def setup_logging() -> None:
     logging.getLogger("app.api").setLevel(logging.WARNING)
     logging.getLogger("app.services").setLevel(logging.WARNING)
     logging.getLogger("app.websocket").setLevel(logging.WARNING)
+    logging.getLogger("websockets").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn").setLevel(logging.WARNING)
     logging.getLogger("app.middleware").setLevel(logging.WARNING)
     logging.getLogger("app.core.database").setLevel(logging.INFO)
     logging.getLogger("app.main").setLevel(logging.INFO)
