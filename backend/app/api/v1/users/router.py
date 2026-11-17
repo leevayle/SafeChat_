@@ -94,6 +94,7 @@ class PreferencesUpdate(BaseModel):
     color_mode: Optional[str] = None
     liquid_glass: Optional[bool] = None
     wallpaper: Optional[str] = None
+    chat_pattern: Optional[bool] = None
     font_size: Optional[str] = None
     language: Optional[str] = None
     status_privacy: Optional[str] = None

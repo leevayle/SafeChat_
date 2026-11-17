@@ -2,6 +2,15 @@
 ISSUE FIXING TAB
 -----------------
 
+
+
+
+------------------
+CLIENT SIDE
+-----------------
+
+
+
 1. Status to have posting time just below the name of the poster, where it says just now after posting, time should remain there in user's preferred time like 24hr or 12hr clock. Both on viewer's and poster's side.
 
 2. i need the premium purchase for me and for a friend (both to be disabled because for now they just work without payment i will configure the payment later for now if stk push is not sent actually, do not unlock premium) only admins can grant premium.
@@ -106,6 +115,34 @@ v 1.0.3 known issues
 - Cache customer care tickets for easy and fast retrieval. (minimize server requests)
 - Server cli version info displayed twice
 - Design a good svg bg for chats
+- Add a password preview button in login forms
+- On esc key the ugly outline to be disabled
+- On splash (wait 1s before starting safechat animation)
+- Terms of service and privacy policy pages - make these and link them in signup and settings
+- Status settings icon should be in theme color
+- pinned chats should remain pinned in all devices so pinning should be a db change so it can stick on all
+- Own online status should not be visible in profile view and top ribbon in short my own online status shoul not be visible anywhere on my device.
+- verification checkmark if enabled should be visible even in own device in chats home and profile view
+- Account deletion after password, authenticate it first then head to delete my account perma.... no proceeding without authenticating the password. (also provide notifications for user feedback)
+- Viewer count on owner's status is confused, it shows viewers of a different status in a next when you move next should be fixed. it has a stuter that needs smoothening.
+- ui left nav (dark theme has 2 bg colors, should be one)
+- put a small dot in top nav that starts red as we load chats orange when we can use then green when everything is uptodate.
+- I NEED TO TAG BETA FEATURES (UNSTABLE ONES) SO THAT ONLY BETA MEMBERS GET TO TEST THEM AND OTHERS GET THE STABLE ONES.
+- Top nav should be equal in height even inox. [In desktop settings is the top nav height standard i like it like that; for all other windows including home]
+- Group chat is broken totally
+
+
+
+last prompt to limit
+------
+okay so i figured why chats show up where they shouldn't theres a conflict when i have replied to a chat even if it's to someone else it shows up in the 'me' chat to myself. I need there to be adifference in all chats in the chats feed so we know where each conversation goes.
+also chat lock does not work fix it.
+
+
+
+
+
+
 
 
 
@@ -118,4 +155,32 @@ v 1.0.3 known issues
 ------------
 ADMIN PORTAL
 ------------
+- Rd dot for notifying number of support inbox, reports and stuff like that.
+- Superadmin can revoke admin account to normal account, and can admit an admin to be a superadmin
 - 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+---------------
+DESIGN CHANGES
+---------------
+- Design the chat ui make some safechatty outlines (thin ones) and repeated patterns
+- The whole ui for admin portal needs a fix

@@ -271,8 +271,11 @@ class GroupService:
 
     @staticmethod
     async def _serialize(group: dict) -> dict:
+        db = get_database()
+        gid = str(group["_id"])
+        conv = await db.conversations.find_one({"group_id": gid}, {"_id": 1})
         return {
-            "id": str(group["_id"]),
+            "id": gid,
             "group_name": group["group_name"],
             "group_description": group.get("group_description"),
             "group_photo": group.get("group_photo"),
@@ -280,6 +283,7 @@ class GroupService:
             "admin_ids": group.get("admin_ids", []),
             "member_ids": group.get("member_ids", []),
             "group_permissions": group.get("group_permissions", {}),
+            "conversation_id": str(conv["_id"]) if conv else None,
             "created_at": group["created_at"].isoformat()
             if group.get("created_at")
             else None,

@@ -956,6 +956,80 @@ export function Settings({
                       )
                     })}
                   </div>
+                  <div className="mt-3 flex items-center justify-between rounded-2xl bg-gray-50 px-3 py-2.5">
+                    <div className="min-w-0 pr-3">
+                      <p className="text-[13px] font-extrabold text-ink">Chat pattern</p>
+                      <p className="text-[11px] font-semibold text-gray-400">
+                        Soft icon overlay on your solid or gradient
+                      </p>
+                    </div>
+                    <Toggle
+                      label="Chat pattern"
+                      on={s.chatPattern !== false}
+                      onChange={(v) => setSetting('chatPattern', v as never)}
+                    />
+                  </div>
+                  <p className="mb-2 mt-3 px-1 text-[11px] font-bold uppercase tracking-wide text-gray-400">Pictures</p>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const input = document.createElement('input')
+                        input.type = 'file'
+                        input.accept = 'image/*'
+                        input.onchange = async () => {
+                          const file = input.files?.[0]
+                          if (!file) return
+                          try {
+                            const dataUrl = await fileToDataUrl(file)
+                            setSetting('wallpaperImage', dataUrl as never)
+                            setSetting('wallpaper', 'Picture' as never)
+                            setToast('Picture wallpaper set')
+                          } catch {
+                            setToast('Could not load image')
+                          }
+                        }
+                        input.click()
+                      }}
+                      className={`overflow-hidden rounded-2xl ring-2 transition ${
+                        (s.wallpaper || 'Cloud') === 'Picture' ? 'ring-brand-purple' : 'ring-transparent'
+                      }`}
+                    >
+                      <div
+                        className="flex h-12 w-20 items-center justify-center bg-gray-100 text-[10px] font-extrabold text-gray-500"
+                        style={
+                          s.wallpaperImage
+                            ? {
+                                backgroundImage: `url(${s.wallpaperImage})`,
+                                backgroundSize: 'cover',
+                                backgroundPosition: 'center',
+                              }
+                            : undefined
+                        }
+                      >
+                        {!s.wallpaperImage ? 'Choose' : null}
+                      </div>
+                      <span className="block truncate bg-white px-1 py-1 text-center text-[10px] font-extrabold text-ink">
+                        Custom
+                      </span>
+                    </button>
+                    {(s.wallpaper || 'Cloud') === 'Picture' && s.wallpaperImage ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSetting('wallpaperImage', null as never)
+                          setSetting('wallpaper', 'Cloud' as never)
+                          setToast('Picture removed')
+                        }}
+                        className="rounded-full bg-gray-100 px-3 py-1.5 text-[11px] font-extrabold text-gray-600"
+                      >
+                        Remove
+                      </button>
+                    ) : null}
+                  </div>
+                  <p className="mt-2 px-1 text-[10px] font-semibold text-gray-400">
+                    Pictures stay on this device. A soft overlay keeps messages readable.
+                  </p>
                 </div>
               </div>
 
@@ -965,6 +1039,7 @@ export function Settings({
                   setSetting('theme', 'purple' as never)
                   setSetting('chatAccent', 'purple' as never)
                   setSetting('wallpaper', 'Cloud' as never)
+                  setSetting('wallpaperImage', null as never)
                   setSetting('liquidGlass', false as never)
                   setSetting('colorMode', 'light' as never)
                   try { setSetting('fontSize' as any, 'medium' as never) } catch { /* */ }

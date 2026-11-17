@@ -42,6 +42,7 @@ import {
   mergeCachedMessages,
   clearMessageCache,
   removeConversationCache,
+  warmRecentThreads,
 } from './lib/messageCache'
 import { warmPhoto } from './lib/photoCache'
 
@@ -207,6 +208,10 @@ export type Settings = {
   fontSize: string
   enterIsSend: boolean
   wallpaper: string
+  /** Local-only data URL / blob for custom picture wallpaper (not synced; backend wallpaper max 64 chars). */
+  wallpaperImage?: string | null
+  /** Overlay the transparent chat pattern SVG on top of the chosen solid/gradient (default on). Synced as chat_pattern. */
+  chatPattern: boolean
   theme: string
   chatAccent: string
   autoDownload: string
@@ -254,6 +259,77 @@ export const WALLPAPER_GRADIENTS: { id: string; label: string; css: string }[] =
   },
 ]
 
+/** Transparent SVG pattern overlaid on the chosen solid/gradient (not a wallpaper itself). */
+/** Vector source (minified). Rasterized once at boot for instant, crisp chat paint. */
+export const CHAT_PATTERN_SVG = '/chat-bg.svg'
+
+/** In-memory bitmap URL after warmChatPattern() — crisp at device DPR, zero SVG re-parse on open. */
+let _patternBitmapUrl: string | null = null
+let _patternWarmPromise: Promise<string> | null = null
+
+export function getChatPatternUrl(): string {
+  return _patternBitmapUrl || CHAT_PATTERN_SVG
+}
+
+/**
+ * Load the SVG once, paint it to a canvas at ~2× screen width, keep a blob/data URL.
+ * Chats then use the bitmap — sharp icons, opens instantly (no SVG parse on every chat).
+ */
+export function warmChatPattern(): Promise<string> {
+  if (typeof window === 'undefined') return Promise.resolve(CHAT_PATTERN_SVG)
+  if (_patternBitmapUrl) return Promise.resolve(_patternBitmapUrl)
+  if (_patternWarmPromise) return _patternWarmPromise
+
+  _patternWarmPromise = (async () => {
+    try {
+      const img = new Image()
+      img.decoding = 'async'
+      // Same-origin public asset
+      img.src = CHAT_PATTERN_SVG
+      if (typeof img.decode === 'function') {
+        await img.decode()
+      } else {
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve()
+          img.onerror = () => reject(new Error('pattern load failed'))
+        })
+      }
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      const targetW = Math.min(1920, Math.max(1280, Math.round((window.screen?.width || 1280) * dpr)))
+      const scale = targetW / (img.naturalWidth || img.width || targetW)
+      const w = Math.round((img.naturalWidth || img.width) * scale)
+      const h = Math.round((img.naturalHeight || img.height) * scale)
+      const canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        _patternBitmapUrl = CHAT_PATTERN_SVG
+        return _patternBitmapUrl
+      }
+      ctx.clearRect(0, 0, w, h)
+      ctx.drawImage(img, 0, 0, w, h)
+      const blob: Blob | null = await new Promise((resolve) =>
+        canvas.toBlob((b) => resolve(b), 'image/webp', 0.92),
+      )
+      if (blob) {
+        _patternBitmapUrl = URL.createObjectURL(blob)
+      } else {
+        // Safari / older: data URL fallback
+        _patternBitmapUrl = canvas.toDataURL('image/png')
+      }
+      return _patternBitmapUrl
+    } catch {
+      _patternBitmapUrl = CHAT_PATTERN_SVG
+      return _patternBitmapUrl
+    }
+  })()
+
+  return _patternWarmPromise
+}
+
+
+
 export const WALLPAPERS: Record<string, string> = Object.fromEntries(
   [...WALLPAPER_SOLIDS, ...WALLPAPER_GRADIENTS].map((w) => [w.id, w.css]),
 )
@@ -271,11 +347,25 @@ export const WALLPAPERS_DARK: Record<string, string> = {
 }
 
 export function resolveWallpaper(id: string | undefined, colorMode?: string): string {
-  const key = id && WALLPAPERS[id] ? id : 'Cloud'
+  // Legacy IconPattern → fall back to soft purple solid
+  const raw = id === 'IconPattern' ? 'PurpleSoft' : id
+  const key = raw && WALLPAPERS[raw] ? raw : raw === 'Picture' ? 'Picture' : 'Cloud'
+  if (key === 'Picture') {
+    return String(colorMode || '').toLowerCase() === 'dark' ? '#121821' : '#F5F6F8'
+  }
   if (String(colorMode || '').toLowerCase() === 'dark') {
     return WALLPAPERS_DARK[key] || WALLPAPERS_DARK.Cloud
   }
   return WALLPAPERS[key] || WALLPAPERS.Cloud
+}
+
+/** Custom picture URL when wallpaper === 'Picture'. Pattern SVG is separate (chatPattern). */
+export function resolveWallpaperImage(
+  id: string | undefined,
+  wallpaperImage?: string | null,
+): string | null {
+  if (id === 'Picture' && wallpaperImage) return wallpaperImage
+  return null
 }
 
 export const WALLPAPER_KEYS = Object.keys(WALLPAPERS)
@@ -519,6 +609,8 @@ const defaultSettings: Settings = {
   timeFormat: '24h',
   showFab: true,
   wallpaper: 'Cloud',
+  wallpaperImage: null,
+  chatPattern: true,
   theme: 'purple',
   email: '',
   subscriptionPlan: 'pro',
@@ -920,6 +1012,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (same) return safePrev
         }
         void saveCachedChats(cleaned)
+        // Prefetch recent thread messages into memory so open is instant
+        void warmRecentThreads(
+          cleaned.map((c) => c.conversationId).filter(Boolean) as string[],
+          20,
+        )
         return cleaned
       })
     } catch (e: any) {
@@ -1302,9 +1399,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return current
       })
     })
-    // Prefetch only top pinned-visible threads (keeps login/home fast)
-    const targets = snapshot.filter((chat) => chat.conversationId).slice(0, force ? 12 : 8)
-    const concurrency = 3
+    // Prefetch recent threads into memory+disk BEFORE user opens them
+    const targets = snapshot.filter((chat) => chat.conversationId).slice(0, force ? 30 : 25)
+    const concurrency = 4
     const { applyThreadMessages } = await import('./lib/messageStore')
     for (let i = 0; i < targets.length; i += concurrency) {
       if (isSessionDead()) break
@@ -1313,11 +1410,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const conversationId = chat.conversationId!
           if (!force) {
             const cached = getCachedMessages(conversationId)
-            if (cached && cached.length >= 15) return
+            // Skip only when we already have a solid page cached
+            if (cached && cached.length >= 20) return
           }
           try {
             const { messages } = await api.messages(conversationId, { limit: 40 })
-            await applyThreadMessages(conversationId, messages, 'merge')
+            const existing = getCachedMessages(conversationId)
+            // Empty cache → replace; existing → merge (don't clobber open-thread optimistics)
+            await applyThreadMessages(
+              conversationId,
+              messages,
+              existing?.length ? 'merge' : 'replace',
+            )
           } catch {
             /* A thread can be refreshed when it is opened. */
           }
@@ -1423,6 +1527,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           hadCachedChats = true
           const cleaned = sanitizeChatList(cachedChats as any)
           setChats((prev) => (prev.length ? prev : cleaned))
+          void warmRecentThreads(
+            cleaned.map((c) => c.conversationId).filter(Boolean) as string[],
+            20,
+          )
         }
         if (cachedContacts.length) {
           setContacts((prev) => (prev.length ? prev : cachedContacts))
@@ -1519,7 +1627,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               loadCachedStatuses<any>(),
             ])
             if (cachedChats.length) {
-              setChats(sanitizeChatList(cachedChats as any))
+              const cleanedBoot = sanitizeChatList(cachedChats as any)
+              setChats(cleanedBoot)
+              void warmRecentThreads(
+                cleanedBoot.map((c) => c.conversationId).filter(Boolean) as string[],
+                20,
+              )
               setListsReady(true)
             }
             if (cachedContacts.length) setContacts(cachedContacts)
@@ -2027,30 +2140,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const raw = identity.trim()
     const cleanedPhone = raw.replace(/[^\d+]/g, '')
     const looksPhone = raw.startsWith('+') || /^\d{7,15}$/.test(raw.replace(/[\s-]/g, ''))
-    let session
+    const asUsername = raw.replace(/^@/, '').toLowerCase()
+    // Single request: send both when identity could be either — backend tries username then phone.
+    // Avoids sequential retry RTT (was up to 2 full Argon2 logins on ambiguity).
+    const body: { phone_number?: string; username?: string; password: string } = { password }
     if (looksPhone) {
-      try {
-        session = await api.login({ phone_number: cleanedPhone, password })
-      } catch (e) {
-        // Fallback: some users type phone without + but username may match digits-only accounts
-        session = await api.login({
-          phone_number: cleanedPhone,
-          username: raw.replace(/^@/, '').toLowerCase(),
-          password,
-        }).catch(() => { throw e })
-      }
+      body.phone_number = cleanedPhone
+      // digits-only usernames are rare but supported
+      if (asUsername && asUsername.length >= 3) body.username = asUsername
     } else {
-      try {
-        session = await api.login({ username: raw.replace(/^@/, '').toLowerCase(), password })
-      } catch (e) {
-        // If username failed, retry as phone (user may omit +)
-        if (/^\+?\d{7,15}$/.test(cleanedPhone)) {
-          session = await api.login({ phone_number: cleanedPhone, password })
-        } else {
-          throw e
-        }
-      }
+      body.username = asUsername
+      if (/^\+?\d{7,15}$/.test(cleanedPhone)) body.phone_number = cleanedPhone
     }
+    const session = await api.login(body)
     if ('password_reset_required' in session) {
       if (!session.password_reset_token) {
         throw new Error('Password reset login could not be verified. Request a new reset email.')
@@ -2082,26 +2184,39 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     // Theme first (CSS only) — never flash another user's palette
     const loginTheme = (user as any).theme as string | undefined
-    const loginAccent = (user as any).chatAccent as string | undefined
+    const loginAccent = ((user as any).chatAccent || (user as any).chat_accent) as string | undefined
+    const loginSettings = ((user as any).settings || (user as any).preferences || {}) as Record<string, unknown>
     resolveAndApplyAppearance(user.id, {
       ...(loginTheme ? { theme: loginTheme } : {}),
       ...(loginAccent ? { chatAccent: loginAccent } : {}),
-      colorMode: (user as any).colorMode,
-      liquidGlass: (user as any).liquidGlass,
+      colorMode: (user as any).colorMode || (user as any).color_mode,
+      liquidGlass: (user as any).liquidGlass ?? (user as any).liquid_glass,
     })
     applyUser(user, {
       ...(loginTheme ? { theme: loginTheme } : {}),
       ...(loginAccent ? { chatAccent: loginAccent } : {}),
+      ...loginSettings,
     })
 
-    // Inbox immediately — cache paints first inside hydrate; network merges after
+    // Enter app immediately — hydrate is non-blocking; cache paints first
     setSessionOk(true)
     setListsReady(false)
+    // Connect WS as soon as we have a token (presence / live msgs sooner)
+    void import('./realtime').then((m) => {
+      try {
+        m.connectRealtime?.({})
+      } catch {
+        /* effect will reconnect with full handlers */
+      }
+    }).catch(() => { /* */ })
     void hydrateAfterAuth().catch(() => {
       setListsReady(true)
     })
+    // Defer /auth/me — login payload already carries theme/settings; soft refresh later
     void (async () => {
       try {
+        await new Promise((r) => setTimeout(r, 1500))
+        if (isSessionDead() || !hasAccessToken()) return
         const { user: fresh, settings: s } = await api.me()
         if (!isSessionDead()) applyUser(fresh, s as Record<string, unknown>)
       } catch {
@@ -2184,18 +2299,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSessionOk(true)
     // First-account path: show home skeleton until lean chats land + are cached
     setListsReady(false)
-    const hydrateP = hydrateAfterAuth().catch(() => {
+    void import('./realtime').then((m) => {
+      try {
+        m.connectRealtime?.({})
+      } catch {
+        /* */
+      }
+    }).catch(() => { /* */ })
+    void hydrateAfterAuth().catch(() => {
       setListsReady(true)
     })
+    // Soft /auth/me later — not on the critical path
     void (async () => {
       try {
+        await new Promise((r) => setTimeout(r, 1500))
+        if (isSessionDead() || !hasAccessToken()) return
         const { user: fresh, settings: s } = await api.me()
         if (!isSessionDead()) applyUser(fresh, s as Record<string, unknown>)
       } catch {
         /* soft */
       }
     })()
-    void hydrateP
     return user
   }
 
@@ -2301,6 +2425,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       theme: 'theme',
       chatAccent: 'chat_accent',
       wallpaper: 'wallpaper',
+      chatPattern: 'chat_pattern',
       fontSize: 'font_size',
       language: 'language',
       statusPrivacy: 'status_privacy',
@@ -2390,7 +2515,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [settings])
 
   const createGroup = async (name: string, desc: string, memberIds: string[]) => {
-    const { group } = await api.createGroup({ name, desc, memberIds })
+    const memberUsernames = (memberIds || [])
+      .map((id) => {
+        const c = contactsRef.current?.find((x: any) => x.id === id || x.peerId === id)
+        return (c?.username || '').replace(/^@/, '').trim()
+      })
+      .filter(Boolean)
+    const { group } = await api.createGroup({ name, desc, memberIds, memberUsernames })
     await refreshGroups()
     return group.id as string
   }

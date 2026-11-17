@@ -6,6 +6,8 @@
     <meta name="theme-color" content="#7B2CBF" />
     <meta name="description" content="SafeChat — Chat freely. Chat safely." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Chat pattern: tiny WebP, preload so first chat paint is instant -->
+    <link rel="preload" as="image" href="/chat-bg.svg" type="image/svg+xml" />
     <title>SafeChat</title>
     <!-- FOUC guard: paint last known user's theme before React boots -->
     <script>

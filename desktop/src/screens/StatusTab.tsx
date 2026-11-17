@@ -190,6 +190,7 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
     setVideo(null)
     setComposing(false)
     setBusy(true)
+    showToast('Posting…')
 
     try {
       const { status } = await api.postStatus(body, img, bgCode, {
@@ -209,7 +210,7 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
             : [],
       })
       // Same list slot, swap id/metadata only so the card never disappears.
-      // Time goes Posting… → just now (no extra success toast after optimistic UI).
+      // Time goes Posting… → just now; toast confirms success for clear feedback.
       patchStatusList((list) =>
         list.map((s) =>
           s.id === localId
@@ -230,6 +231,7 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
             : s,
         ),
       )
+      showToast('Posted successfully')
     } catch (e: any) {
       patchStatusList((list) => list.filter((s) => s.id !== localId))
       showToast(e?.message || 'Could not post status - try again')

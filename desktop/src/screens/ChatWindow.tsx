@@ -11,7 +11,7 @@ import { Toggle } from '../components/ui'
 import { api, hasAccessToken, type ApiMsg } from '../api'
 import { utcNowIso, formatLocalTime, formatLastSeen, parseUtc, formatDayLabel, localDayKey } from '../time'
 import { isRealtimeOpen, wsSendMessage, wsReceipt, wsLiveTyping, wsTyping } from '../realtime'
-import { FONT_SIZES, resolveWallpaper, useStore } from '../store'
+import { getChatPatternUrl, FONT_SIZES, resolveWallpaper, resolveWallpaperImage, useStore } from '../store'
 import { playInboxLandingChime } from '../lib/sounds'
 import { compressForWeb } from '../lib/imageProcess'
 import {
@@ -750,14 +750,28 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const load = async (silent = false) => {
     try {
       const cid = await ensureConversation()
-      if (!cid) return
-      // Paint disk/memory cache immediately (no blank thread)
-      const cached = getCachedMessages(cid)
-      if (cached?.length) {
-        setMsgs((prev) => (prev.length ? prev : cached))
+      if (!cid) {
         if (!silent) setLoading(false)
+        return
       }
+      // Still the open conversation? (user may have switched away)
+      const stillHere = () => (convRef.current === cid)
+      // Paint memory, then disk — REPLACE, never merge with another thread's prev
+      let cached = getCachedMessages(cid)
+      if (!cached?.length) {
+        try {
+          const disk = await hydrateThreadFromDisk(cid)
+          if (disk?.length) cached = disk
+        } catch { /* */ }
+      }
+      if (cached?.length && stillHere()) {
+        setMsgs(cached)
+        setLoading(false)
+        silent = true // cache painted — network is background refresh only
+      }
+      if (!stillHere()) return
       const { messages, nextCursor } = await api.messages(cid, { limit: 50 })
+      if (!stillHere()) return
       setThreadCursor(cid, nextCursor || (messages.length ? messages[0]?.id : null))
       setHasMoreOlder(!!nextCursor || messages.length >= 50)
       // Incoming messages we just pulled: ack delivered before/while painting (no await)
@@ -767,7 +781,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           void api.markDelivered(m.id).catch(() => {})
         }
       }
+      if (!stillHere()) return
       setMsgs((prev) => {
+        // Isolation: only merge with messages already shown for THIS conversation
+        if (convRef.current !== cid) return prev
         // Merge server history into UI - NEVER drop a bubble already on screen
         // (server lag / partial pages used to wipe messages for a few seconds)
         const prevById = new Map(prev.map((m) => [m.id, m]))
@@ -894,6 +911,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     markLoadingOlder(cid, true)
     try {
       const { messages, nextCursor } = await api.messages(cid, { limit: 40, beforeId: String(beforeId) })
+      if (convRef.current !== cid) return
       if (!messages.length) {
         setHasMoreOlder(false)
         setThreadCursor(cid, null)
@@ -921,7 +939,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     const cid = conversationId || knownConv
     if (!cid) return
     return subscribeThread(cid, (list) => {
+      // Never paint another thread into this surface
+      if (convRef.current !== cid) return
       setMsgs((prev) => {
+        if (convRef.current !== cid) return prev
         if (sameMsgList(prev, list)) return prev
         // Prefer in-flight optimistic edits already on screen (avoid snap-back to old body)
         if (!prev.length) return list
@@ -962,7 +983,6 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   }, [chats, contactId, peerId, conversationId])
 
   useEffect(() => {
-    setLoading(true)
     // Fresh open: do NOT animate history - only new/outgoing later
     animatedKeys.current = new Set()
     setConversationId(knownConv)
@@ -973,27 +993,32 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         if (k) animatedKeys.current.add(k)
       }
     }
-    // Instant paint from memory/disk cache for this thread
+    const paintCached = (list: ApiMsg[]) => {
+      if (!list.length) return false
+      seedKeys(list)
+      setMsgs(list)
+      setLoading(false)
+      requestAnimationFrame(() => {
+        end.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+      })
+      return true
+    }
+
+    // Instant paint from THIS thread only — never keep previous chat's bubbles
+    let hadCache = false
     if (knownConv) {
       const mem = getCachedMessages(knownConv)
       if (mem?.length) {
-        seedKeys(mem)
-        setMsgs(mem)
-        setLoading(false)
-        // Jump to latest without animation
-        requestAnimationFrame(() => {
-          end.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-        })
+        hadCache = paintCached(mem)
       } else {
-        setMsgs([])
+        setMsgs([]) // clear other chat immediately
+        setLoading(true)
         void hydrateThread(knownConv).then((disk) => {
-          if (disk?.length && convRef.current === knownConv) {
+          if (convRef.current !== knownConv) return
+          if (disk?.length) {
             seedKeys(disk)
-            setMsgs((prev) => {
-              const merged = mergeMessageLists(disk, prev)
-              void applyThreadMessages(knownConv, merged, 'merge')
-              return merged
-            })
+            setMsgs(disk) // replace, do not merge with another inbox
+            void applyThreadMessages(knownConv, disk, 'replace')
             setLoading(false)
             requestAnimationFrame(() => {
               end.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
@@ -1003,6 +1028,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       }
     } else {
       setMsgs([])
+      setLoading(true)
     }
     // Instant blue ticks for the sender: as soon as this chat surface is open,
     // mark read - do not wait for message history to finish loading.
@@ -1020,11 +1046,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       setLoading(false)
       return
     }
-    load(false)
-    const t = setInterval(() => {
+    // Network refresh is silent when cache already painted the thread
+    void load(hadCache)
+    const timer = setInterval(() => {
       if (hasAccessToken() && document.visibilityState === 'visible') load(true)
     }, 20000)
-    return () => clearInterval(t)
+    return () => clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId])
 
@@ -2252,8 +2279,52 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     // Self-chat uses the normal chat surface (notes as rectangular items in the timeline)
 
 
-return (
-    <div className="flex h-full flex-col" style={{ background: resolveWallpaper(settings.wallpaper, settings.colorMode) }}>
+const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
+  const wallpaperImg = resolveWallpaperImage(settings.wallpaper, settings.wallpaperImage)
+  const isPictureBg = settings.wallpaper === 'Picture' && !!wallpaperImg
+  const showPattern = settings.chatPattern !== false
+
+  return (
+    <div className="relative flex h-full flex-col overflow-hidden">
+      {/* Base color / gradient */}
+      <div className="pointer-events-none absolute inset-0" style={{ background: wallpaperCss }} />
+      {/* Custom picture (optional) */}
+      {isPictureBg && wallpaperImg ? (
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            backgroundImage: `url(${wallpaperImg})`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            backgroundRepeat: 'no-repeat',
+          }}
+        />
+      ) : null}
+      {isPictureBg ? (
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              String(settings.colorMode || '').toLowerCase() === 'dark'
+                ? 'rgba(10, 12, 18, 0.55)'
+                : 'rgba(255, 255, 255, 0.55)',
+          }}
+        />
+      ) : null}
+      {/* Transparent SVG pattern blends over solid/gradient (default on) */}
+      {showPattern ? (
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            backgroundImage: `url(${getChatPatternUrl()})`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            backgroundRepeat: 'no-repeat',
+            opacity: String(settings.colorMode || '').toLowerCase() === 'dark' ? 0.28 : 0.40,
+          }}
+        />
+      ) : null}
+      <div className="relative z-10 flex h-full min-h-0 flex-col">
       <header className="z-10 flex shrink-0 items-center gap-1 border-b border-white/40 bg-white/80 backdrop-blur-md px-2 pb-3.5 pt-[max(1.5rem,calc(env(safe-area-inset-top)+0.75rem))] shadow-sm">
         <button
           type="button"
@@ -2731,7 +2802,7 @@ return (
             {loadingOlder ? 'Loading earlier messages…' : hasMoreOlder ? 'Scroll up for earlier messages' : ''}
           </p>
         )}
-        {loading && <p className="py-6 text-center text-sm font-bold text-gray-400">Loading…</p>}
+        {loading && msgs.length === 0 && <p className="py-6 text-center text-sm font-bold text-gray-400">Loading…</p>}
         {!loading && msgs.length === 0 && !selfNoteItems.length && (
           <EmptyState
             title={isSelfChat ? 'Your personal space' : `Say hi to ${c.name.split(' ')[0]}`}
@@ -3626,6 +3697,7 @@ return (
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

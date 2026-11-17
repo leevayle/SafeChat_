@@ -1308,6 +1308,7 @@ export function StatusViewer({
                   }
                   // Optimistic: show in UI immediately
                   patchStatusList((list) => [...list, optimistic])
+                  showToast('Posting…')
                   try {
                     const { status } = await api.postStatus(
                       current.text || '',
@@ -1342,7 +1343,7 @@ export function StatusViewer({
                           : s,
                       ),
                     )
-                    // Quiet success — no extra toast after the optimistic insert
+                    showToast('Posted successfully')
                   } catch {
                     patchStatusList((list) => list.filter((s) => s.id !== localId))
                     showToast('Could not repost')

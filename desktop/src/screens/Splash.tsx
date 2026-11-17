@@ -1,18 +1,31 @@
 import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { LogoIcon, Wordmark } from '../components/Logo'
+import { kvGet } from '../lib/kv'
+import { warmChatPattern } from '../store'
 
 /**
- * Pure splash — checks feel / intro animation then hands off.
- * Sequence: fade emblem → wordmark slides up closer → dots pulse → fade out
+ * Splash — short intro then hand off.
+ * Returning devices (sc_has_logged_in) use a faster path so startup feels snappy.
  */
 export function Splash({ onDone }: { onDone: () => void }) {
   const [phase, setPhase] = useState<'in' | 'hold' | 'out'>('in')
 
   useEffect(() => {
-    const t1 = setTimeout(() => setPhase('hold'), 900)
-    const t2 = setTimeout(() => setPhase('out'), 2600)
-    const t3 = setTimeout(() => onDone(), 3200)
+    void warmChatPattern()
+    let returning = false
+    try {
+      returning = kvGet('sc_has_logged_in') === '1'
+    } catch {
+      returning = false
+    }
+    // Returning: ~1.1s total. First-time: full branded intro ~2.4s.
+    const holdAt = returning ? 400 : 700
+    const outAt = returning ? 900 : 2000
+    const doneAt = returning ? 1100 : 2400
+    const t1 = setTimeout(() => setPhase('hold'), holdAt)
+    const t2 = setTimeout(() => setPhase('out'), outAt)
+    const t3 = setTimeout(() => onDone(), doneAt)
     return () => {
       clearTimeout(t1)
       clearTimeout(t2)
@@ -30,13 +43,13 @@ export function Splash({ onDone }: { onDone: () => void }) {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.45 }}
+            transition={{ duration: 0.35 }}
           >
             <LogoIcon size={120} />
             <motion.div
               initial={{ opacity: 0, y: 36 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.45, duration: 0.65, ease: [0.22, 1, 0.36, 1] }}
+              transition={{ delay: 0.25, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
               className="mt-4"
             >
               <Wordmark className="text-[2.5rem] leading-none" />
@@ -45,7 +58,7 @@ export function Splash({ onDone }: { onDone: () => void }) {
               className="mt-6 flex items-center gap-2"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              transition={{ delay: 1.0 }}
+              transition={{ delay: 0.55 }}
             >
               {[0, 1, 2].map((i) => (
                 <motion.span

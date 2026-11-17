@@ -980,7 +980,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     })
-    const user = mapUser(data.user || data)
+    const rawUser = data.user || data
+    const user = mapUser(rawUser) as any
+    // Preserve settings/preferences from enriched login payload (skip immediate /auth/me)
+    if (rawUser?.settings) user.settings = rawUser.settings
+    if (rawUser?.preferences) user.preferences = rawUser.preferences
+    if (rawUser?.wallpaper) user.wallpaper = rawUser.wallpaper
     if (data.password_reset_required) {
       return {
         password_reset_required: true as const,
@@ -1070,6 +1075,7 @@ export const api = {
       status_ads_enabled: 'statusAdsEnabled',
       verified_badge: 'verifiedBadge',
       wallpaper: 'wallpaper',
+      chat_pattern: 'chatPattern',
       language: 'language',
     }
     const mapped: Record<string, unknown> = {
@@ -1541,12 +1547,17 @@ rejectContactRequest: async (requestId: string) => {
     return { group: mapGroup(g) }
   },
 
-  sendGroup: async (groupId: string, text: string) => {
+  sendGroup: async (groupId: string, text: string, opts?: { clientKey?: string }) => {
+    try {
+      const g = await req<any>(`/api/v1/groups/${groupId}`)
+      const cid = g?.conversation_id || g?.conversationId
+      if (cid) return api.send(String(cid), text, null, opts)
+    } catch { /* fall through */ }
     const data = await req<any>('/api/v1/conversations')
     const list = data.conversations || data || []
-    const conv = list.find((c: any) => c.group_id === groupId)
+    const conv = list.find((c: any) => String(c.group_id || c.groupId) === String(groupId))
     if (!conv) throw new Error('Group conversation not found')
-    return api.send(String(conv.id), text)
+    return api.send(String(conv.id || conv._id), text, null, opts)
   },
 
   patchGroup: async (id: string, body: Record<string, unknown>) => {
