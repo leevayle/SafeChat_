@@ -96,6 +96,25 @@ function saveMuted(ids: string[]) {
 
 type ViewerRow = { id: string; username: string; name: string; photo: string | null; viewedAt: string | null; liked?: boolean; reposted?: boolean }
 
+/** Merge viewer rows: server/live wins, but never clear a true liked/reposted flag. */
+function mergeViewerFlags(prev: ViewerRow[], incoming: ViewerRow[]): ViewerRow[] {
+  const byId = new Map(prev.map((r) => [String(r.id), r]))
+  return (incoming || []).map((raw) => {
+    const id = String((raw as any).id || (raw as any).viewer_id || '')
+    const was = byId.get(id)
+    return {
+      id,
+      username: raw.username || was?.username || '',
+      name: raw.name || was?.name || 'User',
+      photo: raw.photo ?? was?.photo ?? null,
+      viewedAt: (raw as any).viewedAt ?? (raw as any).viewed_at ?? was?.viewedAt ?? null,
+      liked: !!(raw.liked || was?.liked),
+      reposted: !!(raw.reposted || was?.reposted),
+    }
+  })
+}
+
+
 export function StatusViewer({
   userId, initialStatusId, onClose, onReplyToStatus, onOpenChat }: Props) {
   const likeInFlight = useRef(false)
@@ -338,7 +357,9 @@ export function StatusViewer({
     const onCache = (ev: Event) => {
       const d = (ev as CustomEvent).detail as { statusId?: string; viewers?: ViewerRow[] }
       if (!d?.statusId || !current?.id || d.statusId !== current.id) return
-      if (Array.isArray(d.viewers)) setViewers(d.viewers)
+      if (Array.isArray(d.viewers)) {
+        setViewers((prev) => mergeViewerFlags(prev, d.viewers as ViewerRow[]))
+      }
     }
     window.addEventListener('sc:status-viewers-cache', onCache as EventListener)
     return () => window.removeEventListener('sc:status-viewers-cache', onCache as EventListener)
@@ -362,8 +383,11 @@ export function StatusViewer({
               setViewersLoading(true)
             }
             const { viewers: list } = await api.statusViewers(current.id)
-            setViewers(list)
-            void saveCachedViewers(current.id, list)
+            setViewers((prev) => {
+              const merged = mergeViewerFlags(prev, list || [])
+              void saveCachedViewers(current.id, merged)
+              return merged
+            })
           } catch {
             /* keep cache if any */
           } finally {
@@ -540,8 +564,11 @@ export function StatusViewer({
     try {
       const { viewers: list } = await api.statusViewers(current.id)
       if (Array.isArray(list)) {
-        setViewers(list)
-        void saveCachedViewers(current.id, list)
+        setViewers((prev) => {
+          const merged = mergeViewerFlags(prev, list)
+          void saveCachedViewers(current.id, merged)
+          return merged
+        })
       }
     } catch {
       if (!hadCache) showToast('Could not load viewers')
@@ -637,6 +664,14 @@ export function StatusViewer({
       })
   }
 
+  // MUST stay above any conditional return — Rules of Hooks
+  const handleClose = useCallback(() => {
+    if (me?.id && activeUserId && String(activeUserId) !== String(me.id)) {
+      markStatusesViewed?.(activeUserId, me.id)
+    }
+    onClose()
+  }, [me?.id, activeUserId, markStatusesViewed, onClose])
+
   if (!items.length || !current) {
     return (
       <div className="flex h-full flex-col items-center justify-center bg-ink text-white">
@@ -685,13 +720,6 @@ export function StatusViewer({
     onReplyToStatus?.(peer)
   }
 
-  const handleClose = useCallback(() => {
-    if (me?.id && activeUserId && String(activeUserId) !== String(me.id)) {
-      markStatusesViewed?.(activeUserId, me.id)
-    }
-    onClose()
-  }, [me?.id, activeUserId, markStatusesViewed, onClose])
-
   const bgCode = (current as any)?.background || 'theme_purple_grad'
   const bgCss = statusBgCss(bgCode)
   const fg = statusFgClasses(bgCode)
@@ -702,9 +730,9 @@ export function StatusViewer({
     <div
       className={`relative flex h-full flex-col select-none overflow-hidden ${fg.text}`}
       style={{
-        background: lightOverlay ? undefined : bgCss,
+        // Longhands only (avoids React "background vs backgroundImage" conflict)
         backgroundColor: bgCss,
-        backgroundImage: lightOverlay,
+        ...(lightOverlay ? { backgroundImage: lightOverlay } : {}),
         touchAction: 'pan-y',
       }}
       onContextMenu={(e) => e.preventDefault()}
@@ -1310,12 +1338,29 @@ export function StatusViewer({
                             ) : null}
                           </div>
                           {(v.reposted || v.liked) ? (
-                            <span className="flex shrink-0 items-center gap-1.5">
+                            <span
+                              className="flex shrink-0 flex-row items-center gap-2"
+                              aria-label={[
+                                v.reposted ? 'Reposted' : null,
+                                v.liked ? 'Liked' : null,
+                              ].filter(Boolean).join(', ')}
+                            >
+                              {/* Repost always LEFT of like; alone it occupies the like slot */}
                               {v.reposted ? (
-                                <Repeat2 size={18} className="text-brand-purple" aria-label="Reposted" />
+                                <Repeat2
+                                  size={17}
+                                  strokeWidth={2.6}
+                                  className="shrink-0 text-[#7b2cbf] dark:text-[#c4a0ef]"
+                                  aria-hidden
+                                />
                               ) : null}
                               {v.liked ? (
-                                <Heart size={18} className="text-brand-red" fill="currentColor" aria-label="Liked" />
+                                <Heart
+                                  size={17}
+                                  className="shrink-0 text-[#e3404c]"
+                                  fill="currentColor"
+                                  aria-hidden
+                                />
                               ) : null}
                             </span>
                           ) : null}

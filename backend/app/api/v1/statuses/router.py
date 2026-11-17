@@ -23,6 +23,8 @@ async def create_status(
         excluded_viewer_ids=body.excluded_viewer_ids,
         expires_in_hours=body.expires_in_hours,
         background=getattr(body, "background", None) or "solid_1",
+        is_repost=bool(getattr(body, "is_repost", False)),
+        repost_of_status_id=getattr(body, "repost_of_status_id", None),
     )
     return success_response("Status created", status_obj)
 

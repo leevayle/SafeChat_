@@ -114,6 +114,8 @@ class StatusService:
         excluded_viewer_ids: Optional[List[str]] = None,
         expires_in_hours: int = 24,
         background: Optional[str] = None,
+        is_repost: bool = False,
+        repost_of_status_id: Optional[str] = None,
     ) -> dict:
         try:
             st = StatusType(status_type)
@@ -153,6 +155,10 @@ class StatusService:
             "expires_at": expires,
             "status_type": st.value,
         }
+        if is_repost or repost_of_status_id:
+            doc["is_repost"] = True
+            if repost_of_status_id:
+                doc["repost_of_status_id"] = str(repost_of_status_id)
         result = await db.statuses.insert_one(doc)
         doc["_id"] = result.inserted_id
 
@@ -195,6 +201,90 @@ class StatusService:
             )
         except Exception:
             logger.debug("status_new fanout failed", exc_info=True)
+
+        # If this is a repost, tell the original owner so their viewers list gets reposted:true
+        if repost_of_status_id and ObjectId.is_valid(str(repost_of_status_id)):
+            try:
+                original = await db.statuses.find_one({"_id": ObjectId(str(repost_of_status_id))})
+                if original and str(original.get("owner_user_id")) != str(owner_id):
+                    orig_owner = str(original["owner_user_id"])
+                    reposter = await db.users.find_one(
+                        {"_id": ObjectId(owner_id)},
+                        {"username": 1, "display_name": 1, "profile_photo": 1},
+                    )
+                    already_liked = bool(
+                        await db.status_likes.find_one(
+                            {
+                                "status_id": str(repost_of_status_id),
+                                "user_id": owner_id,
+                            }
+                        )
+                    )
+                    view_count = await db.status_views.count_documents(
+                        {"status_id": str(repost_of_status_id)}
+                    )
+                    from app.websocket.manager import manager
+                    await manager.send_user(
+                        orig_owner,
+                        {
+                            "t": "status_view",
+                            "status_id": str(repost_of_status_id),
+                            "view_count": view_count,
+                            "viewer": {
+                                "viewer_id": owner_id,
+                                "username": (reposter or {}).get("username"),
+                                "display_name": (reposter or {}).get("display_name"),
+                                "profile_photo": (reposter or {}).get("profile_photo"),
+                                "viewed_at": now.isoformat(),
+                                "liked": already_liked,
+                                "reposted": True,
+                            },
+                            "repost_only": True,
+                        },
+                    )
+                    # Soft notification (one per original status + reposter)
+                    try:
+                        name = (
+                            (reposter or {}).get("display_name")
+                            or (reposter or {}).get("username")
+                            or "Someone"
+                        )
+                        already = await db.notifications.find_one(
+                            {
+                                "user_id": orig_owner,
+                                "type": "status_repost",
+                                "status_id": str(repost_of_status_id),
+                                "actor_id": owner_id,
+                            }
+                        )
+                        if not already:
+                            await db.notifications.insert_one(
+                                {
+                                    "user_id": orig_owner,
+                                    "type": "status_repost",
+                                    "status_id": str(repost_of_status_id),
+                                    "actor_id": owner_id,
+                                    "title": f"{name} reposted your status",
+                                    "body": f"{name} reposted your status",
+                                    "created_at": now,
+                                    "read": False,
+                                }
+                            )
+                            await manager.send_user(
+                                orig_owner,
+                                {
+                                    "t": "status_repost",
+                                    "status_id": str(repost_of_status_id),
+                                    "from": owner_id,
+                                    "from_name": name,
+                                    "title": f"{name} reposted your status",
+                                },
+                            )
+                    except Exception:
+                        logger.debug("status_repost notif failed", exc_info=True)
+            except Exception:
+                logger.debug("status_repost fanout failed", exc_info=True)
+
         return serialized
 
     @staticmethod
@@ -295,6 +385,13 @@ class StatusService:
                     liked_doc = await db.status_likes.find_one(
                         {"status_id": status_id, "user_id": viewer_id}
                     )
+                    reposted_doc = await db.statuses.find_one(
+                        {
+                            "owner_user_id": viewer_id,
+                            "repost_of_status_id": status_id,
+                        },
+                        {"_id": 1},
+                    )
                     viewer_payload = {
                         "viewer_id": viewer_id,
                         "id": viewer_id,
@@ -307,6 +404,7 @@ class StatusService:
                         "photo": (viewer or {}).get("profile_photo"),
                         "viewed_at": now.isoformat(),
                         "liked": bool(liked_doc),
+                        "reposted": bool(reposted_doc),
                     }
                     # Payload is complete before count is computed/sent
                     view_count = await db.status_views.count_documents({"status_id": status_id})
@@ -377,6 +475,20 @@ class StatusService:
         async for lk in db.status_likes.find({"status_id": status_id}):
             like_ids.add(lk.get("user_id"))
 
+        # Viewers who reposted this status (any of their statuses that reference it)
+        repost_ids = set()
+        if viewer_ids:
+            async for rs in db.statuses.find(
+                {
+                    "owner_user_id": {"$in": viewer_ids},
+                    "repost_of_status_id": status_id,
+                },
+                {"owner_user_id": 1},
+            ):
+                oid = rs.get("owner_user_id")
+                if oid:
+                    repost_ids.add(str(oid))
+
         results = []
         for v in views:
             u = users.get(v["viewer_id"])
@@ -390,14 +502,21 @@ class StatusService:
                     "profile_photo": u.get("profile_photo"),
                     "viewed_at": v["viewed_at"].isoformat() if v.get("viewed_at") else None,
                     "liked": v["viewer_id"] in like_ids,
+                    "reposted": v["viewer_id"] in repost_ids,
                 }
             )
-        # Likers first, then most recent views
-        liked = [r for r in results if r.get("liked")]
-        rest = [r for r in results if not r.get("liked")]
-        liked.sort(key=lambda r: r.get("viewed_at") or "", reverse=True)
+        # Engagement first (liked / reposted), then most recent
+        engaged = [r for r in results if r.get("liked") or r.get("reposted")]
+        rest = [r for r in results if not (r.get("liked") or r.get("reposted"))]
+        engaged.sort(
+            key=lambda r: (
+                (2 if r.get("liked") else 0) + (1 if r.get("reposted") else 0),
+                r.get("viewed_at") or "",
+            ),
+            reverse=True,
+        )
         rest.sort(key=lambda r: r.get("viewed_at") or "", reverse=True)
-        return liked + rest
+        return engaged + rest
 
 
 
@@ -493,10 +612,20 @@ class StatusService:
                             pass
                 except Exception:
                     pass
-        # Live push to owner: update viewers cache (liked flag) — no notif spam
+        # Live push to owner: update viewers cache (liked + reposted flags) — no notif spam
+        also_reposted = False
         try:
             from app.websocket.manager import manager
             view_count = await db.status_views.count_documents({"status_id": status_id})
+            also_reposted = bool(
+                await db.statuses.find_one(
+                    {
+                        "owner_user_id": user_id,
+                        "repost_of_status_id": status_id,
+                    },
+                    {"_id": 1},
+                )
+            )
             await manager.send_user(
                 str(s["owner_user_id"]),
                 {
@@ -510,13 +639,14 @@ class StatusService:
                         "profile_photo": (liker or {}).get("profile_photo"),
                         "viewed_at": now.isoformat(),
                         "liked": liked,
+                        "reposted": also_reposted,
                     },
                     "like_only": True,
                 },
             )
         except Exception:
             pass
-        return {"liked": liked, "status_id": status_id}
+        return {"liked": liked, "status_id": status_id, "reposted": also_reposted}
 
     @staticmethod
     async def _enrich_many(db, statuses: List[dict]) -> List[dict]:
@@ -604,4 +734,6 @@ class StatusService:
             "background": s.get("background") or "theme_purple_grad",
             "created_at": _iso(s.get("created_at")),
             "expires_at": _iso(s.get("expires_at")),
+            "is_repost": bool(s.get("is_repost") or s.get("repost_of_status_id")),
+            "repost_of_status_id": s.get("repost_of_status_id"),
         }

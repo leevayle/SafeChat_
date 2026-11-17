@@ -2655,6 +2655,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             const idx = prev.findIndex(
               (v: any) => String(v.viewer_id || v.id) === vid,
             )
+            const prevRow = idx >= 0 ? prev[idx] : null
             const row = {
               ...d.viewer,
               id: vid,
@@ -2666,8 +2667,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                 'User',
               username: d.viewer.username || '',
               photo: d.viewer.profile_photo ?? d.viewer.photo ?? null,
-              liked: !!d.viewer.liked,
-              reposted: !!d.viewer.reposted,
+              // Preserve engagement flags — WS view events often omit them
+              liked: !!(d.viewer.liked || (prevRow && (prevRow as any).liked)),
+              reposted: !!(d.viewer.reposted || (prevRow && (prevRow as any).reposted)),
               viewed_at: d.viewer.viewed_at || d.viewer.viewedAt || null,
             }
             let next: any[]
