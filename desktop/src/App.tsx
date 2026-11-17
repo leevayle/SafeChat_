@@ -51,7 +51,7 @@ export default function App() {
 }
 
 function Shell() {
-  const { ready, listsReady, me, logout, contacts, toast, clearToast, settings, chats, groups, calls, markStatusesViewed } = useStore()
+  const { ready, listsReady, me, logout, contacts, toast, clearToast, settings, chats, groups, calls, markStatusesViewed, statusList } = useStore()
   const [logoutConfirm, setLogoutConfirm] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT)
@@ -103,9 +103,38 @@ function Shell() {
   const requestLogout = () => setLogoutConfirm(true)
   const openStatus = (userId: string, statusId?: string) => {
     if (!userId) return
-    // Clear ring color immediately; StatusViewer will hit the API
-    if (me?.id && userId !== me.id) markStatusesViewed(userId, me.id)
-    setStatusUser({ userId, statusId })
+    // WhatsApp-style: open at first unviewed; if none/all viewed, start at beginning.
+    // Compute that BEFORE optimistic ring-clear so the jump target is still accurate.
+    let openId = statusId
+    const meId = me?.id ? String(me.id) : ''
+    if (!openId && meId && String(userId) !== meId) {
+      const now = Date.now()
+      const items = (statusList || [])
+        .filter((s: any) => {
+          if (String(s.userId || s.owner_user_id || '') !== String(userId)) return false
+          if (!s?.expiresAt) return true
+          let exp = String(s.expiresAt)
+          if (/^\d{4}-\d{2}-\d{2}T/.test(exp) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(exp)) exp += 'Z'
+          const t = Date.parse(exp)
+          return Number.isNaN(t) || t > now
+        })
+        .slice()
+        .sort((a: any, b: any) => {
+          const ta = a.createdAt ? Date.parse(String(a.createdAt).endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(String(a.createdAt)) ? a.createdAt : `${a.createdAt}Z`) : 0
+          const tb = b.createdAt ? Date.parse(String(b.createdAt).endsWith('Z') || /[+-]\d{2}:?\d{2}$/.test(String(b.createdAt)) ? b.createdAt : `${b.createdAt}Z`) : 0
+          return (Number.isNaN(ta) ? 0 : ta) - (Number.isNaN(tb) ? 0 : tb)
+        })
+      const firstUnseen = items.find((s: any) => {
+        if (!Array.isArray(s.views)) return true
+        return !s.views.some(
+          (v: any) => String(v) === meId || String(v?.id || v?.userId || '') === meId,
+        )
+      })
+      if (firstUnseen?.id) openId = String(firstUnseen.id)
+    }
+    // Clear ring color immediately after we know the start slide
+    if (meId && String(userId) !== meId) markStatusesViewed(userId, meId)
+    setStatusUser({ userId, statusId: openId })
   }
   const confirmLogout = async () => {
     setLogoutConfirm(false)

@@ -1,5 +1,5 @@
 -----------------
-ISSUES FIXING TAB
+ISSUE FIXING TAB
 -----------------
 
 1. Status to have posting time just below the name of the poster, where it says just now after posting, time should remain there in user's preferred time like 24hr or 12hr clock. Both on viewer's and poster's side.
@@ -84,4 +84,15 @@ Fix those issues and do not break anything else. do not use the ai dash, check u
 - When user sends support ticket send with user app version info.
 - Fonts not rendering properly (fonts take longer to load we need offline options - download some major fonts)
 - Take me to the status i have not viewed do not start from scratch when i have some i have  already viewed.
+- 
+
+v 1.0.3 known issues
+- Read receipts
+- Status begins from 1 everytime instead of first unviewed
+- Version info on settings frontend innacurate, should get from .env
+- When user hits esc in desktop inbox view it makes an outline in the chat they were viewing.
+- server cli -ws send failed message needs to be disabled.
+- Log someone out when jwt expires do not just silently do it in the background so someone's chats dissapear and stuff and they're still in their normal ui, log them out so they know they need to do something.
+- Status viewer caching broken again
+- user to user status animatio not smooth 2 steps suck just one step is good
 - 

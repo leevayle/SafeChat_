@@ -157,28 +157,30 @@ export function StatusViewer({
 
   useEffect(() => {
     if (jumpedRef.current || !items.length) return
-    // Explicit status reply target wins (only for the original user open)
+    // Explicit target (reply deep-link or first-unviewed from openStatus)
     if (initialStatusId && activeUserId === userId) {
-      const i = items.findIndex((s) => s.id === initialStatusId)
+      const i = items.findIndex((s) => String(s.id) === String(initialStatusId))
       if (i >= 0) {
         setIdx(i)
         jumpedRef.current = true
         return
       }
     }
-    // First unviewed status; if all viewed, start from the beginning
+    // WhatsApp-style: first unviewed; if none unviewed (or all viewed), start at beginning
     const meId = me?.id ? String(me.id) : ''
     if (!meId || meId === String(activeUserId)) {
+      setIdx(0)
       jumpedRef.current = true
       return
     }
     const hasViewed = (s: any) => {
       if (!Array.isArray(s.views)) return false
-      return s.views.some((v: any) => String(v) === meId || String(v?.id || v?.userId || '') === meId)
+      return s.views.some(
+        (v: any) => String(v) === meId || String(v?.id || v?.userId || '') === meId,
+      )
     }
     const firstUnseen = items.findIndex((s) => !hasViewed(s))
-    if (firstUnseen >= 0) setIdx(firstUnseen)
-    else setIdx(0)
+    setIdx(firstUnseen >= 0 ? firstUnseen : 0)
     jumpedRef.current = true
   }, [initialStatusId, items, me?.id, activeUserId, userId])
   const [paused, setPaused] = useState(false)
@@ -259,7 +261,10 @@ export function StatusViewer({
   const switchUser = useCallback(
     (nextUid: string, dir: 1 | -1 = 1) => {
       if (!nextUid || nextUid === activeUserId) return
-      if (me?.id && nextUid !== me.id) markStatusesViewed?.(nextUid, me.id)
+      // Finish previous user's ring; do NOT mark the next user yet so jump-to-unviewed still works
+      if (me?.id && activeUserId && String(activeUserId) !== String(me.id)) {
+        markStatusesViewed?.(activeUserId, me.id)
+      }
       setUserSlideDir(dir)
       setUserAnimKey((k) => k + 1)
       setActiveUserId(nextUid)
@@ -665,6 +670,13 @@ export function StatusViewer({
     onReplyToStatus?.(peer)
   }
 
+  const handleClose = useCallback(() => {
+    if (me?.id && activeUserId && String(activeUserId) !== String(me.id)) {
+      markStatusesViewed?.(activeUserId, me.id)
+    }
+    onClose()
+  }, [me?.id, activeUserId, markStatusesViewed, onClose])
+
   const bgCode = (current as any)?.background || 'theme_purple_grad'
   const bgCss = statusBgCss(bgCode)
   const fg = statusFgClasses(bgCode)
@@ -819,7 +831,7 @@ export function StatusViewer({
           data-status-action
           onClick={(e) => {
             e.stopPropagation()
-            onClose()
+            handleClose()
           }}
           className={`flex h-9 w-9 items-center justify-center rounded-full ${fg.chip}`}
           aria-label="Close"
