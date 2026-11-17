@@ -94,7 +94,7 @@ function saveMuted(ids: string[]) {
   }
 }
 
-type ViewerRow = { id: string; username: string; name: string; photo: string | null; viewedAt: string | null; liked?: boolean }
+type ViewerRow = { id: string; username: string; name: string; photo: string | null; viewedAt: string | null; liked?: boolean; reposted?: boolean }
 
 export function StatusViewer({
   userId, initialStatusId, onClose, onReplyToStatus, onOpenChat }: Props) {
@@ -220,18 +220,23 @@ export function StatusViewer({
   const itemsLenRef = useRef(items.length)
   const pressStartRef = useRef(0)
   const pressSideRef = useRef<'left' | 'right' | 'mid' | null>(null)
+  /** True once the pointer moves past a small threshold — hold-to-pause must not fire on swipes */
+  const pointerMovedRef = useRef(false)
 
   idxRef.current = idx
   pausedRef.current = paused
   itemsLenRef.current = items.length
   progressRef.current = progress
 
-  // Reset slide index when switching users
+  // Reset slide index when switching users and ensure playback resumes
   useEffect(() => {
     jumpedRef.current = false
     setIdx(0)
     setProgress(0)
     progressRef.current = 0
+    pausedRef.current = false
+    setPaused(false)
+    lastTsRef.current = null
   }, [activeUserId])
 
   // Default segment length when slide changes; video onLoadedMetadata may override
@@ -272,6 +277,10 @@ export function StatusViewer({
       setIdx(0)
       setProgress(0)
       progressRef.current = 0
+      // Always autoplay next user's status (swipe must not leave the viewer paused)
+      pausedRef.current = false
+      setPaused(false)
+      lastTsRef.current = null
     },
     [activeUserId, me?.id, markStatusesViewed],
   )
@@ -455,12 +464,22 @@ export function StatusViewer({
 
   const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const clearHoldTimer = () => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current)
+      holdTimerRef.current = null
+    }
+  }
+
   const onPressStart = (side: 'left' | 'right' | 'mid') => (e: PointerEvent) => {
     if ((e.target as HTMLElement).closest('[data-status-action]')) return
     pressStartRef.current = Date.now()
     pressSideRef.current = side
-    if (holdTimerRef.current) clearTimeout(holdTimerRef.current)
+    pointerMovedRef.current = false
+    clearHoldTimer()
+    // Hold-to-pause only fires if the finger stays still (no swipe)
     holdTimerRef.current = setTimeout(() => {
+      if (pointerMovedRef.current) return
       setPaused(true)
     }, HOLD_MS)
   }
@@ -468,23 +487,19 @@ export function StatusViewer({
   const onPressEnd = (e?: PointerEvent) => {
     try {
       if (e?.target && (e.target as HTMLElement).closest?.('[data-status-action]')) {
-        if (holdTimerRef.current) {
-          clearTimeout(holdTimerRef.current)
-          holdTimerRef.current = null
-        }
+        clearHoldTimer()
         return
       }
     } catch { /* */ }
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current)
-      holdTimerRef.current = null
-    }
+    clearHoldTimer()
     const held = Date.now() - pressStartRef.current
     const side = pressSideRef.current
+    const moved = pointerMovedRef.current
     pressSideRef.current = null
+    pointerMovedRef.current = false
     setPaused(false)
     // Swipes are handled in the root pointer-up path; taps only here
-    if (Math.abs(swipeDxRef.current) > 24 || swipeDyRef.current > 24) return
+    if (moved || Math.abs(swipeDxRef.current) > 24 || swipeDyRef.current > 24) return
     if (held < HOLD_MS && side) {
       // TAP left/right: next / previous status for THIS user (WhatsApp-style)
       if (side === 'left') goPrev()
@@ -694,16 +709,14 @@ export function StatusViewer({
       }}
       onContextMenu={(e) => e.preventDefault()}
       onPointerCancel={() => {
-        if (holdTimerRef.current) {
-          clearTimeout(holdTimerRef.current)
-          holdTimerRef.current = null
-        }
+        clearHoldTimer()
         swipeStartY.current = null
         swipeStartX.current = null
         swipeDyRef.current = 0
         swipeDxRef.current = 0
         setSwipeDy(0)
         pressSideRef.current = null
+        pointerMovedRef.current = false
         setPaused(false)
       }}
       onPointerDown={(e) => {
@@ -714,6 +727,7 @@ export function StatusViewer({
         swipeStartX.current = e.clientX
         swipeDyRef.current = 0
         swipeDxRef.current = 0
+        pointerMovedRef.current = false
         setSwipeDy(0)
       }}
       onPointerMove={(e) => {
@@ -722,24 +736,32 @@ export function StatusViewer({
         const dy = swipeStartY.current - e.clientY
         const dx = e.clientX - swipeStartX.current
         swipeDxRef.current = dx
+        // Any meaningful movement = swipe (cancel hold-to-pause — never pause while swiping)
+        if (!pointerMovedRef.current && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+          pointerMovedRef.current = true
+          clearHoldTimer()
+          // Ensure we are not left paused from a previous hold
+          if (pausedRef.current) {
+            pausedRef.current = false
+            setPaused(false)
+          }
+        }
         if (dy > 0) {
           swipeDyRef.current = Math.min(140, dy)
           setSwipeDy(swipeDyRef.current)
-          if (dy > 14) setPaused(true)
+          // Do NOT pause on vertical swipe — pause is hold-still only
         }
       }}
       onPointerUp={(e) => {
         if ((e.target as HTMLElement).closest('[data-status-action]')) {
           // Let the control handle its own click; only clear hold timer
-          if (holdTimerRef.current) {
-            clearTimeout(holdTimerRef.current)
-            holdTimerRef.current = null
-          }
+          clearHoldTimer()
           swipeStartY.current = null
           swipeStartX.current = null
           swipeDyRef.current = 0
           swipeDxRef.current = 0
           setSwipeDy(0)
+          pointerMovedRef.current = false
           return
         }
         const dx = swipeDxRef.current
@@ -749,6 +771,7 @@ export function StatusViewer({
 
         // Horizontal swipe → next / previous USER (owner excluded from list)
         if (absDx > 56 && absDx > absDy + 12) {
+          clearHoldTimer()
           if (dx < 0) goNextUser()
           else goPrevUser()
           swipeStartY.current = null
@@ -756,18 +779,24 @@ export function StatusViewer({
           swipeDyRef.current = 0
           swipeDxRef.current = 0
           setSwipeDy(0)
+          pointerMovedRef.current = false
+          pausedRef.current = false
           setPaused(false)
+          lastTsRef.current = null
           return
         }
 
         // Vertical swipe up → reply (mobile / foldable)
         if (!isOwner && dy > 40 && absDy > absDx) {
+          clearHoldTimer()
           commitStatusReply()
           swipeStartY.current = null
           swipeStartX.current = null
           swipeDyRef.current = 0
           swipeDxRef.current = 0
           setSwipeDy(0)
+          pointerMovedRef.current = false
+          setPaused(false)
           return
         }
 
@@ -778,6 +807,7 @@ export function StatusViewer({
         swipeDyRef.current = 0
         swipeDxRef.current = 0
         setSwipeDy(0)
+        pointerMovedRef.current = false
       }}
     >
       <AnimatePresence initial={false} custom={userSlideDir} mode="wait">
@@ -1184,6 +1214,7 @@ export function StatusViewer({
                         video: (current as any).video || undefined,
                         expiresInHours: hours,
                         isRepost: true,
+                        repostOfStatusId: String(current.id),
                       },
                     )
                     showToast('Reposted to your status')
@@ -1278,8 +1309,15 @@ export function StatusViewer({
                               <p className="truncate text-xs font-semibold text-gray-400">@{v.username}</p>
                             ) : null}
                           </div>
-                          {v.liked ? (
-                            <Heart size={18} className="shrink-0 text-brand-red" fill="currentColor" />
+                          {(v.reposted || v.liked) ? (
+                            <span className="flex shrink-0 items-center gap-1.5">
+                              {v.reposted ? (
+                                <Repeat2 size={18} className="text-brand-purple" aria-label="Reposted" />
+                              ) : null}
+                              {v.liked ? (
+                                <Heart size={18} className="text-brand-red" fill="currentColor" aria-label="Liked" />
+                              ) : null}
+                            </span>
                           ) : null}
                         </button>
                       </li>

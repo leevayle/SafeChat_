@@ -596,7 +596,7 @@ export function Notifications({
 
   return (
     <div className="sc-notif-page flex h-full flex-col bg-gradient-to-b from-[#f3eeff]/80 via-white to-[#eef4ff]/50 dark:from-[#121821] dark:via-[#121821] dark:to-[#121821] dark:bg-[#121821]">
-      <header className="z-10 shrink-0 border-b border-black/5 bg-white/90 px-3 pb-3 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur-md dark:border-white/10 dark:bg-[#121821]/95">
+      <header className="z-10 flex min-h-16 shrink-0 flex-col justify-center border-b border-gray-200 bg-white/95 px-3 pb-3 pt-[max(12px,env(safe-area-inset-top))] backdrop-blur dark:border-white/10 dark:bg-[#121821]/95">
         <div className="flex items-center gap-1">
           <button
             type="button"

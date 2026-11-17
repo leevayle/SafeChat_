@@ -98,7 +98,7 @@ export function Toast({ msg, clear }: { msg: string | null; clear: () => void })
 
 export function ScreenHeader({ title, onBack, right }: { title: string; onBack?: () => void; right?: ReactNode }) {
   return (
-    <header className="sticky top-0 z-10 flex min-h-14 shrink-0 items-center gap-2 border-b border-gray-100 bg-white/95 px-3 pt-[max(8px,env(safe-area-inset-top))] backdrop-blur">
+    <header className="sticky top-0 z-10 flex min-h-16 shrink-0 items-center gap-2 border-b border-gray-200 bg-white/95 px-3 pb-3 pt-[max(12px,env(safe-area-inset-top))] backdrop-blur dark:border-white/10 dark:bg-[#121821]/95">
       {onBack ? (
         <button type="button" onClick={onBack} className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-gray-100" aria-label="Back">
           <ArrowLeft size={22} />

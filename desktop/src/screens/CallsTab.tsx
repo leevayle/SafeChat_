@@ -88,7 +88,7 @@ export function CallsTab({ onCall, onOpenContacts, onOpenNewCallPanel }: Props) 
 
   return (
     <div className="relative flex h-full flex-col bg-white">
-      <header className="sticky top-0 z-10 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 px-5 pt-[max(10px,env(safe-area-inset-top))] backdrop-blur">
+      <header className="sticky top-0 z-10 flex min-h-16 shrink-0 items-center justify-between border-b border-gray-200 bg-white/95 px-5 pb-3 pt-[max(12px,env(safe-area-inset-top))] backdrop-blur">
         <BrandMark />
         <button
           type="button"

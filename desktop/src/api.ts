@@ -1598,6 +1598,7 @@ rejectContactRequest: async (requestId: string) => {
       excludedViewerIds?: string[]
       video?: string
       isRepost?: boolean
+      repostOfStatusId?: string
     },
   ) => {
     let content = text || ''
@@ -1613,6 +1614,7 @@ rejectContactRequest: async (requestId: string) => {
       expires_in_hours: opts?.expiresInHours ?? 24,
       background: background || 'theme_purple_grad',
       ...(opts?.isRepost ? { is_repost: true } : {}),
+      ...(opts?.repostOfStatusId ? { repost_of_status_id: opts.repostOfStatusId } : {}),
     }
     const media: any[] = []
     if (image) media.push({ type: 'image', url: image })
@@ -1645,6 +1647,7 @@ rejectContactRequest: async (requestId: string) => {
         photo: v.profile_photo ?? null,
         viewedAt: v.viewed_at || null,
         liked: !!v.liked,
+        reposted: !!(v.reposted || v.is_repost || v.reposted_status),
       })),
     }
   },

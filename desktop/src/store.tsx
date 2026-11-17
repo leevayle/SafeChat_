@@ -2667,6 +2667,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               username: d.viewer.username || '',
               photo: d.viewer.profile_photo ?? d.viewer.photo ?? null,
               liked: !!d.viewer.liked,
+              reposted: !!d.viewer.reposted,
               viewed_at: d.viewer.viewed_at || d.viewer.viewedAt || null,
             }
             let next: any[]
@@ -2675,7 +2676,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             } else {
               next = [row, ...prev]
             }
-            next.sort((a, b) => Number(!!b.liked) - Number(!!a.liked))
+            next.sort((a, b) => (Number(!!b.liked) + Number(!!b.reposted)) - (Number(!!a.liked) + Number(!!a.reposted)))
             await saveCachedViewers(d.statusId!, next)
             try {
               window.dispatchEvent(

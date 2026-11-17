@@ -88,11 +88,15 @@ Fix those issues and do not break anything else. do not use the ai dash, check u
 
 v 1.0.3 known issues
 - Read receipts
-- Status begins from 1 everytime instead of first unviewed - √
+- Status begins from 1 everytime instead of first unviewed ---------- √
 - Version info on settings frontend innacurate, should get from .env 
 - When user hits esc in desktop inbox view it makes an outline in the chat they were viewing.
-- server cli -ws send failed message needs to be disabled.
+- server cli -ws send failed message needs to be disabled.-------------- √
 - Log someone out when jwt expires do not just silently do it in the background so someone's chats dissapear and stuff and they're still in their normal ui, log them out so they know they need to do something.
-- Status viewer caching broken again
-- user to user status animatio not smooth 2 steps suck just one step is good
-- 
+- Status viewer caching broken again--------------- √
+- user to user status animatio not smooth 2 steps suck just one step is good------- √
+- Notifications should be deletable and selectable.
+- when many save requests are selected options should be delete, unsave. not just delete alone.
+- Quality of life improvement - all sections of the app that need a top ribbon, make it equal in height to chats home top ribbon for uniformity. things like save requests, notifications, customer care, in short any menu that has a top nav ribbon make it equal to chats home top nav ribbon. ------- √
+- Liquid glass status compose leaves the second screen in foldable (it should occupy both) also it has this wierd box around text boxes, it should be well thought of not every text box should have it.
+- i think online status is broken again. No it just doesnt do localhost and live
