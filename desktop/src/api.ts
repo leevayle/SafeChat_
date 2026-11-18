@@ -551,17 +551,55 @@ function mapConversation(c: any, meId?: string): ChatPreview {
 }
 
 function mapGroup(g: any): any {
+  const id = String(g.id || g._id || '')
+  const membersRaw = Array.isArray(g.members) ? g.members : []
+  const memberIds = (g.member_ids || membersRaw.map((m: any) => m.id) || []).map(String)
+  const adminIds = (g.admin_ids || []).map(String)
+  const members = membersRaw.length
+    ? membersRaw.map((m: any) => ({
+        id: String(m.id),
+        username: m.username || '',
+        name: m.display_name || m.name || m.username || 'Member',
+        photo: m.profile_photo ?? m.photo ?? null,
+        admin: !!(m.is_admin || adminIds.includes(String(m.id))),
+      }))
+    : memberIds.map((mid: string) => ({
+        id: mid,
+        username: '',
+        name: mid,
+        photo: null,
+        admin: adminIds.includes(mid),
+      }))
+  const last = g.last_message
+  const lastText = last?.content || last?.text || ''
+  let lastTime = ''
+  const iso = g.last_message_at || last?.created_at
+  if (iso) {
+    try {
+      lastTime = formatLocalTime(iso)
+    } catch {
+      /* */
+    }
+  }
   return {
-    id: String(g.id),
-    name: g.group_name || g.name,
+    id,
+    name: g.group_name || g.name || 'Group',
     desc: g.group_description || g.desc || '',
-    photo: g.group_photo || null,
-    creatorId: g.creator_id,
-    adminIds: g.admin_ids || [],
-    memberIds: g.member_ids || [],
-    conversationId: g.conversation_id,
-    createdAt: g.created_at,
-    hue: hueFor(String(g.id)),
+    photo: g.group_photo || g.photo || null,
+    creatorId: g.creator_id || g.creatorId,
+    adminIds,
+    memberIds,
+    members,
+    conversationId: g.conversation_id || g.conversationId || null,
+    createdAt: g.created_at || g.createdAt,
+    hue: hueFor(id),
+    last: lastText,
+    time: lastTime,
+    iso: iso || undefined,
+    unread: Number(g.unread_count || g.unread || 0),
+    muted: !!g.muted,
+    pinned: !!g.pinned,
+    messages: [],
   }
 }
 
@@ -1620,7 +1658,8 @@ rejectContactRequest: async (requestId: string) => {
   },
 
   groups: async () => {
-    const list = await req<any[]>('/api/v1/groups')
+    const data = await req<any>('/api/v1/groups')
+    const list = Array.isArray(data) ? data : data?.groups || data?.items || []
     return { groups: (list || []).map(mapGroup) }
   },
 
@@ -1663,6 +1702,7 @@ rejectContactRequest: async (requestId: string) => {
     const payload: Record<string, unknown> = {}
     if (body.name) payload.group_name = body.name
     if (body.desc !== undefined) payload.group_description = body.desc
+    if (body.photo !== undefined) payload.group_photo = body.photo
     const g = await req<any>(`/api/v1/groups/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
@@ -1670,8 +1710,31 @@ rejectContactRequest: async (requestId: string) => {
     return { group: mapGroup(g) }
   },
 
+  addGroupMembers: async (id: string, usernames: string[]) => {
+    return req<any>(`/api/v1/groups/${id}/members`, {
+      method: 'POST',
+      body: JSON.stringify({ usernames }),
+    })
+  },
+  removeGroupMember: async (id: string, userId: string) => {
+    await req(`/api/v1/groups/${id}/members/${userId}`, { method: 'DELETE' })
+    return { ok: true }
+  },
+  promoteGroupAdmin: async (id: string, userId: string) => {
+    await req(`/api/v1/groups/${id}/admins/${userId}`, { method: 'POST' })
+    return { ok: true }
+  },
+  demoteGroupAdmin: async (id: string, userId: string) => {
+    await req(`/api/v1/groups/${id}/admins/${userId}`, { method: 'DELETE' })
+    return { ok: true }
+  },
+  leaveGroup: async (id: string) => {
+    await req(`/api/v1/groups/${id}/leave`, { method: 'POST' })
+    return { ok: true }
+  },
+
   joinGroup: async (_code: string) => {
-    throw new Error('Group invite codes not yet available on backend')
+    throw new Error('Group invite links are not available yet')
   },
 
   deleteGroup: async (id: string) => {

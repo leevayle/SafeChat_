@@ -75,15 +75,16 @@ export function GroupChat({
   onCall?: (id: string, kind: 'audio' | 'video') => void
   onInfo?: (groupId: string) => void
 }) {
-  const { groups, contacts, me, settings, showToast } = useStore()
-  const g = groups.find((x) => x.id === groupId)
+  const { groups, contacts, me, settings, showToast, refreshGroups } = useStore()
+  const listed = groups.find((x) => x.id === groupId)
+  const [g, setG] = useState<any>(listed || null)
   const [text, setText] = useState('')
   const [emoji, setEmoji] = useState(false)
   const [msgs, setMsgs] = useState<GMsg[]>([])
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [conversationId, setConversationId] = useState<string | null>(
-    g?.conversationId || null,
+    listed?.conversationId || null,
   )
   const end = useRef<HTMLDivElement>(null)
   const myId = me?.id || ''
@@ -94,38 +95,32 @@ export function GroupChat({
       if (uid === myId) return 'You'
       const c = contacts.find((x) => x.id === uid || x.peerId === uid)
       if (c) return c.savedName || c.name || c.username || 'Member'
+      const m = (g?.members || []).find((x: any) => x.id === uid)
+      if (m) return m.name || m.username || 'Member'
       return 'Member'
     },
-    [contacts, myId],
+    [contacts, myId, g?.members],
   )
 
   useEffect(() => {
     let cancelled = false
     const run = async () => {
-      if (g?.conversationId) {
-        setConversationId(g.conversationId)
-        return
-      }
       try {
         const { group } = await api.group(groupId)
         if (cancelled) return
-        if (group?.conversationId) {
-          setConversationId(group.conversationId)
-          return
-        }
-      } catch { /* */ }
-      try {
-        const data = await (api as any).conversations?.()
-        const list = data?.conversations || data || []
-        const conv = (list as any[]).find(
-          (c) => String(c.group_id || c.groupId) === String(groupId),
-        )
-        if (!cancelled && conv) setConversationId(String(conv.id || conv._id))
-      } catch { /* */ }
+        setG(group)
+        if (group?.conversationId) setConversationId(group.conversationId)
+        void refreshGroups?.()
+      } catch {
+        if (!cancelled && listed) setG(listed)
+        if (!cancelled && listed?.conversationId) setConversationId(listed.conversationId)
+      }
     }
     void run()
-    return () => { cancelled = true }
-  }, [groupId, g?.conversationId])
+    return () => {
+      cancelled = true
+    }
+  }, [groupId, listed, refreshGroups])
 
   useEffect(() => {
     if (!conversationId) return
@@ -236,13 +231,31 @@ export function GroupChat({
   const isPictureBg = settings.wallpaper === 'Picture' && !!wallpaperImg
   const showPattern = settings.chatPattern !== false
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        try {
+          ;(document.activeElement as HTMLElement | null)?.blur?.()
+        } catch {
+          /* */
+        }
+        onBack()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onBack])
+
   if (!g) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 bg-white">
-        <p className="font-bold text-gray-400">Group not found</p>
-        <button type="button" onClick={onClosed} className="font-bold text-brand-purple">
-          Close
-        </button>
+        <p className="font-bold text-gray-400">{loading ? 'Opening group…' : 'Group not found'}</p>
+        {!loading ? (
+          <button type="button" onClick={onClosed} className="font-bold text-brand-purple">
+            Close
+          </button>
+        ) : null}
       </div>
     )
   }

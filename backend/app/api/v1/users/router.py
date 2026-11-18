@@ -145,27 +145,8 @@ class NotificationSettingsUpdate(BaseModel):
     security: Optional[bool] = None
 
 
-class ChatLockPinBody(BaseModel):
-    pin: str = Field(..., min_length=4, max_length=8)
-
-
-class ChatLockPeersBody(BaseModel):
-    peer_ids: List[str] = Field(default_factory=list)
-
-
-def _chat_lock_public(user: dict) -> dict:
-    peers = user.get("locked_peer_ids") or []
-    if not isinstance(peers, list):
-        peers = []
-    return {
-        "chat_lock_enabled": bool(user.get("chat_lock_pin_hash")),
-        "locked_peer_ids": [str(p) for p in peers if p],
-    }
-
-
 @router.get("/me")
 async def get_my_profile(user: dict = Depends(get_current_user)):
-    lock = _chat_lock_public(user)
     return success_response(
         "Profile",
         {
@@ -180,12 +161,6 @@ async def get_my_profile(user: dict = Depends(get_current_user)):
             "account_status": user.get("account_status"),
             "privacy_settings": user.get("privacy_settings"),
             "notification_settings": user.get("notification_settings"),
-            "theme": user.get("theme") or "purple",
-            "chat_accent": user.get("chat_accent") or "purple",
-            "color_mode": user.get("color_mode") or "light",
-            "liquid_glass": bool(user.get("liquid_glass", False)),
-            "chat_lock_enabled": lock["chat_lock_enabled"],
-            "locked_peer_ids": lock["locked_peer_ids"],
             "created_at": user.get("created_at").isoformat()
             if user.get("created_at")
             else None,
@@ -226,108 +201,6 @@ async def update_my_profile(
         }
     )
     return success_response("Profile updated", updates)
-
-
-@router.post("/me/chat-lock")
-async def set_chat_lock_pin(
-    body: ChatLockPinBody,
-    user: dict = Depends(get_current_user),
-):
-    """Create or replace the chat-lock PIN. Stored as bcrypt hash only."""
-    pin = (body.pin or "").strip()
-    if not pin.isdigit() or len(pin) < 4 or len(pin) > 8:
-        raise ValidationError("PIN must be 4-8 digits")
-    from app.core.security import hash_password
-
-    db = get_database()
-    hashed = hash_password(pin)
-    await db.users.update_one(
-        {"_id": ObjectId(user["id"])},
-        {
-            "$set": {
-                "chat_lock_pin_hash": hashed,
-                "updated_at": datetime.now(timezone.utc),
-            }
-        },
-    )
-    return success_response("Chat lock PIN saved", {"chat_lock_enabled": True})
-
-
-@router.post("/me/chat-lock/verify")
-async def verify_chat_lock_pin(
-    body: ChatLockPinBody,
-    user: dict = Depends(get_current_user),
-):
-    """Verify chat-lock PIN without exposing the hash."""
-    pin = (body.pin or "").strip()
-    stored = user.get("chat_lock_pin_hash")
-    if not stored:
-        raise ValidationError("Chat lock PIN is not set")
-    from app.core.security import verify_password
-
-    if not verify_password(pin, stored):
-        raise ForbiddenError("Wrong PIN")
-    return success_response("PIN ok", {"ok": True})
-
-
-@router.delete("/me/chat-lock")
-async def clear_chat_lock(
-    body: ChatLockPinBody,
-    user: dict = Depends(get_current_user),
-):
-    """Disable chat lock for all chats after verifying the current PIN."""
-    pin = (body.pin or "").strip()
-    stored = user.get("chat_lock_pin_hash")
-    if not stored:
-        return success_response("Chat lock already disabled", {"chat_lock_enabled": False})
-    from app.core.security import verify_password
-
-    if not verify_password(pin, stored):
-        raise ForbiddenError("Wrong PIN")
-    db = get_database()
-    await db.users.update_one(
-        {"_id": ObjectId(user["id"])},
-        {
-            "$unset": {"chat_lock_pin_hash": ""},
-            "$set": {
-                "locked_peer_ids": [],
-                "updated_at": datetime.now(timezone.utc),
-            },
-        },
-    )
-    return success_response(
-        "Chat lock disabled",
-        {"chat_lock_enabled": False, "locked_peer_ids": []},
-    )
-
-
-@router.put("/me/chat-lock/peers")
-async def set_locked_peers(
-    body: ChatLockPeersBody,
-    user: dict = Depends(get_current_user),
-):
-    """Replace the list of locked peer user ids (synced across devices)."""
-    if not user.get("chat_lock_pin_hash"):
-        raise ValidationError("Set a chat lock PIN first")
-    peers: List[str] = []
-    seen = set()
-    for raw in body.peer_ids or []:
-        pid = str(raw or "").strip()
-        if not pid or pid in seen:
-            continue
-        seen.add(pid)
-        peers.append(pid)
-    db = get_database()
-    await db.users.update_one(
-        {"_id": ObjectId(user["id"])},
-        {
-            "$set": {
-                "locked_peer_ids": peers,
-                "updated_at": datetime.now(timezone.utc),
-            }
-        },
-    )
-    return success_response("Locked chats updated", {"locked_peer_ids": peers})
 
 
 @router.patch("/me/preferences")

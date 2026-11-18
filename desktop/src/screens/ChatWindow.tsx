@@ -669,14 +669,23 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [pendingImage, setPendingImage] = useState<string | null>(null)
   const [replyTo, setReplyTo] = useState<ApiMsg | null>(null)
   const [profileOpen, setProfileOpen] = useState(false)
-  // ESC → back to chats home
+  // ESC → back to chats home (blur so list row never keeps a focus outline)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
         if (profileOpen) setProfileOpen(false)
-        else if (actionMsg) { setActionMsg(null); setEditing(false) }
-        else onBack()
+        else if (actionMsg) {
+          setActionMsg(null)
+          setEditing(false)
+        } else {
+          try {
+            ;(document.activeElement as HTMLElement | null)?.blur?.()
+          } catch {
+            /* */
+          }
+          onBack()
+        }
       }
     }
     window.addEventListener('keydown', onKey)

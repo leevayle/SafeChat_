@@ -8,8 +8,7 @@ import { useStore } from '../store'
 import { IconBtn } from './ChatsHome'
 
 export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; onCreate: () => void }) {
-  const { settings, groups, joinGroup, contacts } = useStore()
-  const whoById = (id: string) => contacts.find(c => c.id === id) || { name: id }
+  const { settings, groups, joinGroup } = useStore()
   const [q, setQ] = useState('')
   const [join, setJoin] = useState(false)
   const [link, setLink] = useState('')
@@ -51,23 +50,50 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
         <ul className="px-2">
           <AnimatePresence initial={false}>
             {list.map((g, i) => {
-              const msgs = Array.isArray(g.messages) ? g.messages : []
-              const last = msgs.length ? msgs[msgs.length - 1] : null
-              const who = last ? (last.from === 'me' ? 'You' : whoById(last.from).name.split(' ')[0]) : ''
+              const memberCount = Array.isArray(g.members)
+                ? g.members.length
+                : Array.isArray(g.memberIds)
+                  ? g.memberIds.length
+                  : 0
+              const preview =
+                (g.last && String(g.last).trim()) ||
+                (memberCount ? `${memberCount} members` : 'No messages yet')
               return (
-                <motion.li key={g.id} layout initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -30 }} transition={{ delay: i * 0.03 }}>
-                  <button onClick={() => onOpen(g.id)} className="flex w-full items-center gap-3 rounded-3xl px-3 py-3 text-left transition-colors hover:bg-gray-100 active:bg-gray-200">
-                    <Avatar contact={{ id: g.id, name: g.name, hue: g.hue, online: false }} />
+                <motion.li
+                  key={g.id}
+                  layout
+                  initial={{ opacity: 0, y: 14 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, x: -30 }}
+                  transition={{ delay: i * 0.03 }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => onOpen(g.id)}
+                    className="flex w-full items-center gap-3 rounded-3xl px-3 py-3 text-left outline-none transition-colors hover:bg-gray-100 focus:outline-none active:bg-gray-200"
+                  >
+                    <Avatar contact={{ id: g.id, name: g.name, photo: g.photo, hue: g.hue, online: false }} />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-2">
-                        <span className="flex min-w-0 items-center gap-1.5 font-extrabold"><span className="truncate">{g.name}</span>{g.pinned && <Pin size={13} className="shrink-0 text-gray-400" />}</span>
-                        <span className="shrink-0 text-xs font-bold text-gray-400">{last?.time}</span>
+                        <span className="flex min-w-0 items-center gap-1.5 font-extrabold">
+                          <span className="truncate">{g.name}</span>
+                          {g.pinned ? <Pin size={13} className="shrink-0 text-gray-400" /> : null}
+                        </span>
+                        <span className="shrink-0 text-xs font-bold text-gray-400">{g.time || ''}</span>
                       </div>
                       <div className="mt-0.5 flex items-center justify-between gap-2">
-                        <span className="truncate text-sm font-semibold text-gray-500">{last && (last.system ? `${who} ${last.text}` : `${who}: ${last.text}`)}</span>
+                        <span className="truncate text-sm font-semibold text-gray-500">{preview}</span>
                         <span className="flex items-center gap-1.5">
-                          {g.muted && <BellOff size={14} className="text-gray-400" />}
-                          {g.unread > 0 && <span className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-extrabold text-white ${g.muted ? 'bg-gray-400' : 'bg-brand-red'}`}>{g.unread}</span>}
+                          {g.muted ? <BellOff size={14} className="text-gray-400" /> : null}
+                          {g.unread > 0 ? (
+                            <span
+                              className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-extrabold text-white ${
+                                g.muted ? 'bg-gray-400' : 'bg-brand-red'
+                              }`}
+                            >
+                              {g.unread}
+                            </span>
+                          ) : null}
                         </span>
                       </div>
                     </div>

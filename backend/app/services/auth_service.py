@@ -329,11 +329,6 @@ class AuthService:
             "bio": user.get("bio") or "",
             "email": user.get("email"),
             "phone_number": user.get("phone_number"),
-            # Chat lock - hash stays server-side; client gets enabled flag + peer list
-            "chat_lock_enabled": bool(user.get("chat_lock_pin_hash")),
-            "locked_peer_ids": [
-                str(p) for p in (user.get("locked_peer_ids") or []) if p
-            ],
         }
         return user_public, access_token, refresh_token, None
 

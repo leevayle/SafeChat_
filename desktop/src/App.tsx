@@ -19,6 +19,7 @@ import { ChatWindow } from './screens/ChatWindow'
 import { CallScreen } from './screens/CallScreen'
 import { GroupsTab } from './screens/GroupsTab'
 import { GroupChat } from './screens/GroupChat'
+import { GroupInfo } from './screens/GroupInfo'
 import { CreateGroup } from './screens/CreateGroup'
 import { NewChat } from './screens/NewChat'
 import { Settings } from './screens/Settings'
@@ -294,6 +295,7 @@ function Shell() {
 
   const [chat, setChat] = useState<string | null>(null)
   const [group, setGroup] = useState<string | null>(null)
+  const [groupInfoId, setGroupInfoId] = useState<string | null>(null)
   const [overlay, setOverlay] = useState<Overlay>(null)
   const [call, setCall] = useState<Call | null>(null)
   const [incoming, setIncoming] = useState<(Call & { ringId?: string }) | null>(null)
@@ -950,10 +952,23 @@ function Shell() {
       )
     } else if (group) {
       mainContent = (
-        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} />
+        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} onInfo={(id) => setGroupInfoId(id)} />
       )
     } else {
       showEmpty = true
+    }
+    if (groupInfoId) {
+      mainContent = (
+        <GroupInfo
+          groupId={groupInfoId}
+          onBack={() => setGroupInfoId(null)}
+          onLeft={() => {
+            setGroupInfoId(null)
+            setGroup(null)
+          }}
+        />
+      )
+      showEmpty = false
     }
 
     // Voice call occupies the center pane; video stays fullscreen
@@ -1334,7 +1349,19 @@ function Shell() {
       )
     } else if (group) {
       second = (
-        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} />
+        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} onInfo={(id) => setGroupInfoId(id)} />
+      )
+    }
+    if (groupInfoId) {
+      second = (
+        <GroupInfo
+          groupId={groupInfoId}
+          onBack={() => setGroupInfoId(null)}
+          onLeft={() => {
+            setGroupInfoId(null)
+            setGroup(null)
+          }}
+        />
       )
     }
 
@@ -1543,7 +1570,20 @@ function Shell() {
 
         {group && (
           <div className="absolute inset-0 z-20 bg-white">
-            <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} />
+            <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} onInfo={(id) => setGroupInfoId(id)} />
+          </div>
+        )}
+
+        {groupInfoId && (
+          <div className="absolute inset-0 z-30 bg-white">
+            <GroupInfo
+              groupId={groupInfoId}
+              onBack={() => setGroupInfoId(null)}
+              onLeft={() => {
+                setGroupInfoId(null)
+                setGroup(null)
+              }}
+            />
           </div>
         )}
 

@@ -77,16 +77,8 @@ class GroupService:
             }
         )
 
-        return {
-            "id": group_id,
-            "group_name": group_name,
-            "group_description": group_description,
-            "creator_id": creator_id,
-            "admin_ids": [creator_id],
-            "member_ids": member_ids,
-            "conversation_id": str(conv_result.inserted_id),
-            "created_at": now.isoformat(),
-        }
+        group_doc["_id"] = result.inserted_id
+        return await GroupService._serialize(group_doc)
 
     @staticmethod
     async def get_group(group_id: str, user_id: str) -> dict:
@@ -271,14 +263,66 @@ class GroupService:
 
     @staticmethod
     async def _serialize(group: dict) -> dict:
+        db = get_database()
+        gid = str(group["_id"])
+        conv = await db.conversations.find_one(
+            {"group_id": gid},
+            {"_id": 1, "last_message_at": 1, "last_message_id": 1},
+        )
+        last_message = None
+        if conv and conv.get("last_message_id") and ObjectId.is_valid(
+            str(conv.get("last_message_id"))
+        ):
+            m = await db.messages.find_one({"_id": ObjectId(str(conv["last_message_id"]))})
+            if m and not m.get("deleted_at"):
+                last_message = {
+                    "id": str(m["_id"]),
+                    "content": m.get("content"),
+                    "sender_id": m.get("sender_id"),
+                    "created_at": m["created_at"].isoformat()
+                    if m.get("created_at")
+                    else None,
+                    "message_type": m.get("message_type"),
+                }
+
+        members = []
+        admin_ids = [str(a) for a in (group.get("admin_ids") or [])]
+        creator_id = str(group.get("creator_id") or "")
+        for mid in group.get("member_ids") or []:
+            mid_s = str(mid)
+            if not ObjectId.is_valid(mid_s):
+                continue
+            u = await db.users.find_one(
+                {"_id": ObjectId(mid_s)},
+                {"username": 1, "display_name": 1, "profile_photo": 1},
+            )
+            if not u:
+                continue
+            uid = str(u["_id"])
+            members.append(
+                {
+                    "id": uid,
+                    "username": u.get("username") or "",
+                    "display_name": u.get("display_name") or u.get("username") or "",
+                    "profile_photo": u.get("profile_photo"),
+                    "is_admin": uid in admin_ids or uid == creator_id,
+                }
+            )
+
         return {
-            "id": str(group["_id"]),
+            "id": gid,
             "group_name": group["group_name"],
             "group_description": group.get("group_description"),
             "group_photo": group.get("group_photo"),
-            "creator_id": group["creator_id"],
-            "admin_ids": group.get("admin_ids", []),
-            "member_ids": group.get("member_ids", []),
+            "creator_id": creator_id,
+            "admin_ids": admin_ids,
+            "member_ids": [str(m) for m in (group.get("member_ids") or [])],
+            "members": members,
+            "conversation_id": str(conv["_id"]) if conv else None,
+            "last_message": last_message,
+            "last_message_at": conv["last_message_at"].isoformat()
+            if conv and conv.get("last_message_at")
+            else None,
             "group_permissions": group.get("group_permissions", {}),
             "created_at": group["created_at"].isoformat()
             if group.get("created_at")

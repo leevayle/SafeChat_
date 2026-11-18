@@ -793,3 +793,10 @@ html.dark {
   left: auto !important;
   z-index: 20 !important;
 }
+
+/* No focus ring on chat rows after Esc closes a conversation */
+.desktop-chat-list button:focus,
+.desktop-chat-list button:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}

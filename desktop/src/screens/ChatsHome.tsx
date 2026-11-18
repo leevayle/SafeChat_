@@ -768,9 +768,9 @@ export function ChatsHome({
                       onPointerCancel={() => {
                         if (longPressTimer.current) clearTimeout(longPressTimer.current)
                       }}
-                      className={`flex w-full items-center gap-3 border-b border-gray-100/80 px-3 py-3.5 text-left last:border-0 ${
+                      className={`flex w-full items-center gap-3 border-b border-gray-100/80 px-3 py-3.5 text-left last:border-0 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 ${
                         selectedIds.includes(c.contactId)
-                          ? 'bg-brand-purple/15 ring-1 ring-inset ring-brand-purple/30 transition-colors duration-200'
+                          ? 'bg-brand-purple/15 transition-colors duration-200'
                           : 'hover:bg-gray-50/80 transition-colors duration-150'
                       }`}
                     >
