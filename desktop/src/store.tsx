@@ -185,6 +185,8 @@ export type Settings = {
   profilePhoto: string
   about: string
   groupsAdd: string
+  groupsAddSelectedContacts: string[]
+  groupsAddExcludedContacts: string[]
   readReceipts: boolean
   typingIndicator: boolean
   disappearing: string
@@ -580,6 +582,8 @@ const defaultSettings: Settings = {
   profilePhoto: 'Everyone',
   about: 'My contacts',
   groupsAdd: 'My contacts',
+  groupsAddSelectedContacts: [],
+  groupsAddExcludedContacts: [],
   readReceipts: true,
   typingIndicator: true,
   disappearing: 'Off',
@@ -759,6 +763,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const presenceOfflineTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const seenInboundRef = useRef<Set<string>>(new Set())
   const [groups, setGroups] = useState<any[]>([])
+  const groupsRef = useRef<any[]>([])
+  useEffect(() => { groupsRef.current = groups }, [groups])
   const [statusList, setStatusList] = useState<any[]>([])
   const [calls, setCalls] = useState<any[]>([])
   const [saveRequestPending, setSaveRequestPending] = useState(0)
@@ -929,8 +935,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const { chats: c } = await api.chats({ lean: !!opts?.lean, limit: opts?.lean ? 20 : 40 })
       // Merge network into UI — never drop a row that is only local / newer than server
       setChats((prev) => {
-        const safePrev = sanitizeChatList(prev)
-        const network = sanitizeChatList(c as any)
+        const groupConvIds = new Set(
+          (groupsRef.current || [])
+            .map((g: any) => String(g.conversationId || g.conversation_id || ''))
+            .filter(Boolean),
+        )
+        const safePrev = sanitizeChatList(prev).filter(
+          (row) => !row.conversationId || !groupConvIds.has(String(row.conversationId)),
+        )
+        const network = sanitizeChatList(c as any).filter(
+          (row) => !row.conversationId || !groupConvIds.has(String(row.conversationId)),
+        )
         // Index local rows by contactId AND conversationId so nothing is dropped
         const byContact = new Map(safePrev.map((p) => [p.contactId, p]))
         const byConv = new Map(
@@ -1854,9 +1869,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // 4) Home feed — one atomic update with full row details
           const already = seenInboundRef.current.has(mid)
           if (!mine) seenInboundRef.current.add(mid)
+          // Group threads must never appear or update in the personal inbox
+          const groupConvIds = new Set(
+            (groupsRef.current || [])
+              .map((g: any) => String(g.conversationId || g.conversation_id || ''))
+              .filter(Boolean),
+          )
+          if (groupConvIds.has(String(cid))) {
+            return
+          }
+
           setChats((prev) => {
             try {
-              const safePrev = sanitizeChatList(prev)
+              const safePrev = sanitizeChatList(prev).filter(
+                (c) => !c.conversationId || !groupConvIds.has(String(c.conversationId)),
+              )
               const idx = safePrev.findIndex((c) => c.conversationId === cid)
               let nextList: ChatPreview[]
               if (idx >= 0) {
@@ -2517,9 +2544,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }
 
   const joinGroup = async (code: string) => {
-    const { group } = await api.joinGroup(code)
+    const res = await api.joinGroup(code)
+    const group = res?.group
+    if (!group?.id) throw new Error("Could not join group")
     await refreshGroups()
-    return group.id as string
+    return String(group.id)
   }
 
   

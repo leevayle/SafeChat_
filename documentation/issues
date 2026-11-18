@@ -132,7 +132,7 @@ v 1.0.3 known issues
 - Group chat is broken totally
 - Fix transporting password in plain text over http requests
 - We need a local password solution for locking chats
-- 
+- Chat lock does not hold cross device.
 
 
 

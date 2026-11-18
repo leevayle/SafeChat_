@@ -193,7 +193,11 @@ class MessagingService:
     ) -> dict:
         """List conversations. lean=True omits profile photos for a fast first paint."""
         db = get_database()
-        query: Dict[str, Any] = {"participant_ids": user_id}
+        # Inbox is private (1:1 + notes-to-self) only — never group threads
+        query: Dict[str, Any] = {
+            "participant_ids": user_id,
+            "conversation_type": {"$ne": ConversationType.GROUP.value},
+        }
         if cursor and ObjectId.is_valid(cursor):
             pass  # simple limit for now
 
@@ -215,6 +219,9 @@ class MessagingService:
         async for conv in cursor_q:
             cid = str(conv["_id"])
             if cid in hidden_ids:
+                continue
+            # Belt-and-suspenders: skip group threads even if type field is missing/wrong
+            if conv.get("conversation_type") == ConversationType.GROUP.value or conv.get("group_id"):
                 continue
             settings = conv.get("conversation_settings") or {}
             user_settings = settings.get(user_id, {}) if isinstance(settings, dict) else {}

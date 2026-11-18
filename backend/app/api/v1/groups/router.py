@@ -6,6 +6,7 @@ from app.schemas.groups import (
     UpdateGroupRequest,
     AddMembersRequest,
     GroupPermissionsUpdate,
+    JoinGroupByCodeRequest,
 )
 from app.services.group_service import GroupService
 from app.core.exceptions import success_response
@@ -33,6 +34,27 @@ async def list_my_groups(user: dict = Depends(get_current_user)):
     return success_response("Groups", groups)
 
 
+@router.get("/invites/mine")
+async def list_my_group_invites(user: dict = Depends(get_current_user)):
+    return success_response("Group invites", await GroupService.list_my_invites(user["id"]))
+
+
+@router.post("/invites/{invite_id}/accept")
+async def accept_group_invite(invite_id: str, user: dict = Depends(get_current_user)):
+    return success_response("Invite accepted", await GroupService.accept_invite(invite_id, user["id"]))
+
+
+@router.post("/invites/{invite_id}/reject")
+async def reject_group_invite(invite_id: str, user: dict = Depends(get_current_user)):
+    await GroupService.reject_invite(invite_id, user["id"])
+    return success_response("Invite declined")
+
+
+@router.post("/join")
+async def join_group_by_code(body: JoinGroupByCodeRequest, user: dict = Depends(get_current_user)):
+    return success_response("Joined group", await GroupService.join_by_code(user["id"], body.code))
+
+
 @router.get("/{group_id}")
 async def get_group(group_id: str, user: dict = Depends(get_current_user)):
     group = await GroupService.get_group(group_id, user["id"])
@@ -45,9 +67,18 @@ async def update_group(
     body: UpdateGroupRequest,
     user: dict = Depends(get_current_user),
 ):
-    updates = {
-        k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None
-    }
+    raw = body.model_dump(exclude_unset=True)
+    updates = {}
+    if "group_name" in raw:
+        updates["group_name"] = raw["group_name"]
+    if "group_description" in raw:
+        updates["group_description"] = raw["group_description"]
+    if "group_photo" in raw:
+        updates["group_photo"] = raw["group_photo"]  # may be None to clear
+    if "group_permissions" in raw and raw["group_permissions"] is not None:
+        updates["group_permissions"] = {
+            k: v for k, v in raw["group_permissions"].items() if v is not None
+        }
     group = await GroupService.update_group(group_id, user["id"], updates)
     return success_response("Group updated", group)
 

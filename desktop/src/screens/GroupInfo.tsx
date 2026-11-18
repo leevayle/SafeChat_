@@ -4,14 +4,18 @@ import {
   Pin,
   Crown,
   UserPlus,
+  Users,
   LogOut,
   Pencil,
   Shield,
   ShieldOff,
   UserMinus,
   Search,
+  Link2,
+  Camera,
 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
+import { ImageCropper } from '../components/ImageCropper'
 import { PrimaryButton, ScreenHeader, Sheet, Toast, Toggle } from '../components/ui'
 import { api } from '../api'
 import { useStore } from '../store'
@@ -79,6 +83,11 @@ export function GroupInfo({
   const [q, setQ] = useState('')
   const [adding, setAdding] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
+  const [cropSrc, setCropSrc] = useState<string | null>(null)
+  const [photoBusy, setPhotoBusy] = useState(false)
+  const [searchQ, setSearchQ] = useState('')
+  const [searchHits, setSearchHits] = useState<any[]>([])
+  const [searchBusy, setSearchBusy] = useState(false)
   const myId = me?.id || ''
 
   useEffect(() => {
@@ -102,10 +111,12 @@ export function GroupInfo({
   }, [g?.members])
 
   const isAdmin = !!(
-    g?.adminIds?.includes?.(myId) ||
-    members.find((m: any) => m.id === myId)?.admin ||
-    g?.creatorId === myId
+    (g?.adminIds || []).map(String).includes(String(myId)) ||
+    members.find((m: any) => String(m.id) === String(myId))?.admin ||
+    String(g?.creatorId || '') === String(myId)
   )
+  const canEditInfo = isAdmin || !(g?.permissions?.onlyAdminsCanEditInfo !== false)
+  const canAddMembers = isAdmin || !g?.permissions?.onlyAdminsCanAddMembers
 
   const displayName = (m: any) => {
     if (m.id === myId) return 'You'
@@ -134,6 +145,47 @@ export function GroupInfo({
     (c) => !members.some((m: any) => m.id === c.id || m.id === c.peerId),
   )
 
+
+  const saveGroupPhoto = async (dataUrl: string | null) => {
+    setPhotoBusy(true)
+    try {
+      const { group } = await api.patchGroup(groupId, { photo: dataUrl })
+      setG(group)
+      await refreshGroups()
+      setCropSrc(null)
+      setToast('Group photo updated')
+    } catch (e: any) {
+      setToast(e?.message || 'Could not update photo')
+    } finally {
+      setPhotoBusy(false)
+    }
+  }
+
+  const runMemberSearch = async (q: string) => {
+    setSearchQ(q)
+    const query = q.trim()
+    if (query.length < 2) {
+      setSearchHits([])
+      return
+    }
+    setSearchBusy(true)
+    try {
+      const res = await api.searchUsers(query)
+      const users = Array.isArray(res) ? res : res?.users || res?.results || []
+      const memberIds = new Set((g?.memberIds || members.map((m: any) => m.id) || []).map(String))
+      const pending = new Set((g?.pendingMemberIds || []).map(String))
+      setSearchHits(
+        (users || []).filter(
+          (u: any) => u?.id && !memberIds.has(String(u.id)) && !pending.has(String(u.id)),
+        ),
+      )
+    } catch {
+      setSearchHits([])
+    } finally {
+      setSearchBusy(false)
+    }
+  }
+
   const saveEdits = async () => {
     if (!draft.name.trim()) return
     setBusy(true)
@@ -160,11 +212,15 @@ export function GroupInfo({
       const usernames = adding
         .map((id) => {
           const c = contacts.find((x) => x.id === id || x.peerId === id)
-          return (c?.username || '').replace(/^@/, '').trim()
+          if (c?.username) return String(c.username).replace(/^@/, '').trim()
+          const hit = searchHits.find((u: any) => String(u.id) === id)
+          if (hit?.username) return String(hit.username).replace(/^@/, '').trim()
+          return ''
         })
         .filter(Boolean)
       if (!usernames.length) {
-        setToast('Selected contacts need usernames')
+        setToast('Selected people need usernames')
+        setBusy(false)
         return
       }
       await api.addGroupMembers(groupId, usernames)
@@ -173,7 +229,7 @@ export function GroupInfo({
       await refreshGroups()
       setAdding([])
       setSheet(null)
-      setToast('Members added')
+      setToast('Invites sent')
     } catch (e: any) {
       setToast(e?.message || 'Could not add members')
     } finally {
@@ -284,16 +340,93 @@ export function GroupInfo({
       />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-10 pt-6">
         <div className="flex flex-col items-center text-center">
-          <Avatar
-            contact={{ id: g.id, name: g.name, photo: g.photo, hue: g.hue, online: false }}
-            size={112}
-          />
-          <h2 className="mt-3 text-2xl font-black text-ink">{g.name}</h2>
+          <div className="relative">
+            <Avatar
+              contact={{ id: g.id, name: g.name, photo: g.photo, hue: g.hue, online: false }}
+              size={112}
+            />
+            {isAdmin ? (
+              <div className="absolute -bottom-1 -right-1 flex gap-1">
+                <label className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full bg-brand-purple text-white shadow-md ring-2 ring-white dark:ring-[#0b1220]">
+                  <Camera size={16} />
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0]
+                      e.target.value = ''
+                      if (!f) return
+                      const reader = new FileReader()
+                      reader.onload = () => setCropSrc(String(reader.result || ''))
+                      reader.readAsDataURL(f)
+                    }}
+                  />
+                </label>
+              </div>
+            ) : null}
+          </div>
+          {isAdmin && g.photo ? (
+            <button
+              type="button"
+              className="mt-3 text-xs font-extrabold text-brand-red"
+              disabled={photoBusy}
+              onClick={() => void saveGroupPhoto(null as any)}
+            >
+              {photoBusy ? 'Removing…' : 'Remove photo'}
+            </button>
+          ) : null}
+          <h2 className="mt-3 text-2xl font-black text-ink dark:text-gray-100">{g.name}</h2>
           <p className="text-sm font-bold text-gray-400">
             Group · {members.length || g.memberIds?.length || 0} members
           </p>
-          <p className="mt-2 max-w-xs font-semibold text-gray-500">{g.desc || 'No description'}</p>
+          <p className="mt-2 max-w-xs font-semibold text-gray-500 dark:text-gray-400">
+            {g.desc || 'No description'}
+          </p>
+          {isAdmin || canEditInfo ? (
+            <button
+              type="button"
+              onClick={() => {
+                setDraft({ name: g.name || '', desc: g.desc || '' })
+                setSheet('edit')
+              }}
+              className="mt-3 rounded-full bg-brand-purple/10 px-4 py-1.5 text-xs font-extrabold text-brand-purple"
+            >
+              Edit name & description
+            </button>
+          ) : null}
         </div>
+
+        {/* Always show invite link for members */}
+        <Card title="Invite link">
+          <div className="flex items-center gap-3 px-5 py-3.5">
+            <Link2 size={20} className="shrink-0 text-brand-purple" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-bold text-ink dark:text-gray-100">
+                {g.inviteLink ||
+                  (g.inviteCode ? `safechat.app/join/${g.inviteCode}` : 'Generating link…')}
+              </p>
+              <p className="text-xs font-semibold text-gray-400">Tap copy to share this group</p>
+            </div>
+            <button
+              type="button"
+              className="shrink-0 rounded-full bg-brand-purple/10 px-3 py-1.5 text-xs font-extrabold text-brand-purple disabled:opacity-40"
+              disabled={!g.inviteCode && !g.inviteLink}
+              onClick={async () => {
+                const url = g.inviteLink || (g.inviteCode ? `safechat.app/join/${g.inviteCode}` : '')
+                if (!url) return
+                try {
+                  await navigator.clipboard.writeText(url)
+                  setToast('Link copied')
+                } catch {
+                  setToast(url)
+                }
+              }}
+            >
+              Copy
+            </button>
+          </div>
+        </Card>
 
         <Card title="Settings">
           <Line
@@ -304,7 +437,6 @@ export function GroupInfo({
                 on={!!g.muted}
                 onChange={(v) => {
                   setG((prev: any) => ({ ...prev, muted: v }))
-                  // local preference only for now
                   try {
                     const map = JSON.parse(localStorage.getItem('sc_group_muted') || '{}')
                     map[groupId] = v
@@ -339,13 +471,98 @@ export function GroupInfo({
           />
         </Card>
 
+        {isAdmin ? (
+          <Card title="Group permissions">
+            <Line
+              icon={Pencil}
+              label="Only admins can edit info"
+              right={
+                <Toggle
+                  on={g.permissions?.onlyAdminsCanEditInfo !== false}
+                  onChange={(v) => {
+                    void (async () => {
+                      try {
+                        const { group } = await api.patchGroup(groupId, {
+                          permissions: {
+                            ...(g.permissions || {}),
+                            onlyAdminsCanEditInfo: v,
+                          },
+                        })
+                        setG(group)
+                        setToast(v ? 'Only admins can edit info' : 'Members can edit info')
+                      } catch (e: any) {
+                        setToast(e?.message || 'Could not update')
+                      }
+                    })()
+                  }}
+                  label="Edit info"
+                />
+              }
+            />
+            <Line
+              icon={UserPlus}
+              label="Only admins can add members"
+              right={
+                <Toggle
+                  on={!!g.permissions?.onlyAdminsCanAddMembers}
+                  onChange={(v) => {
+                    void (async () => {
+                      try {
+                        const { group } = await api.patchGroup(groupId, {
+                          permissions: {
+                            ...(g.permissions || {}),
+                            onlyAdminsCanAddMembers: v,
+                          },
+                        })
+                        setG(group)
+                        setToast(v ? 'Only admins can add' : 'Members can add')
+                      } catch (e: any) {
+                        setToast(e?.message || 'Could not update')
+                      }
+                    })()
+                  }}
+                  label="Add members"
+                />
+              }
+            />
+            <Line
+              icon={Users}
+              label="Only admins can send messages"
+              right={
+                <Toggle
+                  on={!!g.permissions?.onlyAdminsCanPost}
+                  onChange={(v) => {
+                    void (async () => {
+                      try {
+                        const { group } = await api.patchGroup(groupId, {
+                          permissions: {
+                            ...(g.permissions || {}),
+                            onlyAdminsCanPost: v,
+                          },
+                        })
+                        setG(group)
+                        setToast(v ? 'Only admins can post' : 'Everyone can post')
+                      } catch (e: any) {
+                        setToast(e?.message || 'Could not update')
+                      }
+                    })()
+                  }}
+                  label="Post"
+                />
+              }
+            />
+          </Card>
+        ) : null}
+
         <Card title={`${members.length} members`}>
-          {isAdmin ? (
+          {canAddMembers ? (
             <Line
               icon={UserPlus}
               label="Add members"
               onClick={() => {
                 setAdding([])
+                setSearchQ('')
+                setSearchHits([])
                 setSheet('add')
               }}
             />
@@ -384,10 +601,14 @@ export function GroupInfo({
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5 font-extrabold text-ink">
                     <span className="truncate">{displayName(m)}</span>
-                    {m.admin ? <Crown size={14} className="shrink-0 text-brand-purple" /> : null}
+                    {m.pending ? (
+                      <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-extrabold uppercase text-amber-700">Pending</span>
+                    ) : m.admin ? (
+                      <Crown size={14} className="shrink-0 text-brand-purple" />
+                    ) : null}
                   </span>
                   <span className="block truncate text-xs font-semibold text-gray-400">
-                    {uname || (m.admin ? 'Admin' : 'Member')}
+                    {m.pending ? 'Invite pending' : uname || (m.admin ? 'Admin' : 'Member')}
                   </span>
                 </span>
                 {!saved && m.id !== myId ? (
@@ -425,35 +646,109 @@ export function GroupInfo({
       </Sheet>
 
       {/* Add members */}
-      <Sheet open={sheet === 'add'} onClose={() => setSheet(null)} title="Add members">
+      <Sheet
+        open={sheet === 'add'}
+        onClose={() => {
+          setSheet(null)
+          setSearchQ('')
+          setSearchHits([])
+        }}
+        title="Add members"
+      >
+        <div className="mb-3 flex h-11 items-center gap-2 rounded-full bg-gray-100 px-4 dark:bg-white/10">
+          <Search size={16} className="text-brand-purple" />
+          <input
+            value={searchQ}
+            onChange={(e) => void runMemberSearch(e.target.value)}
+            placeholder="Search username or phone"
+            className="w-full bg-transparent text-sm font-semibold outline-none"
+          />
+        </div>
         <ul className="mb-4 max-h-72 overflow-y-auto">
-          {addable.map((c) => {
-            const on = adding.includes(c.id)
-            return (
-              <button
-                key={c.id}
-                type="button"
-                onClick={() =>
-                  setAdding((s) => (on ? s.filter((x) => x !== c.id) : [...s, c.id]))
-                }
-                className="flex w-full items-center gap-3 rounded-2xl px-2 py-2 hover:bg-gray-50"
-              >
-                <Avatar contact={c} size={40} />
-                <span className="flex-1 text-left font-bold">{c.name}</span>
-                <span
-                  className={`h-5 w-5 rounded-full border-2 ${
-                    on ? 'border-brand-purple bg-brand-purple' : 'border-gray-300'
-                  }`}
-                />
-              </button>
-            )
-          })}
-          {!addable.length ? (
-            <p className="py-6 text-center text-sm font-bold text-gray-400">No contacts to add</p>
-          ) : null}
+          {searchQ.trim().length >= 2
+            ? (searchHits.length ? (
+                searchHits.map((u: any) => {
+                  const id = String(u.id)
+                  const on = adding.includes(id)
+                  const uname = (u.username || '').replace(/^@/, '')
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() =>
+                        setAdding((s) => (on ? s.filter((x) => x !== id) : [...s, id]))
+                      }
+                      className="flex w-full items-center gap-3 rounded-2xl px-2 py-2.5 hover:bg-gray-50 dark:hover:bg-white/5"
+                    >
+                      <Avatar
+                        contact={{
+                          id,
+                          name: u.display_name || u.name || uname || id,
+                          photo: u.profile_photo ?? u.photo ?? null,
+                        }}
+                        size={40}
+                      />
+                      <span className="min-w-0 flex-1 text-left">
+                        <span className="block truncate font-extrabold">
+                          {u.display_name || u.name || uname || 'User'}
+                        </span>
+                        <span className="block truncate text-xs font-semibold text-gray-400">
+                          {uname ? `@${uname}` : u.phone_number || u.phone || ''}
+                        </span>
+                      </span>
+                      <span
+                        className={`flex h-6 w-6 items-center justify-center rounded-full border-2 ${
+                          on ? 'border-brand-purple bg-brand-purple' : 'border-gray-300'
+                        }`}
+                      />
+                    </button>
+                  )
+                })
+              ) : (
+                <p className="py-6 text-center text-sm font-bold text-gray-400">
+                  {searchBusy ? 'Searching…' : 'No users found'}
+                </p>
+              ))
+            : (
+              <>
+                {addable.map((c) => {
+                  const on = adding.includes(c.id)
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() =>
+                        setAdding((s) => (on ? s.filter((x) => x !== c.id) : [...s, c.id]))
+                      }
+                      className="flex w-full items-center gap-3 rounded-2xl px-2 py-2.5 hover:bg-gray-50 dark:hover:bg-white/5"
+                    >
+                      <Avatar contact={c} size={40} />
+                      <span className="min-w-0 flex-1 text-left">
+                        <span className="block truncate font-extrabold">
+                          {c.savedName || c.name || c.username}
+                        </span>
+                        <span className="block truncate text-xs font-semibold text-gray-400">
+                          {c.username ? `@${String(c.username).replace(/^@/, '')}` : c.phone || ''}
+                        </span>
+                      </span>
+                      <span
+                        className={`flex h-6 w-6 items-center justify-center rounded-full border-2 ${
+                          on ? 'border-brand-purple bg-brand-purple' : 'border-gray-300'
+                        }`}
+                      />
+                    </button>
+                  )
+                })}
+                {!addable.length ? (
+                  <p className="py-6 text-center text-sm font-bold text-gray-400">
+                    Search by username or phone to invite people
+                  </p>
+                ) : null}
+              </>
+            )}
         </ul>
         <PrimaryButton disabled={!adding.length || busy} onClick={() => void addMembers()}>
-          {busy ? 'Adding…' : `Add (${adding.length})`}
+          {busy ? 'Sending…' : `Invite (${adding.length})`}
         </PrimaryButton>
       </Sheet>
 
@@ -507,6 +802,16 @@ export function GroupInfo({
         ) : null}
       </Sheet>
 
+      {cropSrc ? (
+        <ImageCropper
+          src={cropSrc}
+          title="Group photo"
+          onCancel={() => setCropSrc(null)}
+          onDone={(dataUrl) => {
+            void saveGroupPhoto(dataUrl)
+          }}
+        />
+      ) : null}
       <Toast msg={toast} clear={() => setToast(null)} />
     </div>
   )

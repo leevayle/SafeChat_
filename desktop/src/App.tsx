@@ -912,7 +912,7 @@ function Shell() {
   if (useDesktopShell) {
     const sidebar =
       tab === 'groups' ? (
-        <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
+        <GroupsTab onOpen={(id) => { setGroupInfoId(null); setGroup(id) }} onCreate={() => setOverlay('newGroup')} />
       ) : tab === 'status' ? (
         <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && openStatus(id, statusId)} />
       ) : tab === 'calls' ? (
@@ -952,24 +952,12 @@ function Shell() {
       )
     } else if (group) {
       mainContent = (
-        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} onInfo={(id) => setGroupInfoId(id)} />
+        <GroupChat groupId={group} onBack={() => { setGroupInfoId(null); setGroup(null) }} onClosed={() => { setGroupInfoId(null); setGroup(null) }} onCall={(id, kind) => void placeCall(id, kind)} onInfo={(id) => setGroupInfoId(id)} />
       )
     } else {
       showEmpty = true
     }
-    if (groupInfoId) {
-      mainContent = (
-        <GroupInfo
-          groupId={groupInfoId}
-          onBack={() => setGroupInfoId(null)}
-          onLeft={() => {
-            setGroupInfoId(null)
-            setGroup(null)
-          }}
-        />
-      )
-      showEmpty = false
-    }
+    // Group profile uses the right (third) column on desktop
 
     // Voice call occupies the center pane; video stays fullscreen
     if (call && call.kind === 'audio') {
@@ -1091,8 +1079,18 @@ function Shell() {
           onCall={(id, kind) => placeCall(id, kind)}
         />
       )
+    } else if (groupInfoId) {
+      rightPanel = (
+        <GroupInfo
+          groupId={groupInfoId}
+          onBack={() => setGroupInfoId(null)}
+          onLeft={() => {
+            setGroupInfoId(null)
+            setGroup(null)
+          }}
+        />
+      )
     } else if (chat) {
-      // Same contact info layout as mobile ChatWindow profile
       rightPanel = (
         <ContactInfoPanel
           contactId={chat}
@@ -1349,7 +1347,7 @@ function Shell() {
       )
     } else if (group) {
       second = (
-        <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} onInfo={(id) => setGroupInfoId(id)} />
+        <GroupChat groupId={group} onBack={() => { setGroupInfoId(null); setGroup(null) }} onClosed={() => { setGroupInfoId(null); setGroup(null) }} onCall={(id, kind) => void placeCall(id, kind)} onInfo={(id) => setGroupInfoId(id)} />
       )
     }
     if (groupInfoId) {
@@ -1376,7 +1374,7 @@ function Shell() {
               </ErrorBoundary>
             </div>
             <div className={tab === 'groups' ? 'h-full' : 'hidden'}>
-              <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
+              <GroupsTab onOpen={(id) => { setGroupInfoId(null); setGroup(id) }} onCreate={() => setOverlay('newGroup')} />
             </div>
             <div className={tab === 'status' ? 'h-full' : 'hidden'}>
               <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && openStatus(id, statusId)} />
@@ -1524,7 +1522,7 @@ function Shell() {
             </ErrorBoundary>
           </div>
           <div className={tab === 'groups' ? 'h-full' : 'hidden'}>
-            <GroupsTab onOpen={setGroup} onCreate={() => setOverlay('newGroup')} />
+            <GroupsTab onOpen={(id) => { setGroupInfoId(null); setGroup(id) }} onCreate={() => setOverlay('newGroup')} />
           </div>
           <div className={tab === 'status' ? 'h-full' : 'hidden'}>
             <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && openStatus(id, statusId)} />
@@ -1570,7 +1568,7 @@ function Shell() {
 
         {group && (
           <div className="absolute inset-0 z-20 bg-white">
-            <GroupChat groupId={group} onBack={() => setGroup(null)} onClosed={() => setGroup(null)} onCall={(id, kind) => void placeCall(id, kind)} onInfo={(id) => setGroupInfoId(id)} />
+            <GroupChat groupId={group} onBack={() => { setGroupInfoId(null); setGroup(null) }} onClosed={() => { setGroupInfoId(null); setGroup(null) }} onCall={(id, kind) => void placeCall(id, kind)} onInfo={(id) => setGroupInfoId(id)} />
           </div>
         )}
 

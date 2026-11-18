@@ -551,6 +551,21 @@ function mapConversation(c: any, meId?: string): ChatPreview {
 }
 
 function mapGroup(g: any): any {
+  if (!g || typeof g !== 'object') {
+    return {
+      id: '',
+      name: 'Group',
+      desc: '',
+      photo: null,
+      adminIds: [],
+      memberIds: [],
+      members: [],
+      messages: [],
+      unread: 0,
+      muted: false,
+      pinned: false,
+    }
+  }
   const id = String(g.id || g._id || '')
   const membersRaw = Array.isArray(g.members) ? g.members : []
   const memberIds = (g.member_ids || membersRaw.map((m: any) => m.id) || []).map(String)
@@ -562,6 +577,8 @@ function mapGroup(g: any): any {
         name: m.display_name || m.name || m.username || 'Member',
         photo: m.profile_photo ?? m.photo ?? null,
         admin: !!(m.is_admin || adminIds.includes(String(m.id))),
+        active: m.active !== false && !m.pending,
+        pending: !!m.pending,
       }))
     : memberIds.map((mid: string) => ({
         id: mid,
@@ -569,6 +586,8 @@ function mapGroup(g: any): any {
         name: mid,
         photo: null,
         admin: adminIds.includes(mid),
+        active: true,
+        pending: false,
       }))
   const last = g.last_message
   const lastText = last?.content || last?.text || ''
@@ -581,6 +600,7 @@ function mapGroup(g: any): any {
       /* */
     }
   }
+  const pendingIds = (g.pending_member_ids || g.pendingMemberIds || []).map(String)
   return {
     id,
     name: g.group_name || g.name || 'Group',
@@ -589,7 +609,25 @@ function mapGroup(g: any): any {
     creatorId: g.creator_id || g.creatorId,
     adminIds,
     memberIds,
-    members,
+    pendingMemberIds: pendingIds,
+    members: members.map((m: any) => ({
+      ...m,
+      active: m.active !== false && !pendingIds.includes(String(m.id)),
+      pending: !!(m.pending || pendingIds.includes(String(m.id))),
+    })),
+    inviteCode: g.invite_code || g.inviteCode || null,
+    inviteLink:
+      g.invite_link ||
+      g.inviteLink ||
+      ((g.invite_code || g.inviteCode) ? `safechat.app/join/${g.invite_code || g.inviteCode}` : null),
+    permissions: (() => {
+      const gp = g.group_permissions || g.permissions || {}
+      return {
+        onlyAdminsCanPost: !!(gp.only_admins_can_post ?? gp.onlyAdminsCanPost),
+        onlyAdminsCanAddMembers: !!(gp.only_admins_can_add_members ?? gp.onlyAdminsCanAddMembers),
+        onlyAdminsCanEditInfo: gp.only_admins_can_edit_info ?? gp.onlyAdminsCanEditInfo ?? true,
+      }
+    })(),
     conversationId: g.conversation_id || g.conversationId || null,
     createdAt: g.created_at || g.createdAt,
     hue: hueFor(id),
@@ -1305,6 +1343,13 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  verifyPassword: async (password: string) => {
+    return req<{ ok?: boolean }>('/api/v1/users/me/verify-password', {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    })
+  },
+
   deactivateAccount: async (password: string) => {
     return req<any>('/api/v1/users/me/deactivate', {
       method: 'POST',
@@ -1487,6 +1532,13 @@ rejectContactRequest: async (requestId: string) => {
     const list = data.conversations || data || []
     const mid = meId()
     const mapped = list
+      // Groups belong on the Groups tab only — never in Chats inbox
+      .filter((c: any) => {
+        const typ = String(c.conversation_type || c.conversationType || '').toLowerCase()
+        if (typ === 'group') return false
+        if (c.group_id || c.groupId) return false
+        return true
+      })
       .map((c: any) => mapConversation(c, mid))
       .filter((ch) => !!ch.contactId)
     // One list row per peer (self uses me.id). Prefer newest activity.
@@ -1703,6 +1755,14 @@ rejectContactRequest: async (requestId: string) => {
     if (body.name) payload.group_name = body.name
     if (body.desc !== undefined) payload.group_description = body.desc
     if (body.photo !== undefined) payload.group_photo = body.photo
+    if (body.permissions && typeof body.permissions === 'object') {
+      const perms = body.permissions as Record<string, unknown>
+      payload.group_permissions = {
+        only_admins_can_post: !!perms.onlyAdminsCanPost,
+        only_admins_can_add_members: !!perms.onlyAdminsCanAddMembers,
+        only_admins_can_edit_info: perms.onlyAdminsCanEditInfo !== false,
+      }
+    }
     const g = await req<any>(`/api/v1/groups/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
@@ -1733,8 +1793,14 @@ rejectContactRequest: async (requestId: string) => {
     return { ok: true }
   },
 
-  joinGroup: async (_code: string) => {
-    throw new Error('Group invite links are not available yet')
+  joinGroup: async (code: string) => {
+    const raw = String(code || '').trim()
+    const token = raw.includes('/') ? raw.split('/').filter(Boolean).pop() || raw : raw
+    const g = await req<any>('/api/v1/groups/join', {
+      method: 'POST',
+      body: JSON.stringify({ code: token }),
+    })
+    return { group: mapGroup(g) }
   },
 
   deleteGroup: async (id: string) => {

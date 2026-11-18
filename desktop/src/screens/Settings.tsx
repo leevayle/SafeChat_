@@ -127,6 +127,7 @@ export function Settings({
   const [confirm, setConfirm] = useState<'logout' | 'delete' | null>(null)
   const [deleteStep, setDeleteStep] = useState<'password' | 'phrase'>('password')
   const [deletePassword, setDeletePassword] = useState('')
+  const [deletePasswordError, setDeletePasswordError] = useState('')
   const [deletePhrase, setDeletePhrase] = useState('')
   const [deletingAccount, setDeletingAccount] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
@@ -699,6 +700,44 @@ export function Settings({
                             ? 'statusSelectedContacts'
                             : 'statusExcludedContacts',
                           ids,
+                        )
+                      }
+                    />
+                  </div>
+                )}
+              </Card>
+              <SectionLabel>Groups</SectionLabel>
+              <Card>
+                <Row
+                  label="Who can add me to groups"
+                  {...sel('Who can add me to groups', 'groupsAdd', [
+                    'Everyone',
+                    'My contacts',
+                    'Contacts except…',
+                    'Only share with…',
+                    'Nobody',
+                  ])}
+                />
+                {(s.groupsAdd === 'Only share with…' || s.groupsAdd === 'Contacts except…') && (
+                  <div className="space-y-2 px-4 pb-4">
+                    <p className="text-xs font-semibold text-gray-500">
+                      {s.groupsAdd === 'Only share with…'
+                        ? 'Only selected contacts can add you to groups.'
+                        : 'Selected contacts cannot add you to groups.'}
+                    </p>
+                    <StatusAudiencePicker
+                      contacts={contacts}
+                      selectedIds={
+                        s.groupsAdd === 'Only share with…'
+                          ? (s as any).groupsAddSelectedContacts || []
+                          : (s as any).groupsAddExcludedContacts || []
+                      }
+                      onChange={(ids) =>
+                        setSetting(
+                          (s.groupsAdd === 'Only share with…'
+                            ? 'groupsAddSelectedContacts'
+                            : 'groupsAddExcludedContacts') as any,
+                          ids as never,
                         )
                       }
                     />
@@ -2420,6 +2459,7 @@ export function Settings({
           setConfirm(null)
           setDeleteStep('password')
           setDeletePassword('')
+          setDeletePasswordError('')
           setDeletePhrase('')
         }}
         title={confirm === 'logout' ? 'Log out?' : 'Deactivate account?'}
@@ -2457,27 +2497,38 @@ export function Settings({
                 <input
                   type="password"
                   value={deletePassword}
-                  onChange={(e) => setDeletePassword(e.target.value)}
+                  onChange={(e) => {
+                    setDeletePassword(e.target.value)
+                    if (deletePasswordError) setDeletePasswordError('')
+                  }}
                   placeholder="Enter your password"
                   className="mb-4 h-12 w-full rounded-2xl bg-gray-100 px-4 font-semibold outline-none focus:ring-4 focus:ring-brand-red/15"
                   autoFocus
                 />
+                {deletePasswordError ? (
+                  <p className="mb-3 text-sm font-bold text-brand-red">{deletePasswordError}</p>
+                ) : null}
                 <PrimaryButton
                   danger
-                  disabled={!deletePassword || deletingAccount}
+                  disabled={!deletePassword.trim() || deletingAccount}
                   onClick={async () => {
-                    if (!deletePassword) return
+                    if (!deletePassword.trim()) {
+                      setDeletePasswordError('Enter your password to continue')
+                      return
+                    }
                     setDeletingAccount(true)
+                    setDeletePasswordError('')
                     try {
-                      // Validate password by attempting deactivate path pre-check via login-style verify
-                      // Step 1 only advances UI after local non-empty; actual delete on phrase step
+                      await api.verifyPassword(deletePassword)
                       setDeleteStep('phrase')
+                    } catch (e: any) {
+                      setDeletePasswordError(e?.message || 'Incorrect password')
                     } finally {
                       setDeletingAccount(false)
                     }
                   }}
                 >
-                  Continue
+                  {deletingAccount ? 'Checking…' : 'Continue'}
                 </PrimaryButton>
               </>
             ) : (
@@ -2506,9 +2557,12 @@ export function Settings({
                       setToast('Account deleted')
                       onLogout()
                     } catch (e: any) {
-                      setToast(e?.message || 'Could not delete account')
-                      if (String(e?.message || '').toLowerCase().includes('password')) {
+                      const msg = e?.message || 'Could not deactivate account'
+                      setToast(msg)
+                      // Wrong password or auth failure → return to password step with feedback
+                      if (/password|unauthor|credential|incorrect/i.test(String(msg))) {
                         setDeleteStep('password')
+                        setDeletePasswordError(msg)
                         setDeletePhrase('')
                       }
                     } finally {
