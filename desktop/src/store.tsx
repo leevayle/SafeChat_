@@ -42,7 +42,6 @@ import {
   mergeCachedMessages,
   clearMessageCache,
   removeConversationCache,
-  warmRecentThreads,
 } from './lib/messageCache'
 import { warmPhoto } from './lib/photoCache'
 
@@ -65,6 +64,7 @@ function sanitizeChatList(list: ChatPreview[] | null | undefined): ChatPreview[]
         : (row as any).conversation_id
           ? String((row as any).conversation_id)
           : row.conversationId,
+      isSelf: !!(row as any).isSelf,
       name: String(row.name || contactId),
       last: row.last == null ? '' : String(row.last),
       time: row.time == null ? '' : String(row.time),
@@ -1012,11 +1012,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (same) return safePrev
         }
         void saveCachedChats(cleaned)
-        // Prefetch recent thread messages into memory so open is instant
-        void warmRecentThreads(
-          cleaned.map((c) => c.conversationId).filter(Boolean) as string[],
-          20,
-        )
         return cleaned
       })
     } catch (e: any) {
@@ -1299,11 +1294,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setChats((prev) => {
         try {
           const safePrev = sanitizeChatList(prev)
-          const idx = safePrev.findIndex(
-            (c) =>
-              c.contactId === contactId ||
-              (preview.conversationId && c.conversationId === preview.conversationId),
-          )
+          // Prefer exact conversation match so self and peer never steal each other's row
+          const idx = safePrev.findIndex((c) => {
+            if (preview.conversationId && c.conversationId === preview.conversationId) return true
+            if (c.contactId === contactId) {
+              // Same peer - but if both have conversationIds that differ, not a match
+              if (
+                preview.conversationId &&
+                c.conversationId &&
+                preview.conversationId !== c.conversationId
+              ) {
+                return false
+              }
+              return true
+            }
+            return false
+          })
           const nowIso = preview.iso || new Date().toISOString()
           const timeLabel =
             preview.time ||
@@ -1399,9 +1405,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return current
       })
     })
-    // Prefetch recent threads into memory+disk BEFORE user opens them
-    const targets = snapshot.filter((chat) => chat.conversationId).slice(0, force ? 30 : 25)
-    const concurrency = 4
+    // Prefetch only top threads (keeps login/home fast). Rest load on open.
+    const targets = snapshot.filter((chat) => chat.conversationId).slice(0, force ? 10 : 6)
+    const concurrency = 3
     const { applyThreadMessages } = await import('./lib/messageStore')
     for (let i = 0; i < targets.length; i += concurrency) {
       if (isSessionDead()) break
@@ -1410,18 +1416,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const conversationId = chat.conversationId!
           if (!force) {
             const cached = getCachedMessages(conversationId)
-            // Skip only when we already have a solid page cached
-            if (cached && cached.length >= 20) return
+            if (cached && cached.length >= 12) return
           }
           try {
-            const { messages } = await api.messages(conversationId, { limit: 40 })
-            const existing = getCachedMessages(conversationId)
-            // Empty cache → replace; existing → merge (don't clobber open-thread optimistics)
-            await applyThreadMessages(
-              conversationId,
-              messages,
-              existing?.length ? 'merge' : 'replace',
-            )
+            const { messages } = await api.messages(conversationId, { limit: 30 })
+            await applyThreadMessages(conversationId, messages, 'merge')
           } catch {
             /* A thread can be refreshed when it is opened. */
           }
@@ -1527,10 +1526,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           hadCachedChats = true
           const cleaned = sanitizeChatList(cachedChats as any)
           setChats((prev) => (prev.length ? prev : cleaned))
-          void warmRecentThreads(
-            cleaned.map((c) => c.conversationId).filter(Boolean) as string[],
-            20,
-          )
         }
         if (cachedContacts.length) {
           setContacts((prev) => (prev.length ? prev : cachedContacts))
@@ -1627,12 +1622,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               loadCachedStatuses<any>(),
             ])
             if (cachedChats.length) {
-              const cleanedBoot = sanitizeChatList(cachedChats as any)
-              setChats(cleanedBoot)
-              void warmRecentThreads(
-                cleanedBoot.map((c) => c.conversationId).filter(Boolean) as string[],
-                20,
-              )
+              setChats(sanitizeChatList(cachedChats as any))
               setListsReady(true)
             }
             if (cachedContacts.length) setContacts(cachedContacts)

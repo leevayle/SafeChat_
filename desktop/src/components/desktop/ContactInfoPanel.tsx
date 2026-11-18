@@ -106,7 +106,7 @@ export function ContactInfoPanel({ contactId, onCall, onChat }: Props) {
 
   return (
     <div className="flex h-full flex-col bg-white dark:bg-[#121821]">
-      <div className="flex items-center gap-2 border-b border-gray-100 px-3 pb-3 pt-3 dark:border-white/10">
+      <div className="flex min-h-16 shrink-0 items-center gap-2 border-b border-gray-100 px-3 pb-3 pt-[max(12px,env(safe-area-inset-top))] dark:border-white/10">
         <p className="text-lg font-black text-ink dark:text-white">Contact info</p>
       </div>
       <div className="flex flex-1 flex-col items-center overflow-y-auto px-6 pb-10 pt-8">

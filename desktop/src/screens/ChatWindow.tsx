@@ -505,10 +505,19 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     chats.find(
       (ch) =>
         ch.contactId === contactId ||
-        ch.conversationId === contactId,
+        ch.conversationId === contactId ||
+        (me?.id && contactId === me.id && (ch.isSelf || ch.contactId === me.id)),
     ) || null
-  const peerId = chatPreview?.contactId || contactId
-  const isSelfChat = !!(me?.id && (peerId === me.id || contactId === me.id))
+  // Stable peer key for this thread - never use conversation ObjectId as peer
+  const peerId =
+    (chatPreview?.isSelf && me?.id
+      ? me.id
+      : chatPreview?.contactId) ||
+    (me?.id && contactId === me.id ? me.id : contactId)
+  const isSelfChat = !!(
+    chatPreview?.isSelf ||
+    (me?.id && (peerId === me.id || contactId === me.id))
+  )
   const contactHit = contacts.find((x) => x.id === peerId || x.peerId === peerId)
   // Prefer contact book photo, fall back to chat-list photo (never force null)
   const c = contactHit
@@ -601,13 +610,29 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [lockPrompt, setLockPrompt] = useState(false)
   const [lockPinDraft, setLockPinDraft] = useState('')
   const [lockPinError, setLockPinError] = useState('')
+  // Lock key is always the peer user id (stable across open paths)
+  const lockKey = String(peerId || contactId || '')
   const [chatLocked, setChatLocked] = useState(() => {
     try {
       const map = JSON.parse(kvGet('sc_chat_locks') || '{}')
-      return !!(map[contactId])
+      return !!(map[lockKey] || map[contactId])
     } catch { return false }
   })
   const [unlockedThisSession, setUnlockedThisSession] = useState(false)
+
+  // Re-sync lock when switching chats without unmounting ChatWindow
+  useEffect(() => {
+    setUnlockedThisSession(false)
+    setLockPrompt(false)
+    setLockPinDraft('')
+    setLockPinError('')
+    try {
+      const map = JSON.parse(kvGet('sc_chat_locks') || '{}')
+      setChatLocked(!!(map[lockKey] || map[contactId]))
+    } catch {
+      setChatLocked(false)
+    }
+  }, [lockKey, contactId])
   const [cropSrc, setCropSrc] = useState<string | null>(null)
   const [selfNotesOpen, setSelfNotesOpen] = useState(false)
   const [lastSeenPhase, setLastSeenPhase] = useState<'label' | 'time'>('time')
@@ -730,7 +755,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           upsertChatPreview({
             contactId: peerId,
             conversationId: cid,
-            name: preview.name || (c as any).name,
+            isSelf: isSelf,
+            name: isSelf ? 'me' : preview.name || (c as any).name,
             last: preview.last,
             iso: preview.iso,
             unread: 0,
@@ -750,28 +776,14 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const load = async (silent = false) => {
     try {
       const cid = await ensureConversation()
-      if (!cid) {
+      if (!cid) return
+      // Paint disk/memory cache immediately (no blank thread)
+      const cached = getCachedMessages(cid)
+      if (cached?.length) {
+        setMsgs((prev) => (prev.length ? prev : cached))
         if (!silent) setLoading(false)
-        return
       }
-      // Still the open conversation? (user may have switched away)
-      const stillHere = () => (convRef.current === cid)
-      // Paint memory, then disk — REPLACE, never merge with another thread's prev
-      let cached = getCachedMessages(cid)
-      if (!cached?.length) {
-        try {
-          const disk = await hydrateThreadFromDisk(cid)
-          if (disk?.length) cached = disk
-        } catch { /* */ }
-      }
-      if (cached?.length && stillHere()) {
-        setMsgs(cached)
-        setLoading(false)
-        silent = true // cache painted — network is background refresh only
-      }
-      if (!stillHere()) return
       const { messages, nextCursor } = await api.messages(cid, { limit: 50 })
-      if (!stillHere()) return
       setThreadCursor(cid, nextCursor || (messages.length ? messages[0]?.id : null))
       setHasMoreOlder(!!nextCursor || messages.length >= 50)
       // Incoming messages we just pulled: ack delivered before/while painting (no await)
@@ -781,10 +793,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           void api.markDelivered(m.id).catch(() => {})
         }
       }
-      if (!stillHere()) return
       setMsgs((prev) => {
-        // Isolation: only merge with messages already shown for THIS conversation
-        if (convRef.current !== cid) return prev
         // Merge server history into UI - NEVER drop a bubble already on screen
         // (server lag / partial pages used to wipe messages for a few seconds)
         const prevById = new Map(prev.map((m) => [m.id, m]))
@@ -911,7 +920,6 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     markLoadingOlder(cid, true)
     try {
       const { messages, nextCursor } = await api.messages(cid, { limit: 40, beforeId: String(beforeId) })
-      if (convRef.current !== cid) return
       if (!messages.length) {
         setHasMoreOlder(false)
         setThreadCursor(cid, null)
@@ -939,10 +947,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     const cid = conversationId || knownConv
     if (!cid) return
     return subscribeThread(cid, (list) => {
-      // Never paint another thread into this surface
-      if (convRef.current !== cid) return
       setMsgs((prev) => {
-        if (convRef.current !== cid) return prev
         if (sameMsgList(prev, list)) return prev
         // Prefer in-flight optimistic edits already on screen (avoid snap-back to old body)
         if (!prev.length) return list
@@ -983,6 +988,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   }, [chats, contactId, peerId, conversationId])
 
   useEffect(() => {
+    setLoading(true)
     // Fresh open: do NOT animate history - only new/outgoing later
     animatedKeys.current = new Set()
     setConversationId(knownConv)
@@ -993,32 +999,27 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         if (k) animatedKeys.current.add(k)
       }
     }
-    const paintCached = (list: ApiMsg[]) => {
-      if (!list.length) return false
-      seedKeys(list)
-      setMsgs(list)
-      setLoading(false)
-      requestAnimationFrame(() => {
-        end.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-      })
-      return true
-    }
-
-    // Instant paint from THIS thread only — never keep previous chat's bubbles
-    let hadCache = false
+    // Instant paint from memory/disk cache for this thread
     if (knownConv) {
       const mem = getCachedMessages(knownConv)
       if (mem?.length) {
-        hadCache = paintCached(mem)
+        seedKeys(mem)
+        setMsgs(mem)
+        setLoading(false)
+        // Jump to latest without animation
+        requestAnimationFrame(() => {
+          end.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+        })
       } else {
-        setMsgs([]) // clear other chat immediately
-        setLoading(true)
+        setMsgs([])
         void hydrateThread(knownConv).then((disk) => {
-          if (convRef.current !== knownConv) return
-          if (disk?.length) {
+          if (disk?.length && convRef.current === knownConv) {
             seedKeys(disk)
-            setMsgs(disk) // replace, do not merge with another inbox
-            void applyThreadMessages(knownConv, disk, 'replace')
+            setMsgs((prev) => {
+              const merged = mergeMessageLists(disk, prev)
+              void applyThreadMessages(knownConv, merged, 'merge')
+              return merged
+            })
             setLoading(false)
             requestAnimationFrame(() => {
               end.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
@@ -1028,7 +1029,6 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       }
     } else {
       setMsgs([])
-      setLoading(true)
     }
     // Instant blue ticks for the sender: as soon as this chat surface is open,
     // mark read - do not wait for message history to finish loading.
@@ -1046,12 +1046,11 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       setLoading(false)
       return
     }
-    // Network refresh is silent when cache already painted the thread
-    void load(hadCache)
-    const timer = setInterval(() => {
+    load(false)
+    const t = setInterval(() => {
       if (hasAccessToken() && document.visibilityState === 'visible') load(true)
     }, 20000)
-    return () => clearInterval(timer)
+    return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contactId])
 
@@ -2216,9 +2215,38 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     return () => window.removeEventListener('sc:open-tictactoe', open)
   }, [isSelfChat])
 
-  if (chatLocked && !unlockedThisSession && !isSelfChat) {
+  if (chatLocked && !unlockedThisSession) {
+    const tryUnlock = async () => {
+      const draft = lockPinDraft
+      if (!draft || draft.length < 4) {
+        setLockPinError('Enter your PIN')
+        return
+      }
+      try {
+        // Prefer server verify (cross-device hash); fall back to local hash offline
+        try {
+          await api.verifyChatLockPin(draft)
+          setUnlockedThisSession(true)
+          setLockPinDraft('')
+          setLockPinError('')
+          return
+        } catch {
+          /* offline or wrong */
+        }
+        const { verifyLocalPin } = await import('../lib/chatLock')
+        if (await verifyLocalPin(draft)) {
+          setUnlockedThisSession(true)
+          setLockPinDraft('')
+          setLockPinError('')
+        } else {
+          setLockPinError('Wrong PIN')
+        }
+      } catch {
+        setLockPinError('Wrong PIN')
+      }
+    }
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-white px-6">
+      <div className="flex h-full flex-col items-center justify-center bg-white px-6 dark:bg-[#121821]">
         <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-purple/10 text-brand-purple">
           <Lock size={28} />
         </div>
@@ -2234,17 +2262,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             setLockPinError('')
           }}
           onKeyDown={(e) => {
-            if (e.key !== 'Enter') return
-            try {
-              const pin = kvGet('sc_chat_lock_pin') || ''
-              if (pin && lockPinDraft === pin) {
-                setUnlockedThisSession(true)
-                setLockPinDraft('')
-                setLockPinError('')
-              } else setLockPinError('Wrong PIN')
-            } catch {
-              setLockPinError('Wrong PIN')
-            }
+            if (e.key === 'Enter') void tryUnlock()
           }}
           className="mt-5 w-full max-w-xs rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
           placeholder="••••"
@@ -2254,18 +2272,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         <button
           type="button"
           className="mt-4 w-full max-w-xs rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
-          onClick={() => {
-            try {
-              const pin = kvGet('sc_chat_lock_pin') || ''
-              if (pin && lockPinDraft === pin) {
-                setUnlockedThisSession(true)
-                setLockPinDraft('')
-                setLockPinError('')
-              } else setLockPinError('Wrong PIN')
-            } catch {
-              setLockPinError('Wrong PIN')
-            }
-          }}
+          onClick={() => void tryUnlock()}
         >
           Unlock
         </button>
@@ -2320,12 +2327,12 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
             backgroundSize: 'cover',
             backgroundPosition: 'center',
             backgroundRepeat: 'no-repeat',
-            opacity: String(settings.colorMode || '').toLowerCase() === 'dark' ? 0.28 : 0.40,
+            opacity: String(settings.colorMode || '').toLowerCase() === 'dark' ? 0.22 : 0.32,
           }}
         />
       ) : null}
       <div className="relative z-10 flex h-full min-h-0 flex-col">
-      <header className="z-10 flex shrink-0 items-center gap-1 border-b border-white/40 bg-white/80 backdrop-blur-md px-2 pb-3.5 pt-[max(1.5rem,calc(env(safe-area-inset-top)+0.75rem))] shadow-sm">
+      <header className="z-10 flex min-h-16 shrink-0 items-center gap-1 border-b border-white/40 bg-white/80 px-2 pb-3 pt-[max(12px,env(safe-area-inset-top))] shadow-sm backdrop-blur-md dark:border-white/10">
         <button
           type="button"
           aria-label="Back"
@@ -2545,9 +2552,14 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
                   className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm font-bold hover:bg-gray-50"
                   onClick={() => {
                     setChatMenu(false)
-                    let pin = ''
-                    try { pin = kvGet('sc_chat_lock_pin') || '' } catch { /* */ }
-                    if (!pin) {
+                    let hasPin = false
+                    try {
+                      hasPin =
+                        kvGet('sc_chat_lock_enabled') === '1' ||
+                        !!kvGet('sc_chat_lock_local_hash') ||
+                        !!kvGet('sc_chat_lock_pin')
+                    } catch { /* */ }
+                    if (!hasPin) {
                       showToast?.('Set a chat lock PIN in Settings → Security')
                       try {
                         window.dispatchEvent(new CustomEvent('sc:open-settings-security'))
@@ -2802,7 +2814,7 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
             {loadingOlder ? 'Loading earlier messages…' : hasMoreOlder ? 'Scroll up for earlier messages' : ''}
           </p>
         )}
-        {loading && msgs.length === 0 && <p className="py-6 text-center text-sm font-bold text-gray-400">Loading…</p>}
+        {loading && <p className="py-6 text-center text-sm font-bold text-gray-400">Loading…</p>}
         {!loading && msgs.length === 0 && !selfNoteItems.length && (
           <EmptyState
             title={isSelfChat ? 'Your personal space' : `Say hi to ${c.name.split(' ')[0]}`}
@@ -3572,30 +3584,44 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
                 setLockPinError('')
               }}
               onKeyDown={(e) => {
-                if (e.key !== 'Enter') return
-                try {
-                  const pin = kvGet('sc_chat_lock_pin') || ''
-                  if (!pin || lockPinDraft !== pin) {
-                    setLockPinError('Wrong PIN')
-                    return
-                  }
-                  const map = JSON.parse(kvGet('sc_chat_locks') || '{}')
-                  if (chatLocked) {
-                    delete map[contactId]
-                    setChatLocked(false)
-                    setUnlockedThisSession(true)
-                    showToast?.('Chat unlocked')
-                  } else {
-                    map[contactId] = true
-                    setChatLocked(true)
-                    setUnlockedThisSession(false)
-                    showToast?.('Chat locked')
-                  }
-                  kvSet('sc_chat_locks', JSON.stringify(map))
-                  setLockPrompt(false)
-                  setLockPinDraft('')
-                } catch {
-                  setLockPinError('Could not update lock')
+                if (e.key === 'Enter') {
+                  void (async () => {
+                    try {
+                      let ok = false
+                      try {
+                        await api.verifyChatLockPin(lockPinDraft)
+                        ok = true
+                      } catch {
+                        const { verifyLocalPin } = await import('../lib/chatLock')
+                        ok = await verifyLocalPin(lockPinDraft)
+                      }
+                      if (!ok) {
+                        setLockPinError('Wrong PIN')
+                        return
+                      }
+                      const { getLockedPeerMap, setLocalLocks } = await import('../lib/chatLock')
+                      const map = { ...getLockedPeerMap() }
+                      const key = lockKey || contactId
+                      if (chatLocked) {
+                        delete map[key]
+                        delete map[contactId]
+                        setChatLocked(false)
+                        setUnlockedThisSession(true)
+                        showToast?.('Chat unlocked')
+                      } else {
+                        map[key] = true
+                        setChatLocked(true)
+                        setUnlockedThisSession(false)
+                        showToast?.('Chat locked')
+                      }
+                      setLocalLocks(map)
+                      void api.setLockedPeers(Object.keys(map).filter((k) => map[k])).catch(() => {})
+                      setLockPrompt(false)
+                      setLockPinDraft('')
+                    } catch {
+                      setLockPinError('Could not update lock')
+                    }
+                  })()
                 }
               }}
               className="mt-4 w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-center text-lg font-black tracking-[0.35em] outline-none focus:border-brand-purple"
@@ -3606,30 +3632,43 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
               type="button"
               className="mt-4 w-full rounded-full bg-brand-purple py-3 text-sm font-extrabold text-white"
               onClick={() => {
-                try {
-                  const pin = kvGet('sc_chat_lock_pin') || ''
-                  if (!pin || lockPinDraft !== pin) {
-                    setLockPinError('Wrong PIN')
-                    return
+                void (async () => {
+                  try {
+                    let ok = false
+                    try {
+                      await api.verifyChatLockPin(lockPinDraft)
+                      ok = true
+                    } catch {
+                      const { verifyLocalPin } = await import('../lib/chatLock')
+                      ok = await verifyLocalPin(lockPinDraft)
+                    }
+                    if (!ok) {
+                      setLockPinError('Wrong PIN')
+                      return
+                    }
+                    const { getLockedPeerMap, setLocalLocks } = await import('../lib/chatLock')
+                    const map = { ...getLockedPeerMap() }
+                    const key = lockKey || contactId
+                    if (chatLocked) {
+                      delete map[key]
+                      delete map[contactId]
+                      setChatLocked(false)
+                      setUnlockedThisSession(true)
+                      showToast?.('Chat unlocked')
+                    } else {
+                      map[key] = true
+                      setChatLocked(true)
+                      setUnlockedThisSession(false)
+                      showToast?.('Chat locked')
+                    }
+                    setLocalLocks(map)
+                    void api.setLockedPeers(Object.keys(map).filter((k) => map[k])).catch(() => {})
+                    setLockPrompt(false)
+                    setLockPinDraft('')
+                  } catch {
+                    setLockPinError('Could not update lock')
                   }
-                  const map = JSON.parse(kvGet('sc_chat_locks') || '{}')
-                  if (chatLocked) {
-                    delete map[contactId]
-                    setChatLocked(false)
-                    setUnlockedThisSession(true)
-                    showToast?.('Chat unlocked')
-                  } else {
-                    map[contactId] = true
-                    setChatLocked(true)
-                    setUnlockedThisSession(false)
-                    showToast?.('Chat locked')
-                  }
-                  kvSet('sc_chat_locks', JSON.stringify(map))
-                  setLockPrompt(false)
-                  setLockPinDraft('')
-                } catch {
-                  setLockPinError('Could not update lock')
-                }
+                })()
               }}
             >
               {chatLocked ? 'Unlock' : 'Lock'}

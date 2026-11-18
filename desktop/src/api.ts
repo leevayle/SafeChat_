@@ -175,8 +175,11 @@ function mapNote(n: any): ApiNote {
 export type ChatPreview = {
   contactId: string
   conversationId?: string
+  /** True only for notes-to-self (Me) - never reuse me.id for other peers */
+  isSelf?: boolean
   name?: string
   publicName?: string
+  username?: string
   photo?: string | null
   hue?: [string, string]
   last: string
@@ -475,11 +478,45 @@ function formatChatPreviewLast(raw: string): string {
 }
 
 function mapConversation(c: any, meId?: string): ChatPreview {
+  const mid = meId ? String(meId) : ''
+  const participantIds = (c.participant_ids || []).map((id: any) => String(id))
   const participants = c.participants || []
-  const other =
-    participants.find((p: any) => String(p.id) !== meId) ||
-    participants[0] ||
-    {}
+  // Backend marks notes-to-self; also treat single-participant private as self
+  const isSelf = !!(
+    c.is_self ||
+    (participantIds.length === 1 && mid && participantIds[0] === mid)
+  )
+
+  let other: any = {}
+  let contactId = ''
+
+  if (isSelf && mid) {
+    // Me chat must always key on my user id - never a conversation id
+    contactId = mid
+    other =
+      participants.find((p: any) => String(p.id) === mid) ||
+      participants[0] ||
+      {}
+  } else {
+    // Private 1:1 - always the other person, never me, never conversation id
+    other =
+      participants.find((p: any) => mid && String(p.id) !== mid) ||
+      participants.find((p: any) => String(p.id) !== mid) ||
+      {}
+    contactId = String(
+      other.id ||
+        (mid ? participantIds.find((id: string) => id !== mid) : '') ||
+        '',
+    )
+    // Last resort: any non-me participant id (still never collapse onto Me)
+    if (!contactId && participantIds.length) {
+      contactId =
+        participantIds.find((id: string) => id !== mid) ||
+        participantIds[0] ||
+        ''
+    }
+  }
+
   const last = c.last_message
   const lastText = last?.content || last?.text || ''
   let time = ''
@@ -489,20 +526,25 @@ function mapConversation(c: any, meId?: string): ChatPreview {
       time = formatLocalTime(iso)
     } catch { /* */ }
   }
-  const contactId = String(other.id || (c.participant_ids || []).find((id: string) => id !== meId) || c.id)
+  if (!contactId) {
+    contactId = String(c.id || '')
+  }
   return {
     contactId,
     conversationId: String(c.id),
-    // Public name from server — UI prefers local savedName via contacts overlay
-    name: other.nickname || other.saved_name || other.display_name || other.username || contactId,
+    isSelf,
+    // Public name from server - UI prefers local savedName via contacts overlay
+    name: isSelf
+      ? 'me'
+      : other.nickname || other.saved_name || other.display_name || other.username || contactId,
     publicName: other.display_name || other.username || contactId,
     username: other.username || '',
     photo: other.profile_photo ?? null,
-    hue: hueFor(contactId),
+    hue: hueFor(contactId || String(c.id)),
     last: formatChatPreviewLast(lastText),
     time,
     unread: c.unread_count || 0,
-    mine: last ? String(last.sender_id) === meId : false,
+    mine: last ? String(last.sender_id) === mid : false,
     state: ((last?.delivery_status as ApiMsg['state']) || 'sent') as ChatPreview['state'],
     iso: iso || undefined,
   }
@@ -986,6 +1028,15 @@ export const api = {
     if (rawUser?.settings) user.settings = rawUser.settings
     if (rawUser?.preferences) user.preferences = rawUser.preferences
     if (rawUser?.wallpaper) user.wallpaper = rawUser.wallpaper
+    try {
+      const { applyChatLockFromServer } = await import('./lib/chatLock')
+      applyChatLockFromServer({
+        chat_lock_enabled: !!(rawUser?.chat_lock_enabled),
+        locked_peer_ids: rawUser?.locked_peer_ids || [],
+      })
+    } catch {
+      /* */
+    }
     if (data.password_reset_required) {
       return {
         password_reset_required: true as const,
@@ -1116,6 +1167,15 @@ export const api = {
       const fe = map[k] || k
       if (v !== undefined && v !== null) mapped[fe] = v
     }
+    try {
+      const { applyChatLockFromServer } = await import('./lib/chatLock')
+      applyChatLockFromServer({
+        chat_lock_enabled: !!(data?.chat_lock_enabled),
+        locked_peer_ids: data?.locked_peer_ids || [],
+      })
+    } catch {
+      /* */
+    }
     return {
       user: mapUser(data),
       settings: mapped,
@@ -1126,6 +1186,35 @@ export const api = {
     return req<any>('/api/v1/users/me/preferences', {
       method: 'PATCH',
       body: JSON.stringify(prefs),
+    })
+  },
+
+  /** Chat lock: PIN is bcrypt-hashed on the server; never returned to clients. */
+  setChatLockPin: async (pin: string) => {
+    return req<{ chat_lock_enabled?: boolean }>('/api/v1/users/me/chat-lock', {
+      method: 'POST',
+      body: JSON.stringify({ pin }),
+    })
+  },
+  verifyChatLockPin: async (pin: string) => {
+    return req<{ ok?: boolean }>('/api/v1/users/me/chat-lock/verify', {
+      method: 'POST',
+      body: JSON.stringify({ pin }),
+    })
+  },
+  clearChatLock: async (pin: string) => {
+    return req<{ chat_lock_enabled?: boolean; locked_peer_ids?: string[] }>(
+      '/api/v1/users/me/chat-lock',
+      {
+        method: 'DELETE',
+        body: JSON.stringify({ pin }),
+      },
+    )
+  },
+  setLockedPeers: async (peerIds: string[]) => {
+    return req<{ locked_peer_ids?: string[] }>('/api/v1/users/me/chat-lock/peers', {
+      method: 'PUT',
+      body: JSON.stringify({ peer_ids: peerIds }),
     })
   },
 
@@ -1359,14 +1448,24 @@ rejectContactRequest: async (requestId: string) => {
     const data = await req<any>(`/api/v1/conversations${qs ? `?${qs}` : ''}`)
     const list = data.conversations || data || []
     const mid = meId()
-    const mapped = list.map((c: any) => mapConversation(c, mid))
-    // One list row per peer — keep the conversation with newest activity
+    const mapped = list
+      .map((c: any) => mapConversation(c, mid))
+      .filter((ch) => !!ch.contactId)
+    // One list row per peer (self uses me.id). Prefer newest activity.
+    // Key self and peers separately so a bad map never merges into Me.
     const byPeer = new Map<string, (typeof mapped)[0]>()
     for (const ch of mapped) {
-      const key = ch.contactId
+      const key = ch.isSelf ? `self:${ch.contactId}` : `peer:${ch.contactId}`
       const prev = byPeer.get(key)
       if (!prev) {
         byPeer.set(key, ch)
+        continue
+      }
+      // Prefer matching conversationId continuity when both exist
+      if (prev.conversationId && ch.conversationId && prev.conversationId !== ch.conversationId) {
+        const prevT = prev.iso ? Date.parse(prev.iso) : 0
+        const nextT = ch.iso ? Date.parse(ch.iso) : 0
+        if (nextT >= prevT) byPeer.set(key, ch)
         continue
       }
       const prevT = prev.iso ? Date.parse(prev.iso) : 0

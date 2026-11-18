@@ -130,13 +130,9 @@ v 1.0.3 known issues
 - I NEED TO TAG BETA FEATURES (UNSTABLE ONES) SO THAT ONLY BETA MEMBERS GET TO TEST THEM AND OTHERS GET THE STABLE ONES.
 - Top nav should be equal in height even inox. [In desktop settings is the top nav height standard i like it like that; for all other windows including home]
 - Group chat is broken totally
-
-
-
-last prompt to limit
-------
-okay so i figured why chats show up where they shouldn't theres a conflict when i have replied to a chat even if it's to someone else it shows up in the 'me' chat to myself. I need there to be adifference in all chats in the chats feed so we know where each conversation goes.
-also chat lock does not work fix it.
+- Fix transporting password in plain text over http requests
+- We need a local password solution for locking chats
+- 
 
 
 

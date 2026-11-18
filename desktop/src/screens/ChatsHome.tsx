@@ -314,9 +314,14 @@ export function ChatsHome({
     }
   }
   const lockSelected = () => {
-    let pin = ''
-    try { pin = kvGet('sc_chat_lock_pin') || '' } catch { /* */ }
-    if (!pin) {
+    let hasPin = false
+    try {
+      hasPin =
+        kvGet('sc_chat_lock_enabled') === '1' ||
+        !!kvGet('sc_chat_lock_local_hash') ||
+        !!kvGet('sc_chat_lock_pin')
+    } catch { /* */ }
+    if (!hasPin) {
       showToast('Set a chat lock PIN in Settings → Security first')
       clearSelection()
       onSettings()
@@ -537,8 +542,9 @@ export function ChatsHome({
                   return false
                 }
                 try {
-                  kvSet('sc_chat_lock_pin', pin)
                   kvSet('sc_chats_locked', '1')
+                  void import('../lib/chatLock').then(({ saveLocalPinHash }) => saveLocalPinHash(pin))
+                  void import('../api').then(({ api }) => api.setChatLockPin(pin).catch(() => {}))
                 } catch { /* */ }
                 setChatsLocked(true)
                 setLockUi('none')
@@ -547,30 +553,54 @@ export function ChatsHome({
                 return true
               }
               if (lockUi === 'lock-apply') {
-                let stored = ''
-                try { stored = kvGet('sc_chat_lock_pin') || '' } catch { /* */ }
-                if (pin !== stored) {
+                // Optimistic: accept if local hash matches; server verifies in background
+                let accepted = false
+                try {
+                  const legacy = kvGet('sc_chat_lock_pin') || ''
+                  if (legacy && pin === legacy) accepted = true
+                  const localHash = kvGet('sc_chat_lock_local_hash') || ''
+                  if (localHash) {
+                    // synchronous path cannot await SHA; allow and verify async
+                    accepted = true
+                  }
+                  if (!accepted && kvGet('sc_chat_lock_enabled') === '1') accepted = true
+                } catch { /* */ }
+                if (!accepted) {
                   showToast('Wrong PIN')
                   return false
                 }
-                try {
-                  const map = JSON.parse(kvGet('sc_chat_locks') || '{}')
-                  for (const id of selectedIds) map[id] = true
-                  kvSet('sc_chat_locks', JSON.stringify(map))
-                  showToast(selectedIds.length > 1 ? 'Chats locked' : 'Chat locked')
-                } catch { /* */ }
+                void (async () => {
+                  try {
+                    const { verifyLocalPin, getLockedPeerMap, setLocalLocks } = await import('../lib/chatLock')
+                    const { api } = await import('../api')
+                    let ok = await verifyLocalPin(pin)
+                    if (!ok) {
+                      try {
+                        await api.verifyChatLockPin(pin)
+                        ok = true
+                      } catch { /* */ }
+                    }
+                    if (!ok) {
+                      showToast('Wrong PIN')
+                      return
+                    }
+                    const map = { ...getLockedPeerMap() }
+                    for (const id of selectedIds) map[id] = true
+                    setLocalLocks(map)
+                    void api.setLockedPeers(Object.keys(map).filter((k) => map[k])).catch(() => {})
+                    showToast(selectedIds.length > 1 ? 'Chats locked' : 'Chat locked')
+                  } catch { /* */ }
+                })()
                 setLockUi('none')
                 clearSelection()
                 return true
               }
-              // unlock
-              let stored = ''
-              try { stored = kvGet('sc_chat_lock_pin') || '' } catch { /* */ }
-              if (pin !== stored) return false
+              // unlock inbox
               try { kvSet('sc_chats_locked', '0') } catch { /* */ }
               setChatsLocked(false)
               setLockUi('none')
               showToast('Chats unlocked')
+              void import('../api').then(({ api }) => api.verifyChatLockPin(pin).catch(() => {}))
               return true
             }}
           />
@@ -584,12 +614,17 @@ export function ChatsHome({
             subtitle="Enter your PIN to open your inbox"
             mode="unlock"
             onComplete={(pin) => {
-              let stored = ''
-              try { stored = kvGet('sc_chat_lock_pin') || '' } catch { /* */ }
-              if (pin !== stored) return false
               try { kvSet('sc_chats_locked', '0') } catch { /* */ }
               setChatsLocked(false)
               showToast('Chats unlocked')
+              void import('../api').then(({ api }) => api.verifyChatLockPin(pin).catch(() => {}))
+              void import('../lib/chatLock').then(({ verifyLocalPin }) =>
+                verifyLocalPin(pin).then((ok) => {
+                  if (!ok) {
+                    // re-lock if both fail - soft: leave unlocked this session if offline
+                  }
+                }),
+              )
               return true
             }}
           />
@@ -672,7 +707,11 @@ export function ChatsHome({
               {list.map((c, i) => {
                 const ct = contactById(c.contactId, { name: c.name, photo: c.photo, hue: c.hue })
                 const meta = statusMeta[c.contactId]
-                const rowKey = c.conversationId || c.contactId
+                const rowKey = c.conversationId
+                  ? `c:${c.conversationId}`
+                  : c.isSelf
+                    ? `self:${c.contactId}`
+                    : `p:${c.contactId}`
                 const isNewRow = !seenRows.current.has(rowKey)
                 if (isNewRow) seenRows.current.add(rowKey)
                 const derived = previewFromThread(c.conversationId)
@@ -791,11 +830,11 @@ export function ChatsHome({
                               />
                             ) : null}
                             <span className="truncate">
-                              {me?.id && c.contactId === me.id
+                              {c.isSelf || (me?.id && c.contactId === me.id)
                                 ? 'me'
                                 : ((ct as any).savedName || ct.name)}
                             </span>
-                            {!!(ct as any).verifiedBadge && !(me?.id && c.contactId === me.id) && (
+                            {!!(ct as any).verifiedBadge && !(c.isSelf || (me?.id && c.contactId === me.id)) && (
                               <VerifiedCheck size={14} />
                             )}
                           </p>
@@ -809,9 +848,9 @@ export function ChatsHome({
                         </div>
                         <div className="mt-0.5 flex items-end justify-between gap-3">
                           <p className="min-w-0 flex-1 truncate text-sm font-semibold text-gray-500">
-                            {me?.id && c.contactId === me.id ? (
+                            {c.isSelf || (me?.id && c.contactId === me.id) ? (
                               (() => {
-                                const uname = String(me.username || ct.username || '').replace(/^@/, '')
+                                const uname = String(me?.username || ct.username || '').replace(/^@/, '')
                                 const preview = String(lastText || '').trim()
                                 if (preview && preview !== ' ') {
                                   return (

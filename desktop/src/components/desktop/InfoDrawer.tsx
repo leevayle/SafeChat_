@@ -34,7 +34,7 @@ export function InfoDrawer({ open, contactId, onClose, onCall }: Props) {
         }`}
         aria-hidden={!open}
       >
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-black/6 px-4">
+        <header className="flex min-h-16 shrink-0 items-center justify-between border-b border-black/6 px-4 pb-3 pt-[max(12px,env(safe-area-inset-top))]">
           <span className="text-sm font-extrabold text-ink">Contact info</span>
           <button
             type="button"

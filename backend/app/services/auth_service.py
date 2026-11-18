@@ -1,7 +1,6 @@
 """Authentication and session service."""
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
-import asyncio
 from bson import ObjectId
 from fastapi import Request
 from app.core.database import get_database
@@ -29,27 +28,6 @@ from app.schemas.auth import RegisterRequest, LoginRequest
 import logging
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_phone(raw: Optional[str]) -> Optional[str]:
-    """Normalize phone to a consistent E.164-ish form for lookup."""
-    if not raw:
-        return None
-    s = str(raw).strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
-    if not s:
-        return None
-    if s.startswith("00"):
-        s = "+" + s[2:]
-    digits = "".join(c for c in s if c.isdigit())
-    if s.startswith("+"):
-        return "+" + digits
-    if len(digits) == 9 and digits[0] in "17":
-        return "+254" + digits
-    if len(digits) == 10 and digits.startswith("0"):
-        return "+254" + digits[1:]
-    if digits.startswith("254") and len(digits) >= 12:
-        return "+" + digits
-    return ("+" + digits) if digits else None
 
 
 class AuthService:
@@ -158,19 +136,14 @@ class AuthService:
     ) -> Tuple[dict, Optional[str], Optional[str], Optional[str]]:
         db = get_database()
         user = None
-        # Prefer username when provided; otherwise / also try normalized phone.
-        # Client may send both in one request to avoid a sequential retry RTT.
         if getattr(data, "username", None):
             user = await db.users.find_one({"username": data.username.lower().strip()})
         if user is None and getattr(data, "phone_number", None):
-            phone_raw = (data.phone_number or "").strip()
-            phone_norm = _normalize_phone(phone_raw)
-            candidates = []
-            for p in (phone_norm, phone_raw, phone_raw.lstrip("+") if phone_raw else None):
-                if p and p not in candidates:
-                    candidates.append(p)
-            if candidates:
-                user = await db.users.find_one({"phone_number": {"$in": candidates}})
+            phone = data.phone_number.strip()
+            user = await db.users.find_one({"phone_number": phone})
+            # also try without leading +
+            if user is None and phone.startswith("+"):
+                user = await db.users.find_one({"phone_number": phone[1:]})
         if not user:
             raise UnauthorizedError("Invalid username or password")
 
@@ -306,46 +279,28 @@ class AuthService:
             "revoked": False,
             "revoked_at": None,
         }
-        # Session row is required for refresh validation — await it.
         await db.sessions.insert_one(session_doc)
 
-        # last_seen + activity log are not needed for the client response;
-        # run them in the background so login RTT is shorter.
-        async def _post_login_writes() -> None:
-            try:
-                await db.users.update_one(
-                    {"_id": user["_id"]},
-                    {"$set": {"last_seen": now}},
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("login last_seen update failed: %s", exc)
-            try:
-                await db.user_activity_logs.insert_one(
-                    {
-                        "user_id": user_id,
-                        "event_type": "auth",
-                        "action": "login",
-                        "resource_type": "session",
-                        "resource_id": session_id,
-                        "timestamp": now,
-                        "metadata": {"device_name": data.device_name},
-                        "ip_address": session_doc["ip_address"],
-                    }
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("login activity log failed: %s", exc)
+        await db.users.update_one(
+            {"_id": user["_id"]},
+            {"$set": {"last_seen": now}},
+        )
 
-        try:
-            asyncio.create_task(_post_login_writes())
-        except Exception:
-            # Fallback if event loop policy rejects create_task
-            await _post_login_writes()
+        await db.user_activity_logs.insert_one(
+            {
+                "user_id": user_id,
+                "event_type": "auth",
+                "action": "login",
+                "resource_type": "session",
+                "resource_id": session_id,
+                "timestamp": now,
+                "metadata": {"device_name": data.device_name},
+                "ip_address": session_doc["ip_address"],
+            }
+        )
 
         premium = (user.get("subscription_plan") or "pro") == "premium"
         ps = user.get("premium_settings") or {}
-        status_settings = user.get("status_settings") or {}
-        prefs = user.get("preferences") or {}
-        # Richer payload so the client can skip an immediate /auth/me round-trip
         user_public = {
             "id": user_id,
             "username": user["username"],
@@ -374,28 +329,11 @@ class AuthService:
             "bio": user.get("bio") or "",
             "email": user.get("email"),
             "phone_number": user.get("phone_number"),
-            "wallpaper": user.get("wallpaper") or prefs.get("wallpaper") or "Cloud",
-            "settings": {
-                "theme": user.get("theme") or "purple",
-                "chat_accent": user.get("chat_accent") or "purple",
-                "color_mode": user.get("color_mode") or "light",
-                "liquid_glass": bool(user.get("liquid_glass", False)),
-                "wallpaper": user.get("wallpaper") or prefs.get("wallpaper") or "Cloud",
-                "status_validity": status_settings.get("validity"),
-                "status_privacy": status_settings.get("privacy"),
-                "verified_badge": bool(ps.get("verified_badge", True)) if premium else False,
-                "force_read_receipts": bool(ps.get("force_read_receipts", False)) if premium else False,
-                "live_typing": bool(ps.get("live_typing", True)) if premium else False,
-                "status_ads_enabled": bool(ps.get("status_ads_enabled", False)) if premium else False,
-            },
-            "preferences": {
-                "theme": user.get("theme") or "purple",
-                "chat_accent": user.get("chat_accent") or "purple",
-                "color_mode": user.get("color_mode") or "light",
-                "liquid_glass": bool(user.get("liquid_glass", False)),
-                "wallpaper": user.get("wallpaper") or prefs.get("wallpaper") or "Cloud",
-                **prefs,
-            },
+            # Chat lock - hash stays server-side; client gets enabled flag + peer list
+            "chat_lock_enabled": bool(user.get("chat_lock_pin_hash")),
+            "locked_peer_ids": [
+                str(p) for p in (user.get("locked_peer_ids") or []) if p
+            ],
         }
         return user_public, access_token, refresh_token, None
 

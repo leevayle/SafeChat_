@@ -412,6 +412,11 @@ async def me(user: dict = Depends(get_current_user)):
             "chat_accent": doc.get("chat_accent") or "purple",
             "color_mode": doc.get("color_mode") or "light",
             "liquid_glass": bool(doc.get("liquid_glass", False)),
+            # Chat lock (PIN hash never leaves the server)
+            "chat_lock_enabled": bool(doc.get("chat_lock_pin_hash")),
+            "locked_peer_ids": [
+                str(p) for p in (doc.get("locked_peer_ids") or []) if p
+            ],
             "settings": {
                 "theme": doc.get("theme") or "purple",
                 "chat_accent": doc.get("chat_accent") or "purple",

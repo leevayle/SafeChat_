@@ -3,7 +3,7 @@
 import type { ApiMsg } from '../api'
 import { loadCachedThread, saveCachedThread, removeCachedThread } from './appCache'
 
-const MAX_THREADS = 60
+const MAX_THREADS = 40
 const MAX_PER_THREAD = 80
 
 const mem = new Map<string, ApiMsg[]>()
@@ -134,18 +134,4 @@ export async function removeConversationCache(conversationId: string | null | un
   } catch {
     /* ignore cache errors */
   }
-}
-
-/** Prefetch recent threads from IndexedDB into memory so chat open is instant. */
-export async function warmRecentThreads(conversationIds: string[], limit = 15) {
-  const ids = Array.from(new Set((conversationIds || []).filter(Boolean))).slice(0, limit)
-  await Promise.all(
-    ids.map(async (id) => {
-      try {
-        if (!mem.has(id)) await hydrateThreadFromDisk(id)
-      } catch {
-        /* ignore */
-      }
-    }),
-  )
 }

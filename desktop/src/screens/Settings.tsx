@@ -150,7 +150,15 @@ export function Settings({
   const [lockedChatPreview, setLockedChatPreview] = useState<{ id: string; name: string }[]>([])
   const [deletingLocks, setDeletingLocks] = useState(false)
   const [hasChatPin, setHasChatPin] = useState(() => {
-    try { return !!kvGet('sc_chat_lock_pin') } catch { return false }
+    try {
+      return (
+        kvGet('sc_chat_lock_enabled') === '1' ||
+        !!kvGet('sc_chat_lock_local_hash') ||
+        !!kvGet('sc_chat_lock_pin')
+      )
+    } catch {
+      return false
+    }
   })
 
   const loadBlockedContacts = useCallback(async () => {
@@ -1314,16 +1322,20 @@ export function Settings({
                           setChatPinError('PINs do not match')
                           return
                         }
-                        try {
-                          kvSet('sc_chat_lock_pin', chatPinDraft)
-                          setHasChatPin(true)
-                          setChatPinStep('idle')
-                          setChatPinDraft('')
-                          setChatPinConfirm('')
-                          setToast('Chat lock PIN saved')
-                        } catch {
-                          setChatPinError('Could not save PIN')
-                        }
+                        void (async () => {
+                          try {
+                            await api.setChatLockPin(chatPinDraft)
+                            const { saveLocalPinHash } = await import('../lib/chatLock')
+                            await saveLocalPinHash(chatPinDraft)
+                            setHasChatPin(true)
+                            setChatPinStep('idle')
+                            setChatPinDraft('')
+                            setChatPinConfirm('')
+                            setToast('Chat lock PIN saved')
+                          } catch (e: any) {
+                            setChatPinError(e?.message || 'Could not save PIN')
+                          }
+                        })()
                       }}
                     >
                       Save PIN
@@ -1370,24 +1382,36 @@ export function Settings({
                       type="button"
                       className="mt-4 w-full rounded-full bg-brand-purple py-3.5 text-sm font-extrabold text-white"
                       onClick={() => {
-                        try {
-                          const cur = kvGet('sc_chat_lock_pin') || ''
-                          if (chatPinDraft !== cur) {
-                            setChatPinError('Current PIN is wrong')
-                            return
+                        void (async () => {
+                          try {
+                            let ok = false
+                            try {
+                              await api.verifyChatLockPin(chatPinDraft)
+                              ok = true
+                            } catch {
+                              const { verifyLocalPin } = await import('../lib/chatLock')
+                              ok = await verifyLocalPin(chatPinDraft)
+                            }
+                            if (!ok) {
+                              setChatPinError('Current PIN is wrong')
+                              return
+                            }
+                            if (chatPinConfirm.length < 4) {
+                              setChatPinError('New PIN must be at least 4 digits')
+                              return
+                            }
+                            await api.setChatLockPin(chatPinConfirm)
+                            const { saveLocalPinHash } = await import('../lib/chatLock')
+                            await saveLocalPinHash(chatPinConfirm)
+                            setHasChatPin(true)
+                            setChatPinStep('idle')
+                            setChatPinDraft('')
+                            setChatPinConfirm('')
+                            setToast('PIN updated')
+                          } catch {
+                            setChatPinError('Could not update PIN')
                           }
-                          if (chatPinConfirm.length < 4) {
-                            setChatPinError('New PIN must be at least 4 digits')
-                            return
-                          }
-                          kvSet('sc_chat_lock_pin', chatPinConfirm)
-                          setChatPinStep('idle')
-                          setChatPinDraft('')
-                          setChatPinConfirm('')
-                          setToast('PIN updated')
-                        } catch {
-                          setChatPinError('Could not update PIN')
-                        }
+                        })()
                       }}
                     >
                       Save new PIN
@@ -1422,22 +1446,28 @@ export function Settings({
                       type="button"
                       className="mt-4 w-full rounded-full bg-brand-red py-3.5 text-sm font-extrabold text-white"
                       onClick={() => {
-                        try {
-                          const cur = kvGet('sc_chat_lock_pin') || ''
-                          if (chatPinDraft !== cur) {
-                            setChatPinError('Wrong PIN')
-                            return
+                        void (async () => {
+                          try {
+                            try {
+                              await api.clearChatLock(chatPinDraft)
+                            } catch (e: any) {
+                              const { verifyLocalPin } = await import('../lib/chatLock')
+                              if (!(await verifyLocalPin(chatPinDraft))) {
+                                setChatPinError(e?.message || 'Wrong PIN')
+                                return
+                              }
+                            }
+                            const { clearLocalChatLock } = await import('../lib/chatLock')
+                            clearLocalChatLock()
+                            kvRemove('sc_chats_locked')
+                            setHasChatPin(false)
+                            setChatPinStep('idle')
+                            setChatPinDraft('')
+                            setToast('Chat lock disabled')
+                          } catch {
+                            setChatPinError('Could not disable')
                           }
-                          kvRemove('sc_chat_lock_pin')
-                          kvRemove('sc_chat_locks')
-                          kvRemove('sc_chats_locked')
-                          setHasChatPin(false)
-                          setChatPinStep('idle')
-                          setChatPinDraft('')
-                          setToast('Chat lock disabled')
-                        } catch {
-                          setChatPinError('Could not disable')
-                        }
+                        })()
                       }}
                     >
                       Disable chat lock
