@@ -56,6 +56,7 @@ class GroupService:
             "member_ids": member_ids,
             "pending_member_ids": pending_ids,
             "invite_code": invite_code,
+            "unread_count": int(unread_count or 0),
             "group_permissions": {
                 "only_admins_can_post": False,
                 "only_admins_can_add_members": False,
@@ -111,7 +112,7 @@ class GroupService:
             raise NotFoundError("Group not found")
         if user_id not in group.get("member_ids", []):
             raise ForbiddenError("Not a member")
-        return await GroupService._serialize(group)
+        return await GroupService._serialize(group, user_id)
 
     @staticmethod
     async def list_my_groups(user_id: str) -> List[dict]:
@@ -119,7 +120,7 @@ class GroupService:
         cursor = db.groups.find({"member_ids": user_id}).sort("updated_at", -1)
         results = []
         async for g in cursor:
-            results.append(await GroupService._serialize(g))
+            results.append(await GroupService._serialize(g, user_id))
         return results
 
     @staticmethod
@@ -333,7 +334,7 @@ class GroupService:
             await db.conversations.update_one({"_id": conv["_id"]}, {"$addToSet": {"participant_ids": user_id}, "$set": {"updated_at": now}})
         await db.group_invites.update_one({"_id": ObjectId(invite_id)}, {"$set": {"status": "accepted", "updated_at": now}})
         group = await db.groups.find_one({"_id": ObjectId(group_id)})
-        return await GroupService._serialize(group)
+        return await GroupService._serialize(group, user_id)
 
     @staticmethod
     async def reject_invite(invite_id: str, user_id: str) -> None:
@@ -372,10 +373,10 @@ class GroupService:
         if conv:
             await db.conversations.update_one({"_id": conv["_id"]}, {"$addToSet": {"participant_ids": user_id}, "$set": {"updated_at": now}})
         group = await db.groups.find_one({"_id": group["_id"]})
-        return await GroupService._serialize(group)
+        return await GroupService._serialize(group, user_id)
 
     @staticmethod
-    async def _serialize(group: dict) -> dict:
+    async def _serialize(group: dict, viewer_id: str | None = None) -> dict:
         db = get_database()
         gid = str(group["_id"])
         if not group.get("invite_code"):
@@ -427,6 +428,18 @@ class GroupService:
             )
 
         invite_code = group.get("invite_code") or ""
+        unread_count = 0
+        if conv and viewer_id:
+            try:
+                unread_count = await db.message_receipts.count_documents(
+                    {
+                        "conversation_id": str(conv["_id"]),
+                        "user_id": str(viewer_id),
+                        "read_at": None,
+                    }
+                )
+            except Exception:
+                unread_count = 0
         pending_ids = [str(x) for x in (group.get("pending_member_ids") or [])]
         # Mark pending members in list if present as members already
         for m in members:

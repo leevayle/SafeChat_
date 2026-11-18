@@ -1843,6 +1843,66 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const { applyThreadMessages } = await import('./lib/messageStore')
           await applyThreadMessages(cid, [mapped])
 
+          // Update group list preview / unread when this conversation belongs to a group
+          try {
+            const gList = groupsRef.current || []
+            const match = gList.find(
+              (g: any) => String(g.conversationId || g.conversation_id || '') === String(cid),
+            )
+            if (match) {
+              const openGroup =
+                typeof window !== 'undefined' &&
+                (window as any).__sc_open_group_conv === String(cid)
+              const mentioned =
+                !mine &&
+                !!myId &&
+                /@\w+/.test(String(previewText || '')) &&
+                (() => {
+                  try {
+                    const uname = String((me as any)?.username || '').replace(/^@/, '').toLowerCase()
+                    if (!uname) return false
+                    return new RegExp('@' + uname + '\\b', 'i').test(String(previewText || ''))
+                  } catch {
+                    return false
+                  }
+                })()
+              let replyToMe = false
+              if (!mine && (mapped.replyToId || mapped.reply_to_message_id)) {
+                try {
+                  const { getCachedMessages } = await import('./lib/messageCache')
+                  const cached = getCachedMessages(String(cid)) || []
+                  const parent = cached.find(
+                    (x: any) =>
+                      String(x.id) === String(mapped.replyToId || mapped.reply_to_message_id),
+                  )
+                  if (parent && String(parent.from || parent.sender_id || '') === String(myId)) {
+                    replyToMe = true
+                  }
+                } catch {
+                  replyToMe = false
+                }
+              }
+              setGroups((prev) =>
+                prev.map((g: any) => {
+                  if (String(g.conversationId || g.conversation_id || '') !== String(cid)) return g
+                  const nextUnread = mine || openGroup ? 0 : (Number(g.unread) || 0) + 1
+                  return {
+                    ...g,
+                    last: String(previewText || g.last || ''),
+                    iso,
+                    time: timeLabel || g.time,
+                    unread: nextUnread,
+                    mentionUnread: openGroup
+                      ? false
+                      : !!(g.mentionUnread || mentioned || replyToMe),
+                  }
+                }),
+              )
+            }
+          } catch {
+            /* ignore group preview errors */
+          }
+
           // 3) Delivery / read side-effects
           // delivered = message reached this device (printed in memory/UI)
           // read = conversation open OR app foreground (inbox list shows the line)
@@ -2675,6 +2735,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     window.addEventListener('sc:rt-game-invite', onGameInvite)
     const onNotifsCleared = () => setNotifUnreadCount(0)
+    const onGroupOpened = (ev: Event) => {
+      const gid = String((ev as CustomEvent).detail?.groupId || '')
+      if (!gid) return
+      setGroups((prev) =>
+        prev.map((g: any) =>
+          String(g.id) === gid ? { ...g, unread: 0, mentionUnread: false } : g,
+        ),
+      )
+    }
+    window.addEventListener('sc:group-opened', onGroupOpened)
     window.addEventListener('sc:notifs-cleared', onNotifsCleared)
     const onNotif = (ev: Event) => {
       const d = (ev as CustomEvent).detail || {}
@@ -2746,6 +2816,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => {
       window.removeEventListener('sc:delete-chats', onDelete)
       window.removeEventListener('sc:rt-game-invite', onGameInvite)
+      window.removeEventListener('sc:group-opened', onGroupOpened)
       window.removeEventListener('sc:notifs-cleared', onNotifsCleared)
       window.removeEventListener('sc:rt-notif', onNotif)
       window.removeEventListener('sc:rt-contact', onContactEvt)

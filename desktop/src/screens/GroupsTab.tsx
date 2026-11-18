@@ -20,6 +20,7 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
   const { settings, groups, joinGroup, refreshGroups } = useStore()
   const [q, setQ] = useState('')
   const [join, setJoin] = useState(false)
+  const [joining, setJoining] = useState(false)
   const [link, setLink] = useState('')
   const [toast, setToast] = useState<string | null>(null)
   const [invites, setInvites] = useState<GroupInvite[]>([])
@@ -45,14 +46,19 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
   const code = link.trim().split('/').pop() ?? ''
   const doJoin = async () => {
     if (code.length < 5) return setToast('That invite link looks invalid')
+    if (joining) return
+    setJoining(true)
     try {
       const id = await joinGroup(code)
       setJoin(false)
       setLink('')
       await loadInvites()
-      onOpen(id)
+      setToast('Joined group')
+      if (id) onOpen(id)
     } catch (e: any) {
-      setToast(e.message || 'Could not join')
+      setToast(e?.message || 'Could not join')
+    } finally {
+      setJoining(false)
     }
   }
 
@@ -164,9 +170,14 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
                         <span className="truncate text-sm font-semibold text-gray-500">{preview}</span>
                         <span className="flex items-center gap-1.5">
                           {g.muted ? <BellOff size={14} className="text-gray-400" /> : null}
+                          {g.mentionUnread ? (
+                            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-purple px-1.5 text-[11px] font-black text-white">
+                              @
+                            </span>
+                          ) : null}
                           {g.unread > 0 ? (
                             <span className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-extrabold text-white ${g.muted ? 'bg-gray-400' : 'bg-brand-red'}`}>
-                              {g.unread}
+                              {g.unread > 99 ? '99+' : g.unread}
                             </span>
                           ) : null}
                         </span>
@@ -202,7 +213,7 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
 
       <Sheet open={join} onClose={() => setJoin(false)} title="Join with invite link">
         <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="safechat.app/join/abc123" className="mb-4 h-13 w-full rounded-full bg-gray-100 px-5 py-3 font-bold outline-none focus:ring-4 focus:ring-brand-purple/25 dark:bg-white/10" />
-        <PrimaryButton disabled={!link.trim()} onClick={doJoin}>Join group</PrimaryButton>
+        <PrimaryButton disabled={!link.trim() || joining} onClick={() => void doJoin()}>{joining ? 'Joining…' : 'Join group'}</PrimaryButton>
       </Sheet>
       <Toast msg={toast} clear={() => setToast(null)} />
     </div>

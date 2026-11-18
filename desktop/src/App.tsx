@@ -74,6 +74,43 @@ function Shell() {
     }
   })
 
+  // Navigation / overlay state — declared early so effects that depend on them
+  // do not hit temporal dead zone (Cannot access before initialization).
+  const [chat, setChat] = useState<string | null>(null)
+  const [group, setGroup] = useState<string | null>(null)
+  const [groupInfoId, setGroupInfoId] = useState<string | null>(null)
+  const [overlay, setOverlay] = useState<Overlay>(null)
+  const [call, setCall] = useState<Call | null>(null)
+  const [incoming, setIncoming] = useState<(Call & { ringId?: string }) | null>(null)
+  const [statusUser, setStatusUser] = useState<{ userId: string; statusId?: string } | null>(null)
+
+  // Clear group unread while the thread is open
+  useEffect(() => {
+    if (!group) return
+    try {
+      window.dispatchEvent(new CustomEvent('sc:group-opened', { detail: { groupId: group } }))
+    } catch { /* */ }
+  }, [group])
+
+  // ESC closes open group chat / group info (and clears selection ring state)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (groupInfoId) {
+        setGroupInfoId(null)
+        e.preventDefault()
+        return
+      }
+      if (group) {
+        setGroup(null)
+        setGroupInfoId(null)
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [group, groupInfoId])
+
   const chatUnread = (chats || []).reduce((n, c) => n + (c.unread > 0 ? 1 : 0), 0)
   const missedCallBadge = (calls || []).filter((c: any) => {
     const missed = c.status === 'missed' || c.direction === 'missed'
@@ -99,7 +136,7 @@ function Shell() {
     })
   }
 
-  const groupUnread = (groups || []).reduce((n, g: any) => n + (g.unread > 0 ? 1 : 0), 0)
+  const groupUnread = (groups || []).reduce((n, g: any) => n + (Number(g.unread) || 0), 0)
 
   const requestLogout = () => setLogoutConfirm(true)
   const openStatus = (userId: string, statusId?: string) => {
@@ -292,14 +329,6 @@ function Shell() {
     if (dx < 0 && i < TAB_ORDER.length - 1) goTab(TAB_ORDER[i + 1], 1)
     else if (dx > 0 && i > 0) goTab(TAB_ORDER[i - 1], -1)
   }
-
-  const [chat, setChat] = useState<string | null>(null)
-  const [group, setGroup] = useState<string | null>(null)
-  const [groupInfoId, setGroupInfoId] = useState<string | null>(null)
-  const [overlay, setOverlay] = useState<Overlay>(null)
-  const [call, setCall] = useState<Call | null>(null)
-  const [incoming, setIncoming] = useState<(Call & { ringId?: string }) | null>(null)
-  const [statusUser, setStatusUser] = useState<{ userId: string; statusId?: string } | null>(null)
 
   const restored = useRef(false)
   const chatRef = useRef<string | null>(null)

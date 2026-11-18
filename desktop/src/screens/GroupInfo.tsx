@@ -147,14 +147,17 @@ export function GroupInfo({
 
 
   const saveGroupPhoto = async (dataUrl: string | null) => {
+    const prev = g
     setPhotoBusy(true)
+    setCropSrc(null)
+    setG((cur: any) => ({ ...cur, photo: dataUrl }))
+    setToast(dataUrl ? 'Group photo updated' : 'Group photo removed')
     try {
       const { group } = await api.patchGroup(groupId, { photo: dataUrl })
       setG(group)
       await refreshGroups()
-      setCropSrc(null)
-      setToast('Group photo updated')
     } catch (e: any) {
+      setG(prev)
       setToast(e?.message || 'Could not update photo')
     } finally {
       setPhotoBusy(false)
@@ -188,17 +191,22 @@ export function GroupInfo({
 
   const saveEdits = async () => {
     if (!draft.name.trim()) return
+    const prev = g
+    const nextName = draft.name.trim()
+    const nextDesc = draft.desc.trim()
     setBusy(true)
+    setG((cur: any) => ({ ...cur, name: nextName, desc: nextDesc }))
+    setSheet(null)
+    setToast('Group updated')
     try {
       const { group } = await api.patchGroup(groupId, {
-        name: draft.name.trim(),
-        desc: draft.desc.trim(),
+        name: nextName,
+        desc: nextDesc,
       })
       setG(group)
       await refreshGroups()
-      setSheet(null)
-      setToast('Group updated')
     } catch (e: any) {
+      setG(prev)
       setToast(e?.message || 'Could not update group')
     } finally {
       setBusy(false)
@@ -251,40 +259,68 @@ export function GroupInfo({
   }
 
   const promote = async (uid: string) => {
+    const who = displayName(members.find((m: any) => m.id === uid) || { id: uid })
+    const prev = g
+    setG((cur: any) => ({
+      ...cur,
+      adminIds: Array.from(new Set([...(cur.adminIds || []), uid].map(String))),
+      members: (cur.members || []).map((m: any) =>
+        String(m.id) === String(uid) ? { ...m, admin: true } : m,
+      ),
+    }))
+    setSheet(null)
+    setToast(`${who} made an admin`)
     try {
       await api.promoteGroupAdmin(groupId, uid)
       const { group } = await api.group(groupId)
       setG(group)
       await refreshGroups()
-      setSheet(null)
-      setToast('Admin added')
     } catch (e: any) {
+      setG(prev)
       setToast(e?.message || 'Could not promote')
     }
   }
 
   const demote = async (uid: string) => {
+    const who = displayName(members.find((m: any) => m.id === uid) || { id: uid })
+    const prev = g
+    setG((cur: any) => ({
+      ...cur,
+      adminIds: (cur.adminIds || []).filter((id: string) => String(id) !== String(uid)),
+      members: (cur.members || []).map((m: any) =>
+        String(m.id) === String(uid) ? { ...m, admin: false } : m,
+      ),
+    }))
+    setSheet(null)
+    setToast(`${who} dismissed as admin`)
     try {
       await api.demoteGroupAdmin(groupId, uid)
       const { group } = await api.group(groupId)
       setG(group)
       await refreshGroups()
-      setSheet(null)
-      setToast('Admin removed')
     } catch (e: any) {
+      setG(prev)
       setToast(e?.message || 'Could not demote')
     }
   }
 
   const removeMember = async (uid: string) => {
+    const who = displayName(members.find((m: any) => m.id === uid) || { id: uid })
+    const prev = g
+    setG((cur: any) => ({
+      ...cur,
+      memberIds: (cur.memberIds || []).filter((id: string) => String(id) !== String(uid)),
+      members: (cur.members || []).filter((m: any) => String(m.id) !== String(uid)),
+    }))
+    setSheet(null)
+    setToast(`${who} removed from group`)
     try {
       await api.removeGroupMember(groupId, uid)
       const { group } = await api.group(groupId)
       setG(group)
       await refreshGroups()
-      setSheet(null)
-      setToast('Member removed')
     } catch (e: any) {
+      setG(prev)
       setToast(e?.message || 'Could not remove')
     }
   }
@@ -480,6 +516,12 @@ export function GroupInfo({
                 <Toggle
                   on={g.permissions?.onlyAdminsCanEditInfo !== false}
                   onChange={(v) => {
+                    const prev = g
+                    setG((cur: any) => ({
+                      ...cur,
+                      permissions: { ...(cur.permissions || {}), onlyAdminsCanEditInfo: v },
+                    }))
+                    setToast(v ? 'Only admins can edit info' : 'Members can edit info')
                     void (async () => {
                       try {
                         const { group } = await api.patchGroup(groupId, {
@@ -489,8 +531,8 @@ export function GroupInfo({
                           },
                         })
                         setG(group)
-                        setToast(v ? 'Only admins can edit info' : 'Members can edit info')
                       } catch (e: any) {
+                        setG(prev)
                         setToast(e?.message || 'Could not update')
                       }
                     })()
@@ -506,6 +548,12 @@ export function GroupInfo({
                 <Toggle
                   on={!!g.permissions?.onlyAdminsCanAddMembers}
                   onChange={(v) => {
+                    const prev = g
+                    setG((cur: any) => ({
+                      ...cur,
+                      permissions: { ...(cur.permissions || {}), onlyAdminsCanAddMembers: v },
+                    }))
+                    setToast(v ? 'Only admins can add' : 'Members can add')
                     void (async () => {
                       try {
                         const { group } = await api.patchGroup(groupId, {
@@ -515,8 +563,8 @@ export function GroupInfo({
                           },
                         })
                         setG(group)
-                        setToast(v ? 'Only admins can add' : 'Members can add')
                       } catch (e: any) {
+                        setG(prev)
                         setToast(e?.message || 'Could not update')
                       }
                     })()
@@ -532,6 +580,12 @@ export function GroupInfo({
                 <Toggle
                   on={!!g.permissions?.onlyAdminsCanPost}
                   onChange={(v) => {
+                    const prev = g
+                    setG((cur: any) => ({
+                      ...cur,
+                      permissions: { ...(cur.permissions || {}), onlyAdminsCanPost: v },
+                    }))
+                    setToast(v ? 'Only admins can post' : 'Everyone can post')
                     void (async () => {
                       try {
                         const { group } = await api.patchGroup(groupId, {
@@ -541,8 +595,8 @@ export function GroupInfo({
                           },
                         })
                         setG(group)
-                        setToast(v ? 'Only admins can post' : 'Everyone can post')
                       } catch (e: any) {
+                        setG(prev)
                         setToast(e?.message || 'Could not update')
                       }
                     })()

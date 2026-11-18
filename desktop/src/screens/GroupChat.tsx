@@ -26,6 +26,21 @@ import {
 } from '../store'
 import { formatLocalTime, utcNowIso } from '../time'
 import { linkifyText } from '../lib/linkify'
+
+function renderGroupText(text: string) {
+  // Highlight @username mentions while keeping linkify for URLs
+  const parts = String(text || '').split(/(@[A-Za-z0-9_]+)/g)
+  return parts.map((part, i) => {
+    if (/^@[A-Za-z0-9_]+$/.test(part)) {
+      return (
+        <span key={i} className="font-black text-sky-300">
+          {part}
+        </span>
+      )
+    }
+    return <span key={i}>{linkifyText(part)}</span>
+  })
+}
 import {
   getCachedMessages,
   mergeCachedMessages,
@@ -102,10 +117,25 @@ export function GroupChat({
   const [replyTo, setReplyTo] = useState<GMsg | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [actionMsg, setActionMsg] = useState<GMsg | null>(null)
+  const [mentionOpen, setMentionOpen] = useState(false)
+  const [mentionQ, setMentionQ] = useState('')
+  const [mentionIdx, setMentionIdx] = useState(0)
   const end = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const myId = me?.id || ''
   const memberCount = g?.memberIds?.length || g?.members?.filter((m: any) => !m.pending)?.length || 0
+  const mentionCandidates = (() => {
+    const list = (g?.members || []).filter((m: any) => !m.pending && String(m.id) !== String(myId))
+    const q = mentionQ.toLowerCase()
+    return list
+      .filter((m: any) => {
+        if (!q) return true
+        const uname = String(m.username || '').replace(/^@/, '').toLowerCase()
+        const name = String(m.name || '').toLowerCase()
+        return uname.includes(q) || name.includes(q)
+      })
+      .slice(0, 8)
+  })()
   const fontSize = FONT_SIZES[(settings as any).fontSize as keyof typeof FONT_SIZES] || FONT_SIZES.medium
 
   const nameFor = useCallback(
@@ -182,11 +212,48 @@ export function GroupChat({
     end.current?.scrollIntoView({ behavior: 'smooth' })
   }, [msgs.length])
 
+  // Let global WS unread logic know this group thread is open
+  useEffect(() => {
+    if (conversationId) {
+      ;(window as any).__sc_open_group_conv = String(conversationId)
+      // Clear local unread for this group
+      try {
+        // parent store updates via refresh; optimistic local
+      } catch { /* */ }
+    }
+    return () => {
+      if ((window as any).__sc_open_group_conv === String(conversationId || '')) {
+        ;(window as any).__sc_open_group_conv = null
+      }
+    }
+  }, [conversationId])
+
   useEffect(() => {
     if (replyTo || editingId) {
       requestAnimationFrame(() => inputRef.current?.focus())
     }
   }, [replyTo, editingId])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (mentionOpen) {
+        setMentionOpen(false)
+        return
+      }
+      if (actionMsg) {
+        setActionMsg(null)
+        return
+      }
+      if (replyTo || editingId) {
+        cancelComposeExtras()
+        return
+      }
+      onBack()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mentionOpen, actionMsg, replyTo, editingId, onBack])
 
   const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
   const wallpaperImg = resolveWallpaperImage(settings.wallpaper, settings.wallpaperImage)
@@ -196,6 +263,19 @@ export function GroupChat({
   const cancelComposeExtras = () => {
     setReplyTo(null)
     setEditingId(null)
+  }
+
+  const insertMention = (m: any) => {
+    const uname = String(m.username || m.name || '').replace(/^@/, '')
+    if (!uname) return
+    setText((prev) => {
+      const at = prev.lastIndexOf('@')
+      if (at < 0) return prev + '@' + uname + ' '
+      return prev.slice(0, at) + '@' + uname + ' '
+    })
+    setMentionOpen(false)
+    setMentionQ('')
+    requestAnimationFrame(() => inputRef.current?.focus())
   }
 
   const send = async () => {
@@ -463,7 +543,7 @@ export function GroupChat({
                       </div>
                     ) : null}
                     <span className="whitespace-pre-wrap break-words font-semibold leading-snug">
-                      {linkifyText(m.text)}
+                      {renderGroupText(m.text)}
                     </span>
                     <div
                       className={`mt-1 flex items-center justify-end gap-1 text-[10px] font-bold ${
@@ -551,6 +631,33 @@ export function GroupChat({
           </div>
         ) : null}
 
+        {mentionOpen && mentionCandidates.length > 0 ? (
+          <div className="max-h-48 overflow-y-auto border-t border-gray-100 bg-white px-2 py-2 dark:border-white/10 dark:bg-[#1f2c34]">
+            <p className="px-2 pb-1 text-[10px] font-extrabold uppercase tracking-wide text-gray-400">Tag someone</p>
+            {mentionCandidates.map((m: any, i: number) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => insertMention(m)}
+                className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left ${
+                  i === mentionIdx ? 'bg-brand-purple/10' : 'hover:bg-gray-50 dark:hover:bg-white/5'
+                }`}
+              >
+                <Avatar
+                  contact={{ id: m.id, name: m.name || m.username, photo: m.photo }}
+                  size={32}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-extrabold">{m.name || m.username}</span>
+                  <span className="block truncate text-xs font-semibold text-gray-400">
+                    @{String(m.username || m.name || '').replace(/^@/, '')}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+
         {emoji ? (
           <div className="grid max-h-40 grid-cols-8 gap-1 overflow-y-auto border-t border-gray-100 bg-white px-2 py-2 dark:border-white/10 dark:bg-[#1f2c34]">
             {EMOJIS.map((e) => (
@@ -602,8 +709,48 @@ export function GroupChat({
           <input
             ref={inputRef}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value
+              setText(v)
+              const caret = e.target.selectionStart ?? v.length
+              const before = v.slice(0, caret)
+              const at = before.lastIndexOf('@')
+              if (at >= 0) {
+                const frag = before.slice(at + 1)
+                if (!/\s/.test(frag) && frag.length <= 32) {
+                  setMentionOpen(true)
+                  setMentionQ(frag)
+                  setMentionIdx(0)
+                  return
+                }
+              }
+              setMentionOpen(false)
+              setMentionQ('')
+            }}
             onKeyDown={(e) => {
+              if (mentionOpen && mentionCandidates.length) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault()
+                  setMentionIdx((i) => (i + 1) % mentionCandidates.length)
+                  return
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault()
+                  setMentionIdx((i) => (i - 1 + mentionCandidates.length) % mentionCandidates.length)
+                  return
+                }
+                if (e.key === 'Enter' || e.key === 'Tab') {
+                  e.preventDefault()
+                  const m = mentionCandidates[mentionIdx]
+                  if (m) insertMention(m)
+                  return
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setMentionOpen(false)
+                  return
+                }
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 void send()
