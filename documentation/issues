@@ -133,6 +133,8 @@ v 1.0.3 known issues
 - Fix transporting password in plain text over http requests
 - We need a local password solution for locking chats
 - Chat lock does not hold cross device.
+- Cache with sqlite in native envs 
+- Group red notification counts messages wrong, only count new incoming messages not all total.
 
 
 
