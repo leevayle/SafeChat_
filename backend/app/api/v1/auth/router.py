@@ -30,10 +30,12 @@ def _attach_refresh_cookie(response: Response, refresh: str) -> None:
     """HttpOnly refresh cookie (cross-site friendly for Pages ↔ Render).
 
     SameSite=None + Secure is required for cross-origin SPAs.
-    Partitioned (CHIPS) helps when the browser treats the API as a third party.
+    Partitioned (CHIPS) is only used on Python 3.14+; on 3.12 Starlette
+    accepts the kwarg then fails when serializing the Set-Cookie header.
     Clients also receive refresh_token in the JSON body as a fallback when
     third-party cookies are blocked.
     """
+    import sys
     from app.core.config import settings
     max_age = int(settings.REFRESH_TOKEN_EXPIRE_DAYS) * 86400
     kwargs = dict(
@@ -45,20 +47,23 @@ def _attach_refresh_cookie(response: Response, refresh: str) -> None:
         max_age=max_age,
         path="/",
     )
-    # Starlette/FastAPI may support Partitioned cookies (CHIPS)
-    try:
-        response.set_cookie(**kwargs, partitioned=True)
-    except TypeError:
-        response.set_cookie(**kwargs)
+    # Partitioned cookies need Python 3.14+; do not pass the flag on 3.12.
+    if sys.version_info >= (3, 14):
+        kwargs["partitioned"] = True
+    response.set_cookie(**kwargs)
 
 
 def _clear_refresh_cookie(response: Response) -> None:
-    try:
-        response.delete_cookie(
-            key="sc_refresh", path="/", samesite="none", secure=True, partitioned=True
-        )
-    except TypeError:
-        response.delete_cookie(key="sc_refresh", path="/", samesite="none", secure=True)
+    import sys
+    kwargs = dict(
+        key="sc_refresh",
+        path="/",
+        samesite="none",
+        secure=True,
+    )
+    if sys.version_info >= (3, 14):
+        kwargs["partitioned"] = True
+    response.delete_cookie(**kwargs)
 
 
 
