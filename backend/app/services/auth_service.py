@@ -221,17 +221,18 @@ class AuthService:
             raise UnauthorizedError("Invalid username or password")
 
         status = user.get("account_status", AccountStatus.ACTIVE.value)
+        # Deleted / pending_review still blocked from login entirely
         if status in (
-            AccountStatus.BANNED.value,
             AccountStatus.PENDING_REVIEW.value,
             AccountStatus.DELETED.value,
         ):
             raise AccountRestrictedError(
                 f"Account is {status}", details={"status": status}
             )
-
+        # Deactivated stays blocked at login (reactivate flow is separate)
         if status == AccountStatus.DEACTIVATED.value:
             raise AccountRestrictedError("Account is deactivated")
+        # Banned users MAY log in with limited access (read chats + support only)
 
         reset_hash = user.get("password_reset_token_hash")
         reset_nonce = user.get("password_reset_nonce")
@@ -308,6 +309,7 @@ class AuthService:
             "profile_photo": user.get("profile_photo"),
             "account_role": user.get("account_role"),
             "account_status": status,
+            "ban_reason": (user.get("ban_reason") or user.get("status_reason") or None) if status == "banned" else None,
             "subscription_plan": user.get("subscription_plan") or "pro",
             "verified_badge": bool(ps.get("verified_badge", True)) if premium else False,
             "premium_settings": {
@@ -393,8 +395,8 @@ class AuthService:
             raise UnauthorizedError("Session was revoked after a password change")
 
         status = user.get("account_status", AccountStatus.ACTIVE.value)
-        if status not in (AccountStatus.ACTIVE.value,):
-            raise AccountRestrictedError("Account restricted")
+        if status not in (AccountStatus.ACTIVE.value, AccountStatus.BANNED.value):
+            raise AccountRestrictedError("Account restricted", details={"status": status})
 
         # Touch session; keep the same refresh token (no rotate race)
         await db.sessions.update_one(
@@ -450,8 +452,10 @@ class AuthService:
             raise UnauthorizedError("Password was reset. Sign in again")
 
         status = user.get("account_status", AccountStatus.ACTIVE.value)
-        if status not in (AccountStatus.ACTIVE.value,):
-            raise AccountRestrictedError("Account restricted")
+        # Active + banned allowed (banned = limited client). Others blocked.
+        if status not in (AccountStatus.ACTIVE.value, AccountStatus.BANNED.value):
+            raise AccountRestrictedError("Account restricted", details={"status": status})
 
         user["id"] = str(user["_id"])
+        user["ban_reason"] = user.get("ban_reason") or user.get("status_reason")
         return user

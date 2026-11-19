@@ -40,11 +40,14 @@ async def list_my_tickets(
 async def create_ticket(body: TicketCreate, user: dict = Depends(get_current_user)):
     db = get_database()
     now = datetime.now(timezone.utc)
+    subject = body.subject.strip()
+    is_appeal = subject.lower().startswith("appeal") or bool(getattr(body, "is_appeal", False))
     document = {
         "user_id": user["id"],
-        "subject": body.subject.strip(),
+        "subject": subject,
         "body": body.body.strip(),
         "status": "pending",
+        "ticket_type": "ban_appeal" if is_appeal else "support",
         "last_reply_role": "USER",
         "created_at": now,
         "updated_at": now,

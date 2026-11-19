@@ -812,7 +812,8 @@ function UserActions({ row, actorRole, onAction }: {
             <button type="button" onClick={() => { onAction(row.subscription_plan === 'premium' ? 'pro' : 'premium'); setOpen(false) }}><BadgeCheck size={15} />{row.subscription_plan === 'premium' ? 'Revoke Premium' : 'Grant Premium'}</button>
             {canManage && <button type="button" onClick={() => { onAction('revoke-sessions'); setOpen(false) }}><LogOut size={15} />Revoke all sessions</button>}
             {actorRole === 'SUPER_ADMIN' && row.account_role === 'ADMIN' && <button type="button" className="danger-menu-item" onClick={() => { onAction('revoke-admin'); setOpen(false) }}><Shield size={15} />Revoke admin role</button>}
-            {canManage && row.account_status !== 'banned' && <button type="button" onClick={() => { onAction(row.account_status === 'deactivated' ? 'active' : 'deactivated'); setOpen(false) }}><Ban size={15} />{row.account_status === 'deactivated' ? 'Reactivate account' : 'Deactivate account'}</button>}
+            {canManage && row.account_status !== 'banned' && <button type="button" onClick={() => { onAction(row.account_status === 'deactivated' ? 'active' : 'deactivated'); setOpen(false) }}>{row.account_status === 'deactivated' ? <Check size={15} /> : <Ban size={15} />}{row.account_status === 'deactivated' ? 'Reactivate account' : 'Deactivate account'}</button>}
+            {canManage && row.account_status === 'banned' && <button type="button" onClick={() => { onAction('active'); setOpen(false) }}><ShieldCheck size={15} />Unban account</button>}
             {canManage && row.account_status !== 'banned' && <button type="button" className="danger-menu-item" onClick={() => { onAction('banned'); setOpen(false) }}><Ban size={15} />Ban account</button>}
             {actorRole === 'ADMIN' && row.account_role === 'USER' && <button type="button" onClick={() => { onAction('request-admin'); setOpen(false) }}><ShieldCheck size={15} />Request admin access</button>}
             {actorRole === 'SUPER_ADMIN' && row.account_role === 'USER' && <button type="button" onClick={() => { onAction('promote-admin'); setOpen(false) }}><ShieldCheck size={15} />Promote to admin</button>}
@@ -1019,6 +1020,25 @@ function SupportInbox({ actorRole }: { actorRole: Role }) {
     }
   }
 
+  
+  const resolveAppeal = async (ticket: SupportInboxTicket, nextStatus: 'active' | 'deactivated') => {
+    if (!ticket.user_id) return
+    setSending(true)
+    try {
+      const params = new URLSearchParams({ status: nextStatus })
+      await request(`/admin/users/${ticket.user_id}/status?${params}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reason: nextStatus === 'active' ? 'Ban appeal approved' : 'Ban appeal: account deactivated' }),
+      })
+      notifyAdmin(nextStatus === 'active' ? 'User unbanned.' : 'User deactivated.')
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update account status.')
+    } finally {
+      setSending(false)
+    }
+  }
+
   const pages = Math.max(1, Math.ceil((data?.total || 0) / pageSize))
   const statusTone = (value?: string) => {
     if (value === 'closed') return 'closed'
@@ -1142,6 +1162,16 @@ function SupportInbox({ actorRole }: { actorRole: Role }) {
                 <button type="button" className="secondary-button" disabled={sending} onClick={() => void toggleClosed()}>
                   {selected.status === 'closed' ? 'Reopen' : 'Close ticket'}
                 </button>
+                {(selected.subject || '').toLowerCase().startsWith('appeal') || (selected as any).ticket_type === 'ban_appeal' ? (
+                  <>
+                    <button type="button" className="primary-button" disabled={sending} onClick={() => void resolveAppeal(selected, 'active')}>
+                      Unban account
+                    </button>
+                    <button type="button" className="danger-button" disabled={sending} onClick={() => void resolveAppeal(selected, 'deactivated')}>
+                      Deactivate account
+                    </button>
+                  </>
+                ) : null}
               </div>
               <div className="tickets-thread">
                 <div className="tickets-bubble is-user">
@@ -1485,8 +1515,8 @@ const BACKUP_SCOPE_ICONS: Record<string, typeof Database> = {
   contacts: Contact,
   support: LifeBuoy,
   payments: CreditCard,
-  status: Activity,
-  groups: Users,
+  status: Monitor,
+  groups: FolderArchive,
   audit: FileClock,
   notes: Archive,
 }
@@ -1665,8 +1695,10 @@ function BackupPage() {
                 onClick={() => setScope(s.id)}
               >
                 <span className="backup-scope-icon"><Icon size={18} strokeWidth={2.2} /></span>
-                <strong>{s.label || s.id}</strong>
-                <span>{(s.collections || []).join(', ')}</span>
+                <span className="backup-scope-copy">
+                  <strong>{s.label || s.id}</strong>
+                  <span className="backup-scope-meta">{(s.collections || []).join(', ')}</span>
+                </span>
               </button>
               )
             })}

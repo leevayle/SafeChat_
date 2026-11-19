@@ -2,6 +2,7 @@ import { Toast } from './components/ui'
 import { useCallback, useEffect, useRef, useState, type ReactNode, type TouchEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { DeactivatedGate } from './screens/DeactivatedGate'
+import { BannedGate } from './screens/BannedGate'
 import { Splash } from './screens/Splash'
 import { Welcome } from './screens/Welcome'
 import { Signup } from './screens/Signup'
@@ -55,6 +56,9 @@ function Shell() {
   const { ready, listsReady, me, logout, contacts, toast, clearToast, settings, chats, groups, calls, markStatusesViewed, statusList } = useStore()
   const [logoutConfirm, setLogoutConfirm] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [limitedBanned, setLimitedBanned] = useState(false)
+  const [banDismissed, setBanDismissed] = useState(false)
+  const [supportPrefill, setSupportPrefill] = useState<{ subject: string; body: string } | null>(null)
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT)
   const isFoldableDual = useFoldableDualPane()
   const isWideDesktop = useMediaQuery(WIDE_DESKTOP_BREAKPOINT)
@@ -184,6 +188,7 @@ function Shell() {
       setTab('chats')
       restored.current = false
       setOverlay(null)
+      try { sessionStorage.removeItem('sc_limited_banned') } catch { /* */ }
       await logout()
       setLoginBackVisible(false)
       setStage('login')
@@ -686,6 +691,30 @@ function Shell() {
       </div>
     )
   }
+  if (planStatus === 'banned' && stage === 'app' && !banDismissed && !limitedBanned) {
+    return (
+      <div className="flex min-h-dvh w-full bg-[#f0f2f5]">
+        <main className="relative h-dvh w-full overflow-hidden bg-white md:max-w-none">
+          <BannedGate
+            reason={(me as any)?.banReason || (me as any)?.ban_reason || null}
+            onAppeal={(prefill) => {
+              try { sessionStorage.setItem('sc_limited_banned', '1') } catch { /* */ }
+              setSupportPrefill(prefill)
+              setLimitedBanned(true)
+              setBanDismissed(true)
+              setOverlay('support')
+            }}
+            onLimitedAccess={() => {
+              try { sessionStorage.setItem('sc_limited_banned', '1') } catch { /* */ }
+              setLimitedBanned(true)
+              setBanDismissed(true)
+            }}
+            onLogout={requestLogout}
+          />
+        </main>
+      </div>
+    )
+  }
 
   // ── Main app — desktop shell or mobile single-column ───────
   const openChatFromList = (id: string) => {
@@ -863,7 +892,7 @@ function Shell() {
       {overlay === 'support' && (
         <div className={absolute ? 'absolute inset-0 z-[35] bg-white' : 'absolute inset-0 z-[35] flex items-stretch justify-end bg-black/20'}>
           <div className={absolute ? 'h-full w-full' : 'h-full w-full max-w-[420px] overflow-hidden border-l border-black/8 bg-white shadow-2xl'}>
-            <Support onClose={() => setOverlay(null)} />
+            <Support onClose={() => { setOverlay(null); setSupportPrefill(null) }} prefill={supportPrefill} />
           </div>
         </div>
       )}
@@ -1062,7 +1091,7 @@ function Shell() {
         />
       )
     } else if (overlay === 'support') {
-      rightPanel = <Support onClose={() => setOverlay(null)} />
+      rightPanel = <Support onClose={() => { setOverlay(null); setSupportPrefill(null) }} prefill={supportPrefill} />
     } else if (overlay === 'newChat') {
       rightPanel = (
         <NewChat
@@ -1328,7 +1357,7 @@ function Shell() {
         />
       )
     } else if (overlay === 'support') {
-      second = <Support onClose={() => setOverlay(null)} />
+      second = <Support onClose={() => { setOverlay(null); setSupportPrefill(null) }} prefill={supportPrefill} />
     } else if (overlay === 'newChat') {
       second = (
         <NewChat

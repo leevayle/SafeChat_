@@ -368,6 +368,7 @@ function mapUser(u: any): ApiUser {
     account_role: u.account_role,
     subscriptionPlan: (u.subscription_plan || u.subscriptionPlan || 'pro').replace('free', 'pro'),
     accountStatus: u.account_status || u.accountStatus || 'active',
+    banReason: u.ban_reason || u.banReason || null,
     verifiedBadge: !!(u.verified_badge ?? u.premium_settings?.verified_badge),
     premiumSettings: u.premium_settings || u.premiumSettings || {},
     premiumExpiresAt: u.premium_expires_at || u.premiumExpiresAt || null,
@@ -435,10 +436,25 @@ function mapMessage(m: any, meId?: string): ApiMsg {
   const from = String(m.sender_id || m.from || '')
   const media = m.media_attachments || m.media || []
   const firstMedia = Array.isArray(media) && media.length ? media[0] : null
-  const image =
-    (firstMedia && (firstMedia.url || firstMedia.data || firstMedia.src)) ||
-    m.image ||
-    null
+  const mediaType = String(firstMedia?.type || '')
+  const isFileMedia = !!(
+    firstMedia &&
+    (mediaType === 'file' ||
+      mediaType === 'document' ||
+      (!!firstMedia.name && mediaType !== 'image' && !mediaType.startsWith('image')))
+  )
+  const image = isFileMedia
+    ? null
+    : ((firstMedia && (firstMedia.url || firstMedia.data || firstMedia.src)) || m.image || null)
+  const file =
+    isFileMedia || m.file
+      ? {
+          name: String(firstMedia?.name || m.file?.name || m.content || 'Attachment'),
+          url: String(firstMedia?.url || firstMedia?.data || m.file?.url || ''),
+          mime: String(firstMedia?.mime_type || firstMedia?.mime || m.file?.mime || 'application/octet-stream'),
+          size: Number(firstMedia?.size || m.file?.size || 0),
+        }
+      : null
   let state: ApiMsg['state'] = (m.delivery_status as any) || 'sent'
   if (state !== 'sent' && state !== 'delivered' && state !== 'read') state = 'sent'
   let text = String(m.content ?? m.text ?? '')
@@ -456,6 +472,7 @@ function mapMessage(m: any, meId?: string): ApiMsg {
     to: String(m.to || ''),
     text,
     image,
+    file,
     time: created,
     timeLabel,
     state,
@@ -1229,6 +1246,7 @@ export const api = {
           }
         : {}),
       accountStatus: data?.account_status || 'active',
+      banReason: data?.ban_reason || null,
       verifiedBadge: data?.subscription_plan === 'premium' && !!(data?.premium_settings?.verified_badge ?? true),
       premiumSettings: data?.premium_settings || {
         verified_badge: true,
@@ -1656,9 +1674,11 @@ rejectContactRequest: async (requestId: string) => {
       clientKey?: string
       replyToId?: string
       statusReply?: { preview: string; time?: string; statusId?: string }
+      file?: { url: string; name: string; mime?: string; size?: number } | null
     },
   ) => {
-    let content = text || (image ? '' : '')
+    const file = opts?.file
+    let content = text || (image ? '' : '') || (file ? (file.name || 'Attachment') : '')
     if (opts?.statusReply) {
       // ASCII-safe envelope so peers always parse the quoted status card
       content = encodeStatusReply(content, {
@@ -1669,13 +1689,21 @@ rejectContactRequest: async (requestId: string) => {
     }
     const payload: Record<string, unknown> = {
       content,
-      message_type: image ? 'image' : 'text',
+      message_type: image ? 'image' : file ? 'file' : 'text',
     }
     if (opts?.clientKey) {
       payload.idempotency_key = opts.clientKey
     }
     if (image) {
       payload.media_attachments = [{ type: 'image', url: image }]
+    } else if (file) {
+      payload.media_attachments = [{
+        type: 'file',
+        url: file.url,
+        name: file.name,
+        mime_type: file.mime || 'application/octet-stream',
+        size: file.size || 0,
+      }]
     }
     if (opts?.replyToId) {
       payload.reply_to_message_id = opts.replyToId

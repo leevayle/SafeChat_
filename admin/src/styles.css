@@ -1141,3 +1141,40 @@ th { font-size: 9px; }
 }
 :root[data-theme='dark'] .nav-badge { background: #374151; }
 :root[data-theme='dark'] .nav-badge-hot { box-shadow: 0 0 0 2px #0c1018; }
+
+/* Backup scope cards — icon left, text right */
+.backup-scope-card {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 12px !important;
+  text-align: left !important;
+  padding: 14px 14px !important;
+}
+.backup-scope-icon {
+  width: 40px !important;
+  height: 40px !important;
+  border-radius: 12px !important;
+  display: grid !important;
+  place-items: center !important;
+  flex-shrink: 0 !important;
+  background: var(--purple-soft, #f5eef9) !important;
+}
+.backup-scope-card strong {
+  display: block !important;
+  font-size: 13px !important;
+  line-height: 1.2 !important;
+}
+.backup-scope-card > span:last-child,
+.backup-scope-card .backup-scope-meta {
+  display: block !important;
+  font-size: 11px !important;
+  color: var(--muted, #7d8799) !important;
+  margin-top: 2px !important;
+}
+.backup-scope-card > strong,
+.backup-scope-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}

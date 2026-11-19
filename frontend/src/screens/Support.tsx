@@ -6,18 +6,18 @@ import { PillButton } from '../components/PillButton'
 import { useStore } from '../store'
 import { api, type SupportTicket } from '../api'
 
-type Props = { onClose: () => void }
+type Props = { onClose: () => void; prefill?: { subject?: string; body?: string } | null }
 
 function ticketTime(value: string) {
   const date = new Date(value)
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleString()
 }
 
-export function Support({ onClose }: Props) {
+export function Support({ onClose, prefill }: Props) {
   const { showToast } = useStore()
   const [tickets, setTickets] = useState<SupportTicket[]>([])
-  const [subject, setSubject] = useState('')
-  const [body, setBody] = useState('')
+  const [subject, setSubject] = useState(prefill?.subject || '')
+  const [body, setBody] = useState(prefill?.body || '')
   const [replyDraft, setReplyDraft] = useState('')
   const [replyingTo, setReplyingTo] = useState<string | null>(null)
   const [sending, setSending] = useState(false)

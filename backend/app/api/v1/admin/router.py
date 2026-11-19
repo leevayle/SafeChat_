@@ -310,11 +310,19 @@ async def update_user_status(
     target = await _get_managed_user(user_id, user)
     now = datetime.now(timezone.utc)
     target_id = str(target["_id"])
+    status_set = {"account_status": status, "updated_at": now}
+    if status == "banned":
+        status_set["ban_reason"] = (body.reason or "").strip()
+        status_set["banned_at"] = now
+    elif status == "active":
+        status_set["ban_reason"] = None
+        status_set["banned_at"] = None
     await get_database().users.update_one(
         {"_id": target["_id"]},
-        {"$set": {"account_status": status, "updated_at": now}},
+        {"$set": status_set},
     )
-    if status != "active":
+    # Revoke sessions only for deactivated (not banned — limited access needs a session)
+    if status == "deactivated":
         await get_database().sessions.update_many(
             {"user_id": target_id, "revoked": False},
             {"$set": {"revoked": True, "revoked_at": now}},

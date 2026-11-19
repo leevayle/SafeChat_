@@ -8,7 +8,7 @@ from app.schemas.messaging import (
     ReactMessageRequest,
 )
 from app.services.messaging_service import MessagingService
-from app.core.exceptions import success_response
+from app.core.exceptions import success_response, ForbiddenError
 
 router = APIRouter(prefix="/messages", tags=["Messaging"])
 
@@ -22,6 +22,8 @@ async def send_message(
     body: SendMessageRequest,
     user: dict = Depends(get_current_user),
 ):
+    if (user.get("account_status") or "active") == "banned":
+        raise ForbiddenError("Your account is banned. You can only contact support.")
     msg = await MessagingService.send_message(
         conversation_id=conversation_id,
         sender_id=user["id"],

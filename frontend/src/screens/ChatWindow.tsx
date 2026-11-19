@@ -416,6 +416,20 @@ const MessageBubble = memo(function MessageBubble({
             />
           </button>
         )}
+        {m.file && m.file.url && (
+          <a
+            href={mediaUrl(m.file.url)}
+            download={m.file.name || 'attachment'}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className={`mt-1 flex items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-bold ring-1 ring-black/10 ${mine ? 'bg-white/20 text-white' : 'bg-black/5 text-ink dark:bg-white/10 dark:text-gray-100'}`}
+          >
+            <span className="text-lg">📎</span>
+            <span className="min-w-0 flex-1 truncate">{m.file.name || 'Attachment'}</span>
+            <Download size={16} className="shrink-0 opacity-80" />
+          </a>
+        )}
 
         {m.text && /^🎤 Voice note/.test(m.text) && (
           <div className={`flex items-center gap-3 px-3 py-2.5 ${mine ? '' : ''}`}>
@@ -667,6 +681,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [hasMoreOlder, setHasMoreOlder] = useState(true)
   const [pendingImage, setPendingImage] = useState<string | null>(null)
+  const [pendingFile, setPendingFile] = useState<{ name: string; url: string; mime: string; size: number } | null>(null)
   const [replyTo, setReplyTo] = useState<ApiMsg | null>(null)
   const [profileOpen, setProfileOpen] = useState(false)
   // ESC → back to chats home (blur so list row never keeps a focus outline)
@@ -1294,14 +1309,13 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }, [contactId, me?.id, peerId, upsertChatPreview])
 
-  // Live typing stream — state-of-the-art: instant start, 300ms throttle,
-  // 2s heartbeat, immediate clear on empty. Keeps presence + typing + premium draft in sync.
+  // Live typing — premium live draft is INSTANT (every keystroke).
+  // Classic typing-only mode (hideLiveTyping) stays lightly coalesced.
   const liveSendRef = useRef<{ last: string; at: number; started: boolean }>({ last: '', at: 0, started: false })
   const liveClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const liveThrottleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const liveHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const liveDraftSeenAt = useRef(0)
-  const pendingDraftRef = useRef<string | null>(null)
 
   const emitLiveOrTyping = useCallback(
     (draft: string, force = false) => {
@@ -1314,10 +1328,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         (settings as any).subscriptionPlan === 'premium'
       const typingNow = draft.length > 0
       const now = Date.now()
-      // Skip duplicate empty clears; allow force heartbeat for non-empty draft
+
+      // Skip only duplicate empty clears
       if (!force && draft === liveSendRef.current.last && draft === '') return
-      // Throttle only identical non-empty drafts (heartbeats use force=true)
-      if (!force && draft === liveSendRef.current.last && typingNow && now - liveSendRef.current.at < 280) return
+      // For classic typing-only (no draft text), coalesce identical truthy pulses
+      if (hideMine && !force && draft === liveSendRef.current.last && typingNow && now - liveSendRef.current.at < 250) return
+
       liveSendRef.current = { last: draft, at: now, started: typingNow || liveSendRef.current.started }
 
       try {
@@ -1325,7 +1341,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           if (hideMine) {
             wsTyping(to, typingNow)
           } else {
-            // Always stream draft (incl. empty) so peer clears live preview instantly
+            // Premium path: stream exact draft every time (including empty)
             wsLiveTyping(to, draft)
           }
         } else if (typingNow) {
@@ -1341,28 +1357,32 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
   const pushLiveDraft = useCallback(
     (draft: string) => {
-      pendingDraftRef.current = draft
+      const hideMine =
+        !!(settings as any).hideLiveTyping &&
+        (settings as any).subscriptionPlan === 'premium'
       const isEmpty = draft.length === 0
-      const isFirst = !liveSendRef.current.started && !isEmpty
 
-      // Immediate send on first keystroke or clear — no lag for start/stop
-      if (isFirst || isEmpty) {
-        if (liveThrottleTimer.current) {
-          clearTimeout(liveThrottleTimer.current)
-          liveThrottleTimer.current = null
-        }
-        emitLiveOrTyping(draft, true)
-      } else {
-        // While typing: coalesce to ~300ms so peers see smooth live draft without flooding
-        if (liveThrottleTimer.current) clearTimeout(liveThrottleTimer.current)
-        liveThrottleTimer.current = setTimeout(() => {
-          liveThrottleTimer.current = null
-          const pending = pendingDraftRef.current
-          if (pending != null) emitLiveOrTyping(pending, false)
-        }, 300)
+      if (liveThrottleTimer.current) {
+        clearTimeout(liveThrottleTimer.current)
+        liveThrottleTimer.current = null
       }
 
-      // Heartbeat while composer still has text (keeps remote typing alive through pauses)
+      if (!hideMine) {
+        // LIVE DRAFT: fire on every keystroke — zero delay
+        emitLiveOrTyping(draft, true)
+      } else {
+        // Classic typing indicator only: start/stop immediate, hold coalesced
+        if (isEmpty || !liveSendRef.current.started) {
+          emitLiveOrTyping(draft, true)
+        } else {
+          liveThrottleTimer.current = setTimeout(() => {
+            liveThrottleTimer.current = null
+            emitLiveOrTyping(draft, false)
+          }, 250)
+        }
+      }
+
+      // Heartbeat keeps remote indicator alive during short pauses
       if (liveHeartbeatRef.current) {
         clearInterval(liveHeartbeatRef.current)
         liveHeartbeatRef.current = null
@@ -1378,10 +1398,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             return
           }
           emitLiveOrTyping(last, true)
-        }, 2000)
+        }, 1800)
       }
     },
-    [emitLiveOrTyping],
+    [emitLiveOrTyping, settings],
   )
 
   useEffect(() => {
@@ -1534,6 +1554,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     opts?: {
       replyToId?: string
       statusReply?: { preview: string; time?: string; statusId?: string }
+      file?: { name: string; url: string; mime?: string; size?: number } | null
     },
     optimistic?: ApiMsg,
   ) => {
@@ -1599,9 +1620,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         // sc:rt-ack still maps server id + may bump delivered/read
         return
       }
-      const { message } = await api.send(cid, body || (img ? '📷 Photo' : ''), img, {
+      const { message } = await api.send(cid, body || (img ? '📷 Photo' : '') || (opts?.file ? `📎 ${opts.file.name}` : ''), img, {
         clientKey: localId,
         ...opts,
+        file: opts?.file || null,
       })
       const confirmed = {
         ...message,
@@ -1669,14 +1691,22 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   }
 
   const send = async () => {
+    try {
+      if (sessionStorage.getItem('sc_limited_banned') === '1') {
+        showToast('Your account is banned — messaging is disabled. Contact support to appeal.')
+        return
+      }
+    } catch { /* */ }
     const t = text.trim()
-    if (!t && !pendingImage) return
+    if (!t && !pendingImage && !pendingFile) return
     const body = t
     const img = pendingImage
+    const fileSnap = pendingFile
     const replySnap = replyTo
     const statusSnap = statusReply
     setText('')
     setPendingImage(null)
+    setPendingFile(null)
     setEmoji(false)
     setReplyTo(null)
     setStatusReply(null)
@@ -1693,7 +1723,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     const timeLabel = formatLocalTime(nowIso)
     const previewText = statusSnap
       ? (body ? `Status reply: ${body}` : 'Status reply')
-      : body || (img ? '📷 Photo' : '')
+      : body || (img ? '📷 Photo' : '') || (fileSnap ? `📎 ${fileSnap.name}` : '')
     const optimistic: ApiMsg = {
       id: localId,
       clientKey: localId,
@@ -1701,6 +1731,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       to: contactId,
       text: previewText,
       image: img,
+      file: fileSnap || null,
       time: nowIso,
       timeLabel,
       state: 'pending',
@@ -1741,6 +1772,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     void deliverMessage(localId, body, img, {
       replyToId: replySnap?.id,
       statusReply: statusSnap || undefined,
+      file: fileSnap || null,
     }, optimistic)
   }
 
@@ -1763,16 +1795,30 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const onPickImage = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     e.target.value = ''
-    if (!f || !f.type.startsWith('image/')) return
+    if (!f) return
     if (f.size > 25 * 1024 * 1024) {
-      showToast('Image is too large')
+      showToast('File is too large (max 25 MB)')
       return
     }
+    // Images still go through the cropper
+    if (f.type.startsWith('image/')) {
+      try {
+        const data = await fileToDataUrl(f)
+        setCropSrc(data)
+        setPendingFile(null)
+      } catch {
+        showToast('Could not process image')
+      }
+      return
+    }
+    // Documents / other files — attach as file message
     try {
       const data = await fileToDataUrl(f)
-      setCropSrc(data)
+      setPendingImage(null)
+      setPendingFile({ name: f.name, url: data, mime: f.type || 'application/octet-stream', size: f.size })
+      showToast(`Attached ${f.name}`)
     } catch {
-      showToast('Could not process image')
+      showToast('Could not read file')
     }
   }
 
@@ -2372,7 +2418,7 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
           type="button"
           aria-label="Back"
           onClick={onBack}
-          className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-gray-100 md:hidden"
+          className="flex h-10 w-10 items-center justify-center rounded-full hover:bg-gray-100 dark:hover:bg-white/10"
         >
           <ArrowLeft size={22} />
         </button>
@@ -3076,7 +3122,15 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
       </div>
       )}
 
-      {pendingImage && (
+      
+      {pendingFile && (
+        <div className="flex items-center gap-2 border-t border-gray-100 bg-white px-4 py-2 dark:border-white/10 dark:bg-[#1f2c34]">
+          <span className="text-lg">📎</span>
+          <span className="min-w-0 flex-1 truncate text-sm font-bold text-ink dark:text-gray-100">{pendingFile.name}</span>
+          <button type="button" className="rounded-full p-1 text-gray-400 hover:bg-black/5" onClick={() => setPendingFile(null)} aria-label="Remove file"><X size={16} /></button>
+        </div>
+      )}
+{pendingImage && (
         <div className="relative border-t border-gray-100 bg-white px-4 py-2">
           <img src={pendingImage} alt="" className="h-24 rounded-2xl object-cover" />
           <button
@@ -3450,9 +3504,9 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
               >
                 <ImagePlus size={22} />
               </button>
-              <input ref={fileRef} type="file" accept="image/*" hidden onChange={onPickImage} />
+              <input ref={fileRef} type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip,.csv,application/pdf" hidden onChange={onPickImage} />
             </div>
-            {(text.trim() || pendingImage) ? (
+            {(text.trim() || pendingImage || pendingFile) ? (
               <button
                 type="button"
                 onClick={send}
