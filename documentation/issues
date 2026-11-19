@@ -135,6 +135,13 @@ v 1.0.3 known issues
 - Chat lock does not hold cross device.
 - Cache with sqlite in native envs 
 - Group red notification counts messages wrong, only count new incoming messages not all total.
+- Chats notification counter not centered well. for groups it's okay, but needs to be in theme color not red.
+Group logs <userx joined> <user y changed privacy> these need to be there.
+- Group calls after call has been established.
+- Voice chat (note ) not working
+- Add new group badge to disspear when a group exists even if it's one.
+- Status gif support.
+- Add media to group.
 
 
 

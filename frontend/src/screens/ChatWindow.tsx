@@ -1294,12 +1294,14 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }, [contactId, me?.id, peerId, upsertChatPreview])
 
-  // Live typing stream — keep packets flowing while the composer has text so
-  // the peer never loses "typing…" / live draft during short pauses.
-  const liveSendRef = useRef<{ last: string; at: number }>({ last: '', at: 0 })
+  // Live typing stream — state-of-the-art: instant start, 300ms throttle,
+  // 2s heartbeat, immediate clear on empty. Keeps presence + typing + premium draft in sync.
+  const liveSendRef = useRef<{ last: string; at: number; started: boolean }>({ last: '', at: 0, started: false })
   const liveClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const liveThrottleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const liveHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const liveDraftSeenAt = useRef(0)
+  const pendingDraftRef = useRef<string | null>(null)
 
   const emitLiveOrTyping = useCallback(
     (draft: string, force = false) => {
@@ -1312,16 +1314,18 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         (settings as any).subscriptionPlan === 'premium'
       const typingNow = draft.length > 0
       const now = Date.now()
-      // Skip identical empty clears; allow force heartbeat for non-empty draft
+      // Skip duplicate empty clears; allow force heartbeat for non-empty draft
       if (!force && draft === liveSendRef.current.last && draft === '') return
-      if (!force && draft === liveSendRef.current.last && now - liveSendRef.current.at < 400) return
-      liveSendRef.current = { last: draft, at: now }
+      // Throttle only identical non-empty drafts (heartbeats use force=true)
+      if (!force && draft === liveSendRef.current.last && typingNow && now - liveSendRef.current.at < 280) return
+      liveSendRef.current = { last: draft, at: now, started: typingNow || liveSendRef.current.started }
 
       try {
         if (isRealtimeOpen()) {
           if (hideMine) {
             wsTyping(to, typingNow)
           } else {
+            // Always stream draft (incl. empty) so peer clears live preview instantly
             wsLiveTyping(to, draft)
           }
         } else if (typingNow) {
@@ -1330,19 +1334,40 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       } catch {
         /* */
       }
+      if (!typingNow) liveSendRef.current.started = false
     },
     [peerId, contactId, settings],
   )
 
   const pushLiveDraft = useCallback(
     (draft: string) => {
-      emitLiveOrTyping(draft, false)
-      // Heartbeat while local composer still has text
+      pendingDraftRef.current = draft
+      const isEmpty = draft.length === 0
+      const isFirst = !liveSendRef.current.started && !isEmpty
+
+      // Immediate send on first keystroke or clear — no lag for start/stop
+      if (isFirst || isEmpty) {
+        if (liveThrottleTimer.current) {
+          clearTimeout(liveThrottleTimer.current)
+          liveThrottleTimer.current = null
+        }
+        emitLiveOrTyping(draft, true)
+      } else {
+        // While typing: coalesce to ~300ms so peers see smooth live draft without flooding
+        if (liveThrottleTimer.current) clearTimeout(liveThrottleTimer.current)
+        liveThrottleTimer.current = setTimeout(() => {
+          liveThrottleTimer.current = null
+          const pending = pendingDraftRef.current
+          if (pending != null) emitLiveOrTyping(pending, false)
+        }, 300)
+      }
+
+      // Heartbeat while composer still has text (keeps remote typing alive through pauses)
       if (liveHeartbeatRef.current) {
         clearInterval(liveHeartbeatRef.current)
         liveHeartbeatRef.current = null
       }
-      if (draft.length > 0) {
+      if (!isEmpty) {
         liveHeartbeatRef.current = setInterval(() => {
           const last = liveSendRef.current.last
           if (!last) {
@@ -1353,7 +1378,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
             return
           }
           emitLiveOrTyping(last, true)
-        }, 2500)
+        }, 2000)
       }
     },
     [emitLiveOrTyping],
@@ -1362,6 +1387,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   useEffect(() => {
     return () => {
       if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
+      if (liveThrottleTimer.current) clearTimeout(liveThrottleTimer.current)
       if (liveHeartbeatRef.current) clearInterval(liveHeartbeatRef.current)
       // Clear peer's live preview when leaving the chat
       const to = peerId || contactId
@@ -1820,7 +1846,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     const keys = [peerId, contactId, (c as any)?.peerId, (c as any)?.id].filter(Boolean).map(String)
     const on = keys.some((k) => !!typingPeers?.[k])
     if (on) setTyping(true)
-    else if (Date.now() - liveDraftSeenAt.current > 12000) {
+    else if (Date.now() - liveDraftSeenAt.current > 4500) {
       setTyping(false)
     }
   }, [typingPeers, peerId, contactId, c])
@@ -1842,22 +1868,22 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         liveDraftSeenAt.current = Date.now()
         setTyping(true)
         if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
+        // Clear ~4.5s after last packet (heartbeats every 2s keep it alive)
         liveClearTimer.current = setTimeout(() => {
-          // Only clear if no live packets refreshed recently
-          if (Date.now() - liveDraftSeenAt.current >= 14000) {
+          if (Date.now() - liveDraftSeenAt.current >= 4000) {
             setLiveDraft(null)
             setTyping(false)
           }
-        }, 15000)
+        }, 4500)
       } else {
-        // Explicit stop — clear only after a short grace so heartbeat lag is ok
+        // Explicit stop — short grace for in-flight packets, then clear
         if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
         liveClearTimer.current = setTimeout(() => {
-          if (Date.now() - liveDraftSeenAt.current >= 3000) {
+          if (Date.now() - liveDraftSeenAt.current >= 800) {
             setLiveDraft(null)
             setTyping(false)
           }
-        }, 3500)
+        }, 900)
       }
     }
     const onPresence = (ev: Event) => {
@@ -1906,13 +1932,13 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
       if (draft.length > 0) {
         liveClearTimer.current = setTimeout(() => {
-          if (Date.now() - liveDraftSeenAt.current >= 14000) {
+          if (Date.now() - liveDraftSeenAt.current >= 4000) {
             setLiveDraft(null)
             setTyping(false)
           }
-        }, 15000)
+        }, 4500)
       } else {
-        // Explicit empty draft = stopped typing
+        // Explicit empty draft = stopped typing instantly
         setLiveDraft(null)
         setTyping(false)
       }

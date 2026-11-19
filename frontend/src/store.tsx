@@ -2120,7 +2120,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             delete next[peerId]
             return next
           })
-          // Longer idle — heartbeats refresh this; only clear after real stop
+          // Idle clear — heartbeats refresh this; stop after ~4s with no packets
           if (on) {
             typingClearRef.current[peerId] = setTimeout(() => {
               setTypingPeers((prev) => {
@@ -2135,7 +2135,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
                   new CustomEvent('sc:rt-typing', { detail: { peerId, typing: false } }),
                 )
               } catch { /* */ }
-            }, 15000)
+            }, 4000)
           }
           try {
             window.dispatchEvent(

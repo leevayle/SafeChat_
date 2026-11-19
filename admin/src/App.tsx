@@ -239,6 +239,62 @@ const navGroups: { label: string; items: { id: Section; label: string; icon: typ
 ]
 const navItems = navGroups.flatMap((group) => group.items)
 
+
+type PromptState = {
+  title: string
+  body?: string
+  placeholder?: string
+  confirmLabel?: string
+  danger?: boolean
+  multiline?: boolean
+  requireMatch?: string
+  onConfirm: (value: string, match?: string) => void
+} | null
+
+function AdminPrompt({ state, onClose }: { state: PromptState; onClose: () => void }) {
+  const [value, setValue] = useState('')
+  const [match, setMatch] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { setValue(''); setMatch(''); setBusy(false) }, [state])
+  if (!state) return null
+  const canSubmit = value.trim().length > 0 && (!state.requireMatch || match.trim().toLowerCase() === state.requireMatch.toLowerCase())
+  return (
+    <div className="admin-modal-root" role="dialog" aria-modal="true">
+      <button type="button" className="admin-modal-scrim" aria-label="Close" onClick={() => !busy && onClose()} />
+      <div className="admin-modal-card">
+        <h3>{state.title}</h3>
+        {state.body ? <p className="admin-modal-body">{state.body}</p> : null}
+        {state.requireMatch ? (
+          <label className="field-label">Type <strong>{state.requireMatch}</strong> to confirm
+            <input className="text-input" value={match} onChange={(e) => setMatch(e.target.value)} autoFocus />
+          </label>
+        ) : null}
+        <label className="field-label">{state.placeholder || 'Reason'}
+          {state.multiline !== false ? (
+            <textarea className="settings-textarea" rows={3} value={value} onChange={(e) => setValue(e.target.value)} autoFocus={!state.requireMatch} />
+          ) : (
+            <input className="text-input" value={value} onChange={(e) => setValue(e.target.value)} autoFocus={!state.requireMatch} />
+          )}
+        </label>
+        <div className="admin-modal-actions">
+          <button type="button" className="secondary-button" disabled={busy} onClick={onClose}>Cancel</button>
+          <button
+            type="button"
+            className={state.danger ? 'danger-button' : 'primary-button'}
+            disabled={busy || !canSubmit}
+            onClick={() => {
+              setBusy(true)
+              try { state.onConfirm(value.trim(), match.trim()) } finally { setBusy(false); onClose() }
+            }}
+          >
+            {state.confirmLabel || 'Confirm'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function notifyAdmin(message: string, tone: ToastMessage['tone'] = 'success') {
   window.dispatchEvent(new CustomEvent<ToastMessage>('admin:toast', { detail: { message, tone } }))
 }
@@ -254,6 +310,7 @@ export default function App() {
     return saved === 'light' || saved === 'dark' ? saved : 'system'
   })
   const [toast, setToast] = useState<ToastMessage | null>(null)
+  const [navBadges, setNavBadges] = useState<Partial<Record<Section, number>>>({})
 
   useEffect(() => {
     const logout = () => {
@@ -330,6 +387,29 @@ export default function App() {
     }
   }, [admin?.username, admin?.role])
 
+  useEffect(() => {
+    if (!admin) { setNavBadges({}); return }
+    let active = true
+    const loadBadges = async () => {
+      try {
+        const [overview, roleReqs, reports] = await Promise.all([
+          request<Overview>('/admin/overview').catch(() => null),
+          request<RoleRequest[]>('/admin/role-requests?status=pending').catch(() => [] as RoleRequest[]),
+          request<Page<AdminReport>>('/admin/reports?page=1&page_size=1&status=pending').catch(() => null),
+        ])
+        if (!active) return
+        setNavBadges({
+          support: overview?.support_tickets_open || 0,
+          access: Array.isArray(roleReqs) ? roleReqs.length : 0,
+          reports: reports?.total || 0,
+        })
+      } catch { /* keep previous */ }
+    }
+    void loadBadges()
+    const timer = window.setInterval(() => void loadBadges(), 30_000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [admin?.username, admin?.role])
+
   const signOut = async () => {
     const results = await Promise.allSettled([
       request('/admin/presence', { method: 'DELETE' }),
@@ -367,6 +447,7 @@ export default function App() {
               {group.items.map(({ id, label, icon: Icon }) => (
                 <button key={id} className={`nav-item ${section === id ? 'nav-active' : ''}`} aria-current={section === id ? 'page' : undefined} onClick={() => { setSection(id); setSidebarOpen(false) }}>
                   <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
+                  {!!navBadges[id] && <span className={`nav-badge ${id === 'support' ? 'nav-badge-hot' : ''}`}>{navBadges[id]! > 99 ? '99+' : navBadges[id]}</span>}
                 </button>
               ))}
             </div>
@@ -585,6 +666,7 @@ function UsersPage({ actorRole }: { actorRole: Role }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
+  const [prompt, setPrompt] = useState<PromptState>(null)
   const pageSize = 10
 
   useEffect(() => {
@@ -604,55 +686,76 @@ function UsersPage({ actorRole }: { actorRole: Role }) {
   }, [page, pageSize, search, status, plan, reload])
 
   const doSearch = (event: FormEvent) => { event.preventDefault(); setPage(1); setSearch(query.trim()) }
-  const act = async (user: AdminUser, action: 'deactivated' | 'active' | 'banned' | 'premium' | 'pro' | 'revoke-sessions' | 'revoke-admin' | 'request-admin' | 'permanent-delete') => {
-    if (action === 'permanent-delete') {
-      const typed = window.prompt(
-        `PERMANENT DELETE\n\nThis erases @${user.username} and all related data.\nType the username to confirm:`,
-      )
-      if (!typed || typed.trim().toLowerCase() !== user.username.toLowerCase()) {
-        if (typed != null) setError('Username did not match — delete cancelled.')
-        return
-      }
-      const reason = window.prompt(`Reason for permanently deleting @${user.username}:`)
-      if (!reason?.trim()) return
-      try {
-        await request(`/admin/users/${user.id}/permanent`, {
-          method: 'DELETE',
-          body: JSON.stringify({ reason: reason.trim() }),
-        })
-        notifyAdmin(`@${user.username} permanently deleted.`)
-        setReload((value) => value + 1)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Permanent delete failed.')
-      }
-      return
-    }
-    const reason = window.prompt(`Reason for ${action.replace('-', ' ')} for @${user.username}:`)
-    if (!reason?.trim()) return
+  const executeAction = async (user: AdminUser, action: 'deactivated' | 'active' | 'banned' | 'premium' | 'pro' | 'revoke-sessions' | 'revoke-admin' | 'request-admin' | 'promote-admin' | 'permanent-delete', reason: string) => {
     try {
       if (action === 'request-admin') {
-        await request('/admin/role-requests', jsonBody({ user_id: user.id, reason: reason.trim() }))
+        await request('/admin/role-requests', jsonBody({ user_id: user.id, reason }))
+        notifyAdmin('Admin access request submitted for superadmin approval.')
+      } else if (action === 'promote-admin') {
+        const created = await request<any>('/admin/role-requests', jsonBody({ user_id: user.id, reason }))
+        let requestId = created?.id || created?.request_id
+        if (!requestId) {
+          const pending = await request<RoleRequest[]>('/admin/role-requests?status=pending')
+          requestId = (pending || []).find((r) => r.target_user_id === user.id)?.id
+        }
+        if (!requestId) throw new Error('Could not resolve role request id for approval')
+        await request(`/admin/role-requests/${requestId}/approve`, jsonBody({ reason }))
+        notifyAdmin(`@${user.username} is now an admin.`)
       } else if (action === 'premium' || action === 'pro') {
         await request(`/admin/users/${user.id}/subscription`, {
           method: 'PATCH',
-          body: JSON.stringify({ plan: action, days: 30, reason: reason.trim() }),
+          body: JSON.stringify({ plan: action, days: 30, reason }),
         })
+        notifyAdmin(`@${user.username}: ${action} completed.`)
       } else if (action === 'revoke-sessions') {
-        await request(`/admin/users/${user.id}/revoke-sessions`, jsonBody({ reason: reason.trim() }))
+        await request(`/admin/users/${user.id}/revoke-sessions`, jsonBody({ reason }))
+        notifyAdmin(`Sessions revoked for @${user.username}.`)
       } else if (action === 'revoke-admin') {
-        await request(`/admin/users/${user.id}/revoke-admin`, jsonBody({ reason: reason.trim() }))
+        await request(`/admin/users/${user.id}/revoke-admin`, jsonBody({ reason }))
+        notifyAdmin(`Admin role revoked for @${user.username}.`)
+      } else if (action === 'permanent-delete') {
+        await request(`/admin/users/${user.id}/permanent`, {
+          method: 'DELETE',
+          body: JSON.stringify({ reason }),
+        })
+        notifyAdmin(`@${user.username} permanently deleted.`)
       } else {
         const params = new URLSearchParams({ status: action })
         await request(`/admin/users/${user.id}/status?${params}`, {
           method: 'PATCH',
-          body: JSON.stringify({ reason: reason.trim() }),
+          body: JSON.stringify({ reason }),
+        })
+        notifyAdmin(`@${user.username}: ${action} completed.`)
+      }
+      if (data && (action === 'active' || action === 'deactivated' || action === 'banned' || action === 'premium' || action === 'pro' || action === 'promote-admin')) {
+        setData({
+          ...data,
+          items: data.items.map((row) => {
+            if (row.id !== user.id) return row
+            if (action === 'premium' || action === 'pro') return { ...row, subscription_plan: action }
+            if (action === 'promote-admin') return { ...row, account_role: 'ADMIN' }
+            return { ...row, account_status: action }
+          }),
         })
       }
-      notifyAdmin(`@${user.username}: ${action.replaceAll('-', ' ')} completed.`)
       setReload((value) => value + 1)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'The requested change failed.')
     }
+  }
+
+  const act = (user: AdminUser, action: 'deactivated' | 'active' | 'banned' | 'premium' | 'pro' | 'revoke-sessions' | 'revoke-admin' | 'request-admin' | 'promote-admin' | 'permanent-delete') => {
+    setPrompt({
+      title: `${action.replace(/-/g, ' ')} · @${user.username}`,
+      body: action === 'permanent-delete'
+        ? 'This permanently erases the account and related data. Type the username to confirm, then provide a reason.'
+        : 'Provide a short reason for the audit log.',
+      placeholder: 'Reason',
+      danger: action === 'permanent-delete' || action === 'banned',
+      confirmLabel: action === 'permanent-delete' ? 'Delete permanently' : 'Confirm',
+      requireMatch: action === 'permanent-delete' ? user.username : undefined,
+      onConfirm: (reason) => { void executeAction(user, action, reason) },
+    })
   }
   const pages = Math.max(1, Math.ceil((data?.total || 0) / pageSize))
   return (
@@ -683,6 +786,7 @@ function UsersPage({ actorRole }: { actorRole: Role }) {
         </table></div>
         <Pagination page={page} pages={pages} total={data?.total || 0} pageSize={pageSize} onPage={setPage} />
       </section>
+          <AdminPrompt state={prompt} onClose={() => setPrompt(null)} />
     </>
   )
 }
@@ -690,7 +794,7 @@ function UsersPage({ actorRole }: { actorRole: Role }) {
 function UserActions({ row, actorRole, onAction }: {
   row: AdminUser
   actorRole: Role
-  onAction: (action: 'deactivated' | 'active' | 'banned' | 'premium' | 'pro' | 'revoke-sessions' | 'revoke-admin' | 'request-admin' | 'permanent-delete') => void
+  onAction: (action: 'deactivated' | 'active' | 'banned' | 'premium' | 'pro' | 'revoke-sessions' | 'revoke-admin' | 'request-admin' | 'promote-admin' | 'permanent-delete') => void
 }) {
   const [open, setOpen] = useState(false)
   const canManage = actorRole === 'SUPER_ADMIN' ? row.account_role !== 'SUPER_ADMIN' : !['ADMIN', 'SUPER_ADMIN'].includes(row.account_role)
@@ -711,6 +815,7 @@ function UserActions({ row, actorRole, onAction }: {
             {canManage && row.account_status !== 'banned' && <button type="button" onClick={() => { onAction(row.account_status === 'deactivated' ? 'active' : 'deactivated'); setOpen(false) }}><Ban size={15} />{row.account_status === 'deactivated' ? 'Reactivate account' : 'Deactivate account'}</button>}
             {canManage && row.account_status !== 'banned' && <button type="button" className="danger-menu-item" onClick={() => { onAction('banned'); setOpen(false) }}><Ban size={15} />Ban account</button>}
             {actorRole === 'ADMIN' && row.account_role === 'USER' && <button type="button" onClick={() => { onAction('request-admin'); setOpen(false) }}><ShieldCheck size={15} />Request admin access</button>}
+            {actorRole === 'SUPER_ADMIN' && row.account_role === 'USER' && <button type="button" onClick={() => { onAction('promote-admin'); setOpen(false) }}><ShieldCheck size={15} />Promote to admin</button>}
             {actorRole === 'SUPER_ADMIN' && canManage && <button type="button" className="danger-menu-item" onClick={() => { onAction('permanent-delete'); setOpen(false) }}><Trash2 size={15} />Delete permanently</button>}
           </div>
         </div>
@@ -764,6 +869,7 @@ function AccessPage({ actorRole }: { actorRole: Role }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
+  const [prompt, setPrompt] = useState<PromptState>(null)
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
@@ -776,16 +882,25 @@ function AccessPage({ actorRole }: { actorRole: Role }) {
     return () => controller.abort()
   }, [reload])
 
-  const decide = async (item: RoleRequest, decision: 'approve' | 'reject') => {
-    const reason = window.prompt(`${decision === 'approve' ? 'Approval' : 'Rejection'} note for @${item.target_username || 'user'}:`)
-    if (!reason?.trim()) return
-    try {
-      await request(`/admin/role-requests/${item.id}/${decision}`, jsonBody({ reason: reason.trim() }))
-      notifyAdmin(`Admin request ${decision === 'approve' ? 'approved' : 'rejected'}.`)
-      setReload((value) => value + 1)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to process this request.')
-    }
+  const decide = (item: RoleRequest, decision: 'approve' | 'reject') => {
+    setPrompt({
+      title: `${decision === 'approve' ? 'Approve' : 'Reject'} · @${item.target_username || 'user'}`,
+      body: 'Add a short note for the audit log.',
+      placeholder: 'Note',
+      danger: decision === 'reject',
+      confirmLabel: decision === 'approve' ? 'Approve' : 'Reject',
+      onConfirm: (reason) => {
+        void (async () => {
+          try {
+            await request(`/admin/role-requests/${item.id}/${decision}`, jsonBody({ reason }))
+            notifyAdmin(`Request ${decision}d.`)
+            setReload((value) => value + 1)
+          } catch (err) {
+            setError(err instanceof Error ? err.message : 'Unable to update the role request.')
+          }
+        })()
+      },
+    })
   }
   return (
     <>
@@ -1072,6 +1187,7 @@ function ReportsPage() {
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [reload, setReload] = useState(0)
+  const [prompt, setPrompt] = useState<PromptState>(null)
   useEffect(() => {
     const controller = new AbortController()
     setLoading(true)
@@ -1085,14 +1201,24 @@ function ReportsPage() {
     }).finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
   }, [status, reload])
-  const resolve = async (row: AdminReport, nextStatus: 'resolved' | 'dismissed' | 'under_review') => {
-    const reason = window.prompt(`Reason for marking this report ${nextStatus.replace('_', ' ')}:`)
-    if (!reason?.trim()) return
-    try {
-      await request(`/admin/reports/${row.id}`, { method: 'PATCH', body: JSON.stringify({ status: nextStatus, reason: reason.trim() }) })
-      notifyAdmin(`Report marked ${nextStatus.replace('_', ' ')}.`)
-      setReload((value) => value + 1)
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to update report.') }
+  const resolve = (row: AdminReport, nextStatus: 'resolved' | 'dismissed' | 'under_review') => {
+    setPrompt({
+      title: `Mark report ${nextStatus.replace('_', ' ')}`,
+      body: 'Provide a short reason for the audit log.',
+      placeholder: 'Reason',
+      confirmLabel: 'Update',
+      onConfirm: (reason) => {
+        void (async () => {
+          try {
+            await request(`/admin/reports/${row.id}`, { method: 'PATCH', body: JSON.stringify({ status: nextStatus, reason }) })
+            notifyAdmin(`Report marked ${nextStatus.replace('_', ' ')}.`)
+            setReload((value) => value + 1)
+          } catch (err) {
+            setError(err instanceof Error ? err.message : 'Unable to update report.')
+          }
+        })()
+      },
+    })
   }
   return (
     <>
@@ -1108,6 +1234,7 @@ function ReportsPage() {
           </tr>) : <TableMessage columns={5} text="No reports found." />}
         </tbody></table></div>
       </section>
+          <AdminPrompt state={prompt} onClose={() => setPrompt(null)} />
     </>
   )
 }
