@@ -891,8 +891,8 @@ export function ChatsHome({
                               </span>
                             )}
                             {c.unread > 0 && (
-                              <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand-purple px-1.5 text-[11px] font-black text-white">
-                                {c.unread}
+                              <span className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand-purple px-1.5 text-center text-[11px] font-black leading-none tabular-nums text-white">
+                                {c.unread > 99 ? '99+' : c.unread}
                               </span>
                             )}
                           </div>

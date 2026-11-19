@@ -926,6 +926,7 @@ function AccessPage({ actorRole }: { actorRole: Role }) {
         </article>)}</div> : <EmptyState icon={<ShieldCheck size={20} />} title="No pending requests" text="New administrator nominations will appear here for review." />}
       </section>
       {actorRole !== 'SUPER_ADMIN' && <div className="note-block"><Shield size={16} />You can submit a nomination from the user directory. Role assignments cannot be made directly.</div>}
+      <AdminPrompt state={prompt} onClose={() => setPrompt(null)} />
     </>
   )
 }
@@ -1168,6 +1169,7 @@ function SupportInbox({ actorRole }: { actorRole: Role }) {
                       Unban account
                     </button>
                     <button type="button" className="danger-button" disabled={sending} onClick={() => void resolveAppeal(selected, 'deactivated')}>
+                      <Ban size={15} />
                       Deactivate account
                     </button>
                   </>

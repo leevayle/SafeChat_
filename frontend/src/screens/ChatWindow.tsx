@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download, Gamepad2, Reply, Trash2 } from 'lucide-react'
+import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, Paperclip, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download, Gamepad2, Reply, Trash2 } from 'lucide-react'
 import { Avatar, VerifiedCheck } from '../components/Avatar'
 import { NotesBoard } from '../components/NotesBoard'
 import { ChatImageCropper } from '../components/ChatImageCropper'
@@ -736,6 +736,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const end = useRef<HTMLDivElement>(null)
   const msgsScrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const docRef = useRef<HTMLInputElement>(null)
   const convRef = useRef<string | null>(knownConv)
   const ensurePromise = useRef<Promise<string | null> | null>(null)
   const animatedKeys = useRef<Set<string>>(new Set())
@@ -1309,13 +1310,15 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     }
   }, [contactId, me?.id, peerId, upsertChatPreview])
 
-  // Live typing — premium live draft is INSTANT (every keystroke).
-  // Classic typing-only mode (hideLiveTyping) stays lightly coalesced.
+  // Live typing / draft:
+  // - Every keystroke (add or delete) shows the indicator / live draft immediately.
+  // - After a short idle pause with no keystrokes, hide it (even if text remains in the box).
+  // Applies to both premium (live draft text) and non-premium (typing dots).
   const liveSendRef = useRef<{ last: string; at: number; started: boolean }>({ last: '', at: 0, started: false })
   const liveClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const liveThrottleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const liveHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const liveIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const liveDraftSeenAt = useRef(0)
+  const LIVE_IDLE_MS = 1400
 
   const emitLiveOrTyping = useCallback(
     (draft: string, force = false) => {
@@ -1331,8 +1334,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
       // Skip only duplicate empty clears
       if (!force && draft === liveSendRef.current.last && draft === '') return
-      // For classic typing-only (no draft text), coalesce identical truthy pulses
-      if (hideMine && !force && draft === liveSendRef.current.last && typingNow && now - liveSendRef.current.at < 250) return
+      // Light coalesce for classic typing-only pulses
+      if (hideMine && !force && draft === liveSendRef.current.last && typingNow && now - liveSendRef.current.at < 200) return
 
       liveSendRef.current = { last: draft, at: now, started: typingNow || liveSendRef.current.started }
 
@@ -1341,11 +1344,13 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           if (hideMine) {
             wsTyping(to, typingNow)
           } else {
-            // Premium path: stream exact draft every time (including empty)
+            // Premium path: stream exact draft (including empty to hide)
             wsLiveTyping(to, draft)
           }
         } else if (typingNow) {
           void api.setTyping(to).catch(() => {})
+        } else if (isRealtimeOpen() === false) {
+          // REST has no explicit "stop typing"; peer will time out
         }
       } catch {
         /* */
@@ -1357,58 +1362,32 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
 
   const pushLiveDraft = useCallback(
     (draft: string) => {
-      const hideMine =
-        !!(settings as any).hideLiveTyping &&
-        (settings as any).subscriptionPlan === 'premium'
       const isEmpty = draft.length === 0
 
-      if (liveThrottleTimer.current) {
-        clearTimeout(liveThrottleTimer.current)
-        liveThrottleTimer.current = null
+      if (liveIdleTimer.current) {
+        clearTimeout(liveIdleTimer.current)
+        liveIdleTimer.current = null
       }
 
-      if (!hideMine) {
-        // LIVE DRAFT: fire on every keystroke — zero delay
-        emitLiveOrTyping(draft, true)
-      } else {
-        // Classic typing indicator only: start/stop immediate, hold coalesced
-        if (isEmpty || !liveSendRef.current.started) {
-          emitLiveOrTyping(draft, true)
-        } else {
-          liveThrottleTimer.current = setTimeout(() => {
-            liveThrottleTimer.current = null
-            emitLiveOrTyping(draft, false)
-          }, 250)
-        }
-      }
+      // Keystroke: always show immediately (type or delete)
+      emitLiveOrTyping(draft, true)
 
-      // Heartbeat keeps remote indicator alive during short pauses
-      if (liveHeartbeatRef.current) {
-        clearInterval(liveHeartbeatRef.current)
-        liveHeartbeatRef.current = null
-      }
+      // Idle pause → hide indicator even if text is still in the composer
       if (!isEmpty) {
-        liveHeartbeatRef.current = setInterval(() => {
-          const last = liveSendRef.current.last
-          if (!last) {
-            if (liveHeartbeatRef.current) {
-              clearInterval(liveHeartbeatRef.current)
-              liveHeartbeatRef.current = null
-            }
-            return
-          }
-          emitLiveOrTyping(last, true)
-        }, 1800)
+        liveIdleTimer.current = setTimeout(() => {
+          liveIdleTimer.current = null
+          // Send empty so remote hides live draft / typing dots
+          emitLiveOrTyping('', true)
+        }, LIVE_IDLE_MS)
       }
     },
-    [emitLiveOrTyping, settings],
+    [emitLiveOrTyping],
   )
 
   useEffect(() => {
     return () => {
       if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
-      if (liveThrottleTimer.current) clearTimeout(liveThrottleTimer.current)
-      if (liveHeartbeatRef.current) clearInterval(liveHeartbeatRef.current)
+      if (liveIdleTimer.current) clearTimeout(liveIdleTimer.current)
       // Clear peer's live preview when leaving the chat
       const to = peerId || contactId
       if (to && isRealtimeOpen()) {
@@ -1800,18 +1779,47 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       showToast('File is too large (max 25 MB)')
       return
     }
-    // Images still go through the cropper
-    if (f.type.startsWith('image/')) {
-      try {
-        const data = await fileToDataUrl(f)
-        setCropSrc(data)
-        setPendingFile(null)
-      } catch {
-        showToast('Could not process image')
-      }
+    // Only photos / videos / GIFs on this button
+    if (!f.type.startsWith('image/') && !f.type.startsWith('video/')) {
+      showToast('Use the paperclip button for documents')
       return
     }
-    // Documents / other files — attach as file message
+    try {
+      const data = await fileToDataUrl(f)
+      // GIFs must stay as original data URL so they remain animated
+      if (f.type === 'image/gif' || /\.gif$/i.test(f.name)) {
+        setPendingFile(null)
+        setPendingImage(data)
+        return
+      }
+      // Still images go through the cropper
+      if (f.type.startsWith('image/')) {
+        setCropSrc(data)
+        setPendingFile(null)
+        return
+      }
+      // Video: attach as file for now (no in-chat player yet)
+      setPendingImage(null)
+      setPendingFile({ name: f.name, url: data, mime: f.type || 'video/mp4', size: f.size })
+      showToast(`Attached ${f.name}`)
+    } catch {
+      showToast('Could not process media')
+    }
+  }
+
+  const onPickDoc = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f) return
+    if (f.size > 25 * 1024 * 1024) {
+      showToast('File is too large (max 25 MB)')
+      return
+    }
+    // Documents only — reject pure images/videos so photo button stays the path for those
+    if (f.type.startsWith('image/') || f.type.startsWith('video/')) {
+      showToast('Use the photo button for images and videos')
+      return
+    }
     try {
       const data = await fileToDataUrl(f)
       setPendingImage(null)
@@ -1892,7 +1900,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     const keys = [peerId, contactId, (c as any)?.peerId, (c as any)?.id].filter(Boolean).map(String)
     const on = keys.some((k) => !!typingPeers?.[k])
     if (on) setTyping(true)
-    else if (Date.now() - liveDraftSeenAt.current > 4500) {
+    else if (Date.now() - liveDraftSeenAt.current > 2500) {
       setTyping(false)
     }
   }, [typingPeers, peerId, contactId, c])
@@ -1914,22 +1922,20 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         liveDraftSeenAt.current = Date.now()
         setTyping(true)
         if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
-        // Clear ~4.5s after last packet (heartbeats every 2s keep it alive)
+        // Fallback clear if no further packets (idle hide is sender-driven)
         liveClearTimer.current = setTimeout(() => {
-          if (Date.now() - liveDraftSeenAt.current >= 4000) {
+          if (Date.now() - liveDraftSeenAt.current >= 2200) {
             setLiveDraft(null)
             setTyping(false)
           }
-        }, 4500)
+        }, 2400)
       } else {
-        // Explicit stop — short grace for in-flight packets, then clear
+        // Explicit stop — clear quickly
         if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
         liveClearTimer.current = setTimeout(() => {
-          if (Date.now() - liveDraftSeenAt.current >= 800) {
-            setLiveDraft(null)
-            setTyping(false)
-          }
-        }, 900)
+          setLiveDraft(null)
+          setTyping(false)
+        }, 250)
       }
     }
     const onPresence = (ev: Event) => {
@@ -1977,14 +1983,15 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       setTyping(draft.length > 0)
       if (liveClearTimer.current) clearTimeout(liveClearTimer.current)
       if (draft.length > 0) {
+        // Fallback if sender never sends idle-clear (network drop)
         liveClearTimer.current = setTimeout(() => {
-          if (Date.now() - liveDraftSeenAt.current >= 4000) {
+          if (Date.now() - liveDraftSeenAt.current >= 2200) {
             setLiveDraft(null)
             setTyping(false)
           }
-        }, 4500)
+        }, 2400)
       } else {
-        // Explicit empty draft = stopped typing instantly
+        // Explicit empty draft = stopped typing — hide immediately
         setLiveDraft(null)
         setTyping(false)
       }
@@ -3500,11 +3507,32 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
                 type="button"
                 onClick={() => fileRef.current?.click()}
                 className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-black/5"
-                aria-label="Send picture"
+                aria-label="Send photo or video"
               >
                 <ImagePlus size={22} />
               </button>
-              <input ref={fileRef} type="file" accept="image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip,.csv,application/pdf" hidden onChange={onPickImage} />
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*,video/*,image/gif"
+                hidden
+                onChange={onPickImage}
+              />
+              <button
+                type="button"
+                onClick={() => docRef.current?.click()}
+                className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-black/5"
+                aria-label="Attach file"
+              >
+                <Paperclip size={20} />
+              </button>
+              <input
+                ref={docRef}
+                type="file"
+                accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip,.csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,application/zip"
+                hidden
+                onChange={onPickDoc}
+              />
             </div>
             {(text.trim() || pendingImage || pendingFile) ? (
               <button

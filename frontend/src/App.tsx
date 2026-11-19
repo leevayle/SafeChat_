@@ -53,11 +53,23 @@ export default function App() {
 }
 
 function Shell() {
-  const { ready, listsReady, me, logout, contacts, toast, clearToast, settings, chats, groups, calls, markStatusesViewed, statusList } = useStore()
+  const { ready, listsReady, me, logout, contacts, toast, clearToast, settings, chats, groups, calls, markStatusesViewed, statusList, showToast } = useStore()
   const [logoutConfirm, setLogoutConfirm] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
-  const [limitedBanned, setLimitedBanned] = useState(false)
-  const [banDismissed, setBanDismissed] = useState(false)
+  const [limitedBanned, setLimitedBanned] = useState(() => {
+    try {
+      return sessionStorage.getItem('sc_limited_banned') === '1'
+    } catch {
+      return false
+    }
+  })
+  const [banDismissed, setBanDismissed] = useState(() => {
+    try {
+      return sessionStorage.getItem('sc_limited_banned') === '1'
+    } catch {
+      return false
+    }
+  })
   const [supportPrefill, setSupportPrefill] = useState<{ subject: string; body: string } | null>(null)
   const isDesktop = useMediaQuery(DESKTOP_BREAKPOINT)
   const isFoldableDual = useFoldableDualPane()
@@ -341,8 +353,14 @@ function Shell() {
 
   /** Show call UI immediately; signaling runs over the persistent WebSocket */
   const placeCall = useCallback(async (id: string, kind: 'audio' | 'video') => {
+    try {
+      if (sessionStorage.getItem('sc_limited_banned') === '1') {
+        showToast('Calling is disabled while your account is banned. Contact support to appeal.')
+        return
+      }
+    } catch { /* */ }
     setCall({ id, kind })
-  }, [])
+  }, [showToast])
 
   // Incoming call signaling via WebSocket (ring + SDP offer)
   useEffect(() => {
@@ -716,8 +734,16 @@ function Shell() {
     )
   }
 
+  const isBannedSession =
+    stage === 'app' && (planStatus === 'banned' || limitedBanned)
+
+  const blockBannedAction = (label = 'This action') => {
+    showToast(`${label} is disabled while your account is banned. Contact support to appeal.`)
+  }
+
   // ── Main app — desktop shell or mobile single-column ───────
   const openChatFromList = (id: string) => {
+    // Banned users may open existing chats (read-only); sending is blocked in ChatWindow
     setChat(id)
     setGroup(null)
     const ids = (calls || [])
@@ -769,12 +795,27 @@ function Shell() {
 
   const chatsHomeProps = {
     onOpenChat: openChatFromList,
-    onNewChat: () => setOverlay('newChat'),
-    onNewGroup: () => setOverlay('newGroup'),
+    onNewChat: () => {
+      if (isBannedSession) return blockBannedAction('Starting new chats')
+      setOverlay('newChat')
+    },
+    onNewGroup: () => {
+      if (isBannedSession) return blockBannedAction('Creating groups')
+      setOverlay('newGroup')
+    },
     onSettings: () => setOverlay('settings'),
-    onContacts: () => setOverlay('contacts'),
-    onSaveRequests: () => setOverlay('saveRequests'),
-    onOpenStatus: (id: string) => id && openStatus(id),
+    onContacts: () => {
+      if (isBannedSession) return blockBannedAction('Contacts')
+      setOverlay('contacts')
+    },
+    onSaveRequests: () => {
+      if (isBannedSession) return blockBannedAction('Save requests')
+      setOverlay('saveRequests')
+    },
+    onOpenStatus: (id: string) => {
+      // Viewing status is ok; posting is blocked inside StatusTab
+      if (id) openStatus(id)
+    },
     onNotifications: () => setOverlay('notifications'),
     onSupport: () => setOverlay('support'),
   }
@@ -970,7 +1011,13 @@ function Shell() {
   if (useDesktopShell) {
     const sidebar =
       tab === 'groups' ? (
-        <GroupsTab onOpen={(id) => { setGroupInfoId(null); setGroup(id) }} onCreate={() => setOverlay('newGroup')} />
+        <GroupsTab
+          onOpen={(id) => { setGroupInfoId(null); setGroup(id) }}
+          onCreate={() => {
+            if (isBannedSession) return blockBannedAction('Creating groups')
+            setOverlay('newGroup')
+          }}
+        />
       ) : tab === 'status' ? (
         <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && openStatus(id, statusId)} />
       ) : tab === 'calls' ? (
@@ -1432,7 +1479,13 @@ function Shell() {
               </ErrorBoundary>
             </div>
             <div className={tab === 'groups' ? 'h-full' : 'hidden'}>
-              <GroupsTab onOpen={(id) => { setGroupInfoId(null); setGroup(id) }} onCreate={() => setOverlay('newGroup')} />
+              <GroupsTab
+          onOpen={(id) => { setGroupInfoId(null); setGroup(id) }}
+          onCreate={() => {
+            if (isBannedSession) return blockBannedAction('Creating groups')
+            setOverlay('newGroup')
+          }}
+        />
             </div>
             <div className={tab === 'status' ? 'h-full' : 'hidden'}>
               <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && openStatus(id, statusId)} />
@@ -1580,7 +1633,13 @@ function Shell() {
             </ErrorBoundary>
           </div>
           <div className={tab === 'groups' ? 'h-full' : 'hidden'}>
-            <GroupsTab onOpen={(id) => { setGroupInfoId(null); setGroup(id) }} onCreate={() => setOverlay('newGroup')} />
+            <GroupsTab
+          onOpen={(id) => { setGroupInfoId(null); setGroup(id) }}
+          onCreate={() => {
+            if (isBannedSession) return blockBannedAction('Creating groups')
+            setOverlay('newGroup')
+          }}
+        />
           </div>
           <div className={tab === 'status' ? 'h-full' : 'hidden'}>
             <StatusTab active={tab === 'status'} onOpenStatus={(id, statusId) => id && openStatus(id, statusId)} />

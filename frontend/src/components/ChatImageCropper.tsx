@@ -43,12 +43,24 @@ export function ChatImageCropper({ src, onCancel, onDone, title = 'Crop photo' }
   useEffect(() => {
     const img = new Image()
     img.onload = () => {
-      setNatural({ w: img.naturalWidth, h: img.naturalHeight })
+      const nw = img.naturalWidth
+      const nh = img.naturalHeight
+      setNatural({ w: nw, h: nh })
       setRotation(0)
       setAspect('free')
       setImgOffset({ x: 0, y: 0 })
-      // Crop starts at full visible edges
-      setCrop({ x: 8, y: 8, w: VIEW_W - 16, h: VIEW_H - 16 })
+      // Crop frame starts exactly on the displayed image bounds so a no-op crop is one tap
+      const scale = nw && nh ? Math.min(VIEW_W / nw, VIEW_H / nh) * 0.98 : 1
+      const dw = nw * scale
+      const dh = nh * scale
+      const left = (VIEW_W - dw) / 2
+      const top = (VIEW_H - dh) / 2
+      setCrop({
+        x: Math.max(0, left),
+        y: Math.max(0, top),
+        w: Math.min(VIEW_W, dw),
+        h: Math.min(VIEW_H, dh),
+      })
     }
     img.src = src
   }, [src])

@@ -140,15 +140,22 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
           </div>
         )}
 
-        <motion.button whileTap={{ scale: 0.98 }} onClick={onCreate} className="mx-5 mb-2 flex w-[calc(100%-2.5rem)] items-center gap-3 rounded-3xl bg-brand-purple/10 p-3 text-left">
-          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-purple text-white">
-            <Plus size={22} />
-          </span>
-          <span>
-            <span className="block font-extrabold text-brand-purple">New group</span>
-            <span className="block text-xs font-semibold text-gray-500">Create and share an invite link</span>
-          </span>
-        </motion.button>
+        {/* Big "New group" CTA only while the user has zero groups at all */}
+        {groups.length === 0 && (
+          <motion.button
+            whileTap={{ scale: 0.98 }}
+            onClick={onCreate}
+            className="mx-5 mb-2 flex w-[calc(100%-2.5rem)] items-center gap-3 rounded-3xl bg-brand-purple/10 p-3 text-left"
+          >
+            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-purple text-white">
+              <Plus size={22} />
+            </span>
+            <span>
+              <span className="block font-extrabold text-brand-purple">New group</span>
+              <span className="block text-xs font-semibold text-gray-500">Create and share an invite link</span>
+            </span>
+          </motion.button>
+        )}
 
         <ul className="px-2">
           <AnimatePresence initial={false}>
@@ -176,7 +183,7 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
                             </span>
                           ) : null}
                           {g.unread > 0 ? (
-                            <span className={`flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11px] font-extrabold text-white ${g.muted ? 'bg-gray-400' : 'bg-brand-red'}`}>
+                            <span className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-center text-[11px] font-extrabold leading-none tabular-nums text-white ${g.muted ? 'bg-gray-400' : 'bg-brand-red'}`}>
                               {g.unread > 99 ? '99+' : g.unread}
                             </span>
                           ) : null}

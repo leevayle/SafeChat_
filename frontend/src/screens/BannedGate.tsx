@@ -32,7 +32,7 @@ export function BannedGate({ reason, onAppeal, onLimitedAccess, onLogout }: Prop
       </div>
       <p className="text-xl font-black text-ink dark:text-gray-100">You have been banned from SafeChat</p>
       <p className="mt-2 max-w-sm text-center text-sm font-semibold text-gray-500 dark:text-gray-400">
-        Your account is restricted. You can still open a limited session to view past chats and contact support.
+        You can still browse the app, but sending messages, calls, new chats, groups, status posts, and similar actions are blocked. Contact customer care to appeal.
       </p>
       {reason?.trim() ? (
         <div className="mt-4 w-full max-w-sm rounded-2xl bg-gray-50 px-4 py-3 text-left ring-1 ring-black/5 dark:bg-[#1a222d] dark:ring-white/10">
@@ -58,7 +58,7 @@ export function BannedGate({ reason, onAppeal, onLimitedAccess, onLogout }: Prop
           className="flex w-full items-center justify-center gap-2 rounded-full bg-gray-100 py-3.5 text-sm font-extrabold text-ink dark:bg-[#1f2c34] dark:text-gray-100"
           onClick={onLimitedAccess}
         >
-          <MessageCircle size={18} /> Limited SafeChat access
+          <MessageCircle size={18} /> Continue with limited access
         </button>
         <button
           type="button"

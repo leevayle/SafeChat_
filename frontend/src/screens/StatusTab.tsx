@@ -150,6 +150,12 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
   }
 
   const post = async () => {
+    try {
+      if (sessionStorage.getItem('sc_limited_banned') === '1') {
+        showToast('Posting status is disabled while your account is banned. Contact support to appeal.')
+        return
+      }
+    } catch { /* */ }
     if ((!text.trim() && !image && !video) || busy) return
     const body = text.trim()
     const img = image

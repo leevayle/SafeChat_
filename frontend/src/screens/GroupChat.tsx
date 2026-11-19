@@ -14,8 +14,13 @@ import {
   Pencil,
   Trash2,
   Reply,
+  ImagePlus,
+  Paperclip,
+  Mic,
+  Download,
 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
+import { ChatImageCropper } from '../components/ChatImageCropper'
 import { api } from '../api'
 import {
   getChatPatternUrl,
@@ -26,6 +31,13 @@ import {
 } from '../store'
 import { formatLocalTime, utcNowIso } from '../time'
 import { linkifyText } from '../lib/linkify'
+import { fileToDataUrl } from '../lib/imageProcess'
+import type { ChangeEvent } from 'react'
+import {
+  getCachedMessages,
+  mergeCachedMessages,
+} from '../lib/messageCache'
+import { applyThreadMessages, subscribeThread } from '../lib/messageStore'
 
 function renderGroupText(text: string) {
   // Highlight @username mentions while keeping linkify for URLs
@@ -41,11 +53,6 @@ function renderGroupText(text: string) {
     return <span key={i}>{linkifyText(part)}</span>
   })
 }
-import {
-  getCachedMessages,
-  mergeCachedMessages,
-} from '../lib/messageCache'
-import { applyThreadMessages, subscribeThread } from '../lib/messageStore'
 
 const EMOJIS = [
   '😀','😁','😂','🤣','😃','😄','😅','😆','😉','😊','😋','😎','😍','😘','🥰',
@@ -61,6 +68,8 @@ type GMsg = {
   clientKey?: string
   from: string
   text: string
+  image?: string | null
+  file?: { name: string; url: string; mime?: string; size?: number } | null
   createdAt: string
   state?: 'pending' | 'sent' | 'delivered' | 'read' | 'failed'
   system?: boolean
@@ -71,14 +80,42 @@ type GMsg = {
   replyToText?: string | null
 }
 
+function mediaUrl(path?: string | null) {
+  if (!path) return ''
+  if (path.startsWith('data:') || path.startsWith('blob:') || path.startsWith('http')) return path
+  return path
+}
+
 function mapApiMsg(m: any, myId?: string): GMsg {
   const from = String(m.from || m.sender_id || '')
   const deleted = !!(m.deleted || m.deleted_at)
+  const attachments = m.media_attachments || m.mediaAttachments || []
+  const firstMedia = Array.isArray(attachments) ? attachments[0] : null
+  const mediaType = String(firstMedia?.type || firstMedia?.mime_type || '').toLowerCase()
+  const isFileMedia =
+    mediaType === 'file' ||
+    (!!firstMedia?.name && mediaType !== 'image' && !mediaType.startsWith('image'))
+  const image = deleted
+    ? null
+    : isFileMedia
+      ? null
+      : (firstMedia && (firstMedia.url || firstMedia.data || firstMedia.src)) || m.image || null
+  const file =
+    !deleted && (isFileMedia || m.file)
+      ? {
+          name: String(firstMedia?.name || m.file?.name || m.content || 'Attachment'),
+          url: String(firstMedia?.url || firstMedia?.data || m.file?.url || ''),
+          mime: String(firstMedia?.mime_type || firstMedia?.mime || m.file?.mime || 'application/octet-stream'),
+          size: Number(firstMedia?.size || m.file?.size || 0),
+        }
+      : null
   return {
     id: String(m.id || m._id || ''),
     clientKey: m.client_key || m.clientKey,
     from,
     text: deleted ? 'This message was deleted' : String(m.text || m.content || m.body || ''),
+    image: image ? String(image) : null,
+    file,
     createdAt: m.createdAt || m.created_at || utcNowIso(),
     state: (m.state || m.delivery_status || 'sent') as GMsg['state'],
     system: !!(m.system || m.message_type === 'system'),
@@ -120,8 +157,13 @@ export function GroupChat({
   const [mentionOpen, setMentionOpen] = useState(false)
   const [mentionQ, setMentionQ] = useState('')
   const [mentionIdx, setMentionIdx] = useState(0)
+  const [pendingImage, setPendingImage] = useState<string | null>(null)
+  const [pendingFile, setPendingFile] = useState<{ name: string; url: string; mime: string; size: number } | null>(null)
+  const [cropSrc, setCropSrc] = useState<string | null>(null)
   const end = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement | HTMLInputElement>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+  const docRef = useRef<HTMLInputElement>(null)
   const myId = me?.id || ''
   const memberCount = g?.memberIds?.length || g?.members?.filter((m: any) => !m.pending)?.length || 0
   const mentionCandidates = (() => {
@@ -278,11 +320,72 @@ export function GroupChat({
     requestAnimationFrame(() => inputRef.current?.focus())
   }
 
+  const onPickImage = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f) return
+    if (f.size > 25 * 1024 * 1024) {
+      showToast?.('File is too large (max 25 MB)')
+      return
+    }
+    if (!f.type.startsWith('image/') && !f.type.startsWith('video/')) {
+      showToast?.('Use the paperclip button for documents')
+      return
+    }
+    try {
+      const data = await fileToDataUrl(f)
+      if (f.type === 'image/gif' || /\.gif$/i.test(f.name)) {
+        setPendingFile(null)
+        setPendingImage(data)
+        return
+      }
+      if (f.type.startsWith('image/')) {
+        setCropSrc(data)
+        setPendingFile(null)
+        return
+      }
+      setPendingImage(null)
+      setPendingFile({ name: f.name, url: data, mime: f.type || 'video/mp4', size: f.size })
+      showToast?.(`Attached ${f.name}`)
+    } catch {
+      showToast?.('Could not process media')
+    }
+  }
+
+  const onPickDoc = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f) return
+    if (f.size > 25 * 1024 * 1024) {
+      showToast?.('File is too large (max 25 MB)')
+      return
+    }
+    if (f.type.startsWith('image/') || f.type.startsWith('video/')) {
+      showToast?.('Use the photo button for images and videos')
+      return
+    }
+    try {
+      const data = await fileToDataUrl(f)
+      setPendingImage(null)
+      setPendingFile({ name: f.name, url: data, mime: f.type || 'application/octet-stream', size: f.size })
+      showToast?.(`Attached ${f.name}`)
+    } catch {
+      showToast?.('Could not read file')
+    }
+  }
+
   const send = async () => {
+    try {
+      if (sessionStorage.getItem('sc_limited_banned') === '1') {
+        showToast?.('Your account is banned — messaging is disabled. Contact support to appeal.')
+        return
+      }
+    } catch { /* */ }
     const body = text.trim()
-    if (!body || !conversationId || sending) return
+    if ((!body && !pendingImage && !pendingFile) || !conversationId || sending) return
 
     if (editingId) {
+      if (!body) return
       const id = editingId
       setSending(true)
       const prev = msgs.find((m) => m.id === id)
@@ -305,12 +408,18 @@ export function GroupChat({
     }
 
     setSending(true)
+    const img = pendingImage
+    const fileSnap = pendingFile
     const clientKey = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const previewText =
+      body || (img ? '📷 Photo' : '') || (fileSnap ? `📎 ${fileSnap.name}` : '')
     const optimistic: GMsg = {
       id: clientKey,
       clientKey,
       from: myId,
-      text: body,
+      text: previewText,
+      image: img,
+      file: fileSnap,
       createdAt: utcNowIso(),
       state: 'pending',
       mine: true,
@@ -319,19 +428,29 @@ export function GroupChat({
     }
     setMsgs((m) => [...m, optimistic])
     setText('')
+    setPendingImage(null)
+    setPendingFile(null)
     const replySnap = replyTo
     setReplyTo(null)
     setEmoji(false)
     try {
-      const { message } = await api.send(conversationId, body, null, {
+      const { message } = await api.send(conversationId, body || (img ? '📷 Photo' : '') || (fileSnap ? `📎 ${fileSnap.name}` : ''), img, {
         clientKey,
         replyToId: replySnap?.id,
+        file: fileSnap || null,
       })
       const mapped = mapApiMsg(message, myId)
       setMsgs((list) =>
         list.map((m) =>
           m.clientKey === clientKey || m.id === clientKey
-            ? { ...mapped, clientKey, replyToId: mapped.replyToId || replySnap?.id, replyToText: mapped.replyToText || replySnap?.text }
+            ? {
+                ...mapped,
+                clientKey,
+                image: mapped.image ?? img,
+                file: mapped.file ?? fileSnap,
+                replyToId: mapped.replyToId || replySnap?.id,
+                replyToText: mapped.replyToText || replySnap?.text,
+              }
             : m,
         ),
       )
@@ -542,9 +661,41 @@ export function GroupChat({
                         <span className="line-clamp-2 text-xs font-semibold">{m.replyToText || 'Original message'}</span>
                       </div>
                     ) : null}
-                    <span className="whitespace-pre-wrap break-words font-semibold leading-snug">
-                      {renderGroupText(m.text)}
-                    </span>
+                    {m.image && !m.deleted ? (
+                      <div className={`mb-1 overflow-hidden ${mine ? 'rounded-xl rounded-br-sm' : 'rounded-xl rounded-bl-sm'}`}>
+                        <img
+                          src={mediaUrl(m.image)}
+                          alt=""
+                          className="max-h-60 w-full bg-transparent object-contain"
+                          loading="lazy"
+                        />
+                      </div>
+                    ) : null}
+                    {m.file?.url && !m.deleted ? (
+                      <a
+                        href={mediaUrl(m.file.url)}
+                        download={m.file.name || 'attachment'}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className={`mb-1 flex items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm font-bold ring-1 ring-black/10 ${
+                          mine ? 'bg-white/20 text-white' : 'bg-black/5 text-ink dark:bg-white/10 dark:text-gray-100'
+                        }`}
+                      >
+                        <span className="text-lg">📎</span>
+                        <span className="min-w-0 flex-1 truncate">{m.file.name || 'Attachment'}</span>
+                        <Download size={16} className="shrink-0 opacity-80" />
+                      </a>
+                    ) : null}
+                    {m.text && !(m.image && (m.text === '📷 Photo' || m.text.startsWith('📷'))) && !(m.file && m.text.startsWith('📎')) ? (
+                      <span className="whitespace-pre-wrap break-words font-semibold leading-snug">
+                        {renderGroupText(m.text)}
+                      </span>
+                    ) : m.text && !m.image && !m.file ? (
+                      <span className="whitespace-pre-wrap break-words font-semibold leading-snug">
+                        {renderGroupText(m.text)}
+                      </span>
+                    ) : null}
                     <div
                       className={`mt-1 flex items-center justify-end gap-1 text-[10px] font-bold ${
                         mine ? 'text-white/75' : 'text-gray-400'
@@ -696,80 +847,157 @@ export function GroupChat({
           </div>
         )}
 
-        {/* Composer — theme-aware (fixes white bar in dark mode) */}
-        <div className="flex shrink-0 items-center gap-2 border-t border-gray-200/80 bg-white px-2 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] dark:border-white/10 dark:bg-[#1f2c34]">
-          <button
-            type="button"
-            onClick={() => setEmoji((v) => !v)}
-            className="flex h-11 w-11 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
-            aria-label="Emoji"
-          >
-            <Smile size={22} />
-          </button>
-          <input
-            ref={inputRef}
-            value={text}
-            onChange={(e) => {
-              const v = e.target.value
-              setText(v)
-              const caret = e.target.selectionStart ?? v.length
-              const before = v.slice(0, caret)
-              const at = before.lastIndexOf('@')
-              if (at >= 0) {
-                const frag = before.slice(at + 1)
-                if (!/\s/.test(frag) && frag.length <= 32) {
-                  setMentionOpen(true)
-                  setMentionQ(frag)
-                  setMentionIdx(0)
-                  return
+        {/* Pending media previews */}
+        {pendingFile && (
+          <div className="flex items-center gap-2 border-t border-gray-100 bg-white px-3 py-2 dark:border-white/10 dark:bg-[#1f2c34]">
+            <span className="text-lg">📎</span>
+            <span className="min-w-0 flex-1 truncate text-sm font-bold text-ink dark:text-gray-100">{pendingFile.name}</span>
+            <button type="button" onClick={() => setPendingFile(null)} className="flex h-8 w-8 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10" aria-label="Remove file">
+              <X size={16} />
+            </button>
+          </div>
+        )}
+        {pendingImage && (
+          <div className="flex items-start gap-2 border-t border-gray-100 bg-white px-3 py-2 dark:border-white/10 dark:bg-[#1f2c34]">
+            <img src={pendingImage} alt="" className="h-24 rounded-2xl object-cover" />
+            <button type="button" onClick={() => setPendingImage(null)} className="flex h-8 w-8 items-center justify-center rounded-full text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10" aria-label="Remove image">
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        {/* Composer — matches 1:1 inbox chat layout */}
+        <div className="flex items-end gap-1.5 border-t border-gray-200/80 bg-transparent px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-1.5 dark:border-white/10">
+          <div className="flex min-h-[48px] min-w-0 flex-1 items-end gap-0.5 rounded-[24px] bg-white px-1.5 py-1 ring-1 ring-black/8 dark:bg-[#1f2c34] dark:ring-white/10">
+            <button
+              type="button"
+              onClick={() => setEmoji((v) => !v)}
+              className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-black/5 dark:text-gray-300 dark:hover:bg-white/10"
+              aria-label="Emoji"
+            >
+              <Smile size={22} />
+            </button>
+            <textarea
+              ref={inputRef as any}
+              value={text}
+              rows={1}
+              onChange={(e) => {
+                const v = e.target.value
+                setText(v)
+                const el = e.target
+                el.style.height = '24px'
+                el.style.height = Math.min(120, el.scrollHeight) + 'px'
+                const caret = e.target.selectionStart ?? v.length
+                const before = v.slice(0, caret)
+                const at = before.lastIndexOf('@')
+                if (at >= 0) {
+                  const frag = before.slice(at + 1)
+                  if (!/\s/.test(frag) && frag.length <= 32) {
+                    setMentionOpen(true)
+                    setMentionQ(frag)
+                    setMentionIdx(0)
+                    return
+                  }
                 }
-              }
-              setMentionOpen(false)
-              setMentionQ('')
-            }}
-            onKeyDown={(e) => {
-              if (mentionOpen && mentionCandidates.length) {
-                if (e.key === 'ArrowDown') {
+                setMentionOpen(false)
+                setMentionQ('')
+              }}
+              onKeyDown={(e) => {
+                if (mentionOpen && mentionCandidates.length) {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setMentionIdx((i) => (i + 1) % mentionCandidates.length)
+                    return
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setMentionIdx((i) => (i - 1 + mentionCandidates.length) % mentionCandidates.length)
+                    return
+                  }
+                  if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault()
+                    const m = mentionCandidates[mentionIdx]
+                    if (m) insertMention(m)
+                    return
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault()
+                    setMentionOpen(false)
+                    return
+                  }
+                }
+                if (e.key === 'Enter' && !e.shiftKey && settings.enterIsSend !== false) {
                   e.preventDefault()
-                  setMentionIdx((i) => (i + 1) % mentionCandidates.length)
-                  return
+                  void send()
                 }
-                if (e.key === 'ArrowUp') {
-                  e.preventDefault()
-                  setMentionIdx((i) => (i - 1 + mentionCandidates.length) % mentionCandidates.length)
-                  return
-                }
-                if (e.key === 'Enter' || e.key === 'Tab') {
-                  e.preventDefault()
-                  const m = mentionCandidates[mentionIdx]
-                  if (m) insertMention(m)
-                  return
-                }
-                if (e.key === 'Escape') {
-                  e.preventDefault()
-                  setMentionOpen(false)
-                  return
-                }
-              }
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void send()
-              }
-            }}
-            placeholder={editingId ? 'Edit message' : 'Message'}
-            className="h-11 flex-1 rounded-full bg-gray-100 px-4 text-[15px] font-semibold text-ink outline-none ring-brand-purple/30 focus:ring-2 dark:bg-[#2a3942] dark:text-gray-100 dark:placeholder:text-gray-400"
-          />
-          <button
-            type="button"
-            onClick={() => void send()}
-            disabled={!text.trim() || !conversationId}
-            className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-purple text-white disabled:opacity-40"
-            aria-label={editingId ? 'Save' : 'Send'}
-          >
-            <Send size={18} />
-          </button>
+              }}
+              placeholder={editingId ? 'Edit message' : 'Message'}
+              className="max-h-[120px] min-h-[24px] flex-1 resize-none bg-transparent py-2.5 text-[16px] font-medium leading-5 text-ink outline-none placeholder:text-gray-400 dark:text-gray-100"
+            />
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-black/5 dark:text-gray-300 dark:hover:bg-white/10"
+              aria-label="Send photo or video"
+            >
+              <ImagePlus size={22} />
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*,video/*,image/gif"
+              hidden
+              onChange={onPickImage}
+            />
+            <button
+              type="button"
+              onClick={() => docRef.current?.click()}
+              className="mb-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-black/5 dark:text-gray-300 dark:hover:bg-white/10"
+              aria-label="Attach file"
+            >
+              <Paperclip size={20} />
+            </button>
+            <input
+              ref={docRef}
+              type="file"
+              accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip,.csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,application/zip"
+              hidden
+              onChange={onPickDoc}
+            />
+          </div>
+          {(text.trim() || pendingImage || pendingFile) ? (
+            <button
+              type="button"
+              onClick={() => void send()}
+              disabled={!conversationId || sending}
+              className="mb-0.5 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-brand-purple text-white disabled:opacity-40"
+              aria-label={editingId ? 'Save' : 'Send'}
+            >
+              <Send size={20} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="mb-0.5 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-brand-purple text-white opacity-80"
+              aria-label="Voice note"
+              onClick={() => showToast?.('Voice notes in groups coming soon')}
+            >
+              <Mic size={20} />
+            </button>
+          )}
         </div>
       </div>
+
+      {cropSrc && (
+        <ChatImageCropper
+          src={cropSrc}
+          onCancel={() => setCropSrc(null)}
+          onDone={(dataUrl) => {
+            setCropSrc(null)
+            setPendingImage(dataUrl)
+          }}
+        />
+      )}
     </div>
   )
 }
