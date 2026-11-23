@@ -18,6 +18,7 @@ import {
   Paperclip,
   Mic,
   Download,
+  MoreVertical,
 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
 import { ChatImageCropper } from '../components/ChatImageCropper'
@@ -63,6 +64,8 @@ const EMOJIS = [
   '🎉','🎊','💯','✅','☕','🍕','🍔','🎂','🍪',
 ]
 
+const REACT_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏'] as const
+
 type GMsg = {
   id: string
   clientKey?: string
@@ -78,12 +81,40 @@ type GMsg = {
   deleted?: boolean
   replyToId?: string | null
   replyToText?: string | null
+  reactions?: { emoji: string; user_id?: string }[]
 }
 
 function mediaUrl(path?: string | null) {
   if (!path) return ''
   if (path.startsWith('data:') || path.startsWith('blob:') || path.startsWith('http')) return path
   return path
+}
+
+function isGifUrl(path?: string | null) {
+  if (!path) return false
+  if (/^data:image\/gif/i.test(path)) return true
+  try {
+    return /\.gif$/i.test(path.split('?')[0].split('#')[0])
+  } catch {
+    return false
+  }
+}
+
+function isBareGifMessage(m: {
+  image?: string | null
+  text?: string | null
+  file?: unknown
+  deleted?: boolean
+  replyToId?: string | null
+  replyToText?: string | null
+}) {
+  if (m.deleted || !m.image || !isGifUrl(m.image)) return false
+  if (m.file || m.replyToId || m.replyToText) return false
+  const t = String(m.text || '').trim()
+  if (!t) return true
+  if (t === '📷 Photo' || t === '📷 GIF' || t === 'GIF') return true
+  if (/^📷\s*/.test(t) && t.length <= 12) return true
+  return false
 }
 
 function mapApiMsg(m: any, myId?: string): GMsg {
@@ -124,7 +155,272 @@ function mapApiMsg(m: any, myId?: string): GMsg {
     deleted,
     replyToId: m.replyToId || m.reply_to_message_id || null,
     replyToText: m.replyToText || m.reply_to_text || null,
+    reactions: Array.isArray(m.reactions) ? m.reactions : [],
   }
+}
+
+function GroupMessageRow({
+  m,
+  mine,
+  bareGif,
+  nameFor,
+  hasReactions,
+  reactionsList,
+  onOpenAction,
+  onReply,
+  onReact,
+  onRetry,
+}: {
+  m: GMsg
+  mine: boolean
+  bareGif: boolean
+  nameFor: (uid: string) => string
+  hasReactions: boolean
+  reactionsList: { emoji: string; user_id?: string }[]
+  onOpenAction: () => void
+  onReply: () => void
+  onReact: (emoji: string) => void
+  onRetry: () => void
+}) {
+  const startX = useRef(0)
+  const startY = useRef(0)
+  const [dx, setDx] = useState(0)
+  const [hoverReact, setHoverReact] = useState(false)
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0, x: dx }}
+      style={{ touchAction: 'pan-y' }}
+      onTouchStart={(e) => {
+        startX.current = e.touches[0].clientX
+        startY.current = e.touches[0].clientY
+      }}
+      onTouchMove={(e) => {
+        const d = e.touches[0].clientX - startX.current
+        const dy = Math.abs(e.touches[0].clientY - startY.current)
+        if (d > 8 && d > dy * 1.2) {
+          setDx(Math.min(56, d * 0.4))
+        }
+      }}
+      onTouchEnd={() => {
+        if (dx > 28 && !m.deleted && !m.system) onReply()
+        setDx(0)
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault()
+        if (!m.deleted && !m.system) onOpenAction()
+      }}
+      onDoubleClick={() => {
+        if (!m.deleted && !m.system) onOpenAction()
+      }}
+      className={`group/bubble mb-1.5 flex w-full ${mine ? 'justify-end' : 'justify-start'} ${hasReactions ? 'mb-3' : ''}`}
+    >
+      <div className="relative max-w-[min(78%,22rem)]">
+        {/* Desktop hover actions — match inbox chat */}
+        {!m.deleted && !m.system ? (
+          <div
+            className={`pointer-events-none absolute top-1/2 z-20 hidden -translate-y-1/2 items-center gap-0.5 rounded-full border border-black/5 bg-white px-0.5 py-0.5 shadow-md dark:border-white/10 dark:bg-[#1a222d] md:pointer-events-auto md:group-hover/bubble:flex ${
+              mine ? 'right-full mr-1' : 'left-full ml-1'
+            }`}
+            onMouseLeave={() => setHoverReact(false)}
+          >
+            <button
+              type="button"
+              title="Reply"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
+              onClick={(e) => {
+                e.stopPropagation()
+                onReply()
+              }}
+            >
+              <Reply size={16} strokeWidth={2.2} />
+            </button>
+            <div className="relative">
+              <button
+                type="button"
+                title="React"
+                className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setHoverReact((v) => !v)
+                }}
+              >
+                <Smile size={16} strokeWidth={2.2} />
+              </button>
+              {hoverReact ? (
+                <div className="absolute bottom-full left-1/2 z-30 mb-1 flex -translate-x-1/2 gap-0.5 rounded-full border border-black/5 bg-white p-1 shadow-lg dark:border-white/10 dark:bg-[#1a222d]">
+                  {REACT_EMOJIS.map((em) => (
+                    <button
+                      key={em}
+                      type="button"
+                      className="flex h-8 w-8 items-center justify-center rounded-full text-base hover:bg-gray-100 dark:hover:bg-white/10"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setHoverReact(false)
+                        onReact(em)
+                      }}
+                    >
+                      {em}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              title="More"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-white/10"
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenAction()
+              }}
+            >
+              <MoreVertical size={15} strokeWidth={2.2} />
+            </button>
+          </div>
+        ) : null}
+
+        <button
+          type="button"
+          onClick={() => {
+            if (mine && m.state === 'failed') onRetry()
+            else if (!m.deleted && !m.system) onOpenAction()
+          }}
+          className={`relative w-full text-left ${
+            bareGif
+              ? 'bg-transparent px-0 py-0 shadow-none ring-0'
+              : `rounded-2xl px-3 py-2 shadow-sm ${
+                  mine
+                    ? 'rounded-br-md bg-brand-purple text-white'
+                    : 'rounded-bl-md bg-white text-ink ring-1 ring-black/[0.04] dark:bg-[#1f2c34] dark:text-gray-100 dark:ring-white/10'
+                }`
+          } ${m.deleted ? 'opacity-70 italic' : ''}`}
+        >
+          {!mine ? (
+            <span
+              className={`mb-0.5 block text-[11px] font-extrabold text-brand-purple ${
+                bareGif ? 'px-0.5 drop-shadow-sm' : ''
+              }`}
+            >
+              {nameFor(m.from)}
+            </span>
+          ) : null}
+          {(m.replyToId || m.replyToText) && !m.deleted ? (
+            <div
+              className={`mb-1.5 border-l-2 pl-2 text-left ${
+                mine && !bareGif
+                  ? 'border-white/50 text-white/90'
+                  : 'border-brand-purple/50 text-gray-500 dark:text-gray-400'
+              }`}
+            >
+              <span className="block text-[10px] font-extrabold uppercase opacity-80">Reply</span>
+              <span className="line-clamp-2 text-xs font-semibold">{m.replyToText || 'Original message'}</span>
+            </div>
+          ) : null}
+          {m.image && !m.deleted ? (
+            <div
+              className={`overflow-hidden bg-transparent ${
+                bareGif
+                  ? 'mb-0 rounded-xl'
+                  : mine
+                    ? 'mb-1 rounded-xl rounded-br-sm'
+                    : 'mb-1 rounded-xl rounded-bl-sm'
+              }`}
+            >
+              <img
+                src={mediaUrl(m.image)}
+                alt=""
+                className="max-h-60 w-full bg-transparent object-contain"
+                loading="lazy"
+              />
+            </div>
+          ) : null}
+          {m.file?.url && !m.deleted ? (
+            <a
+              href={mediaUrl(m.file.url)}
+              download={m.file.name || 'attachment'}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className={`mb-1 flex items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm font-bold ring-1 ring-black/10 ${
+                mine ? 'bg-white/20 text-white' : 'bg-black/5 text-ink dark:bg-white/10 dark:text-gray-100'
+              }`}
+            >
+              <span className="text-lg">📎</span>
+              <span className="min-w-0 flex-1 truncate">{m.file.name || 'Attachment'}</span>
+              <Download size={16} className="shrink-0 opacity-80" />
+            </a>
+          ) : null}
+          {!bareGif &&
+          m.text &&
+          !(m.image && (m.text === '📷 Photo' || m.text.startsWith('📷'))) &&
+          !(m.file && m.text.startsWith('📎')) ? (
+            <span className="whitespace-pre-wrap break-words font-semibold leading-snug">
+              {renderGroupText(m.text)}
+            </span>
+          ) : !bareGif && m.text && !m.image && !m.file ? (
+            <span className="whitespace-pre-wrap break-words font-semibold leading-snug">
+              {renderGroupText(m.text)}
+            </span>
+          ) : null}
+          <div
+            className={`mt-1 flex items-center justify-end gap-1 text-[10px] font-bold ${
+              bareGif
+                ? 'px-0.5 text-gray-500 drop-shadow-sm dark:text-gray-300'
+                : mine
+                  ? 'text-white/75'
+                  : 'text-gray-400'
+            }`}
+          >
+            {m.edited && !m.deleted ? <span className="opacity-80">edited</span> : null}
+            <span>{formatLocalTime(m.createdAt)}</span>
+            {mine ? (
+              m.state === 'pending' ? (
+                <Clock size={12} />
+              ) : m.state === 'failed' ? (
+                <span className="inline-flex items-center gap-0.5 text-red-200">
+                  <RotateCcw size={12} /> Retry
+                </span>
+              ) : m.state === 'read' ? (
+                <CheckCheck size={14} className="text-sky-200" />
+              ) : (
+                <Check size={12} />
+              )
+            ) : null}
+          </div>
+        </button>
+
+        {/* Reaction chips on bubble edge */}
+        {hasReactions ? (
+          <div
+            className={`pointer-events-none absolute z-[5] flex translate-y-[58%] flex-wrap gap-0.5 ${
+              mine ? 'bottom-0 right-2' : 'bottom-0 left-2'
+            }`}
+          >
+            {Object.entries(
+              reactionsList.reduce((acc: Record<string, number>, r) => {
+                const e = typeof r === 'string' ? r : r?.emoji
+                if (!e) return acc
+                acc[e] = (acc[e] || 0) + 1
+                return acc
+              }, {} as Record<string, number>),
+            ).map(([emoji, count]) => (
+              <span
+                key={emoji}
+                className="pointer-events-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[11px] shadow-sm ring-1 ring-black/10 dark:bg-[#1a222d] dark:ring-white/15"
+              >
+                {emoji}
+                {(count as number) > 1 ? (
+                  <span className="ml-0.5 text-[9px] font-black text-gray-500">{count as number}</span>
+                ) : null}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </motion.div>
+  )
 }
 
 export function GroupChat({
@@ -516,6 +812,60 @@ export function GroupChat({
     }
   }
 
+  const reactToMsg = async (m: GMsg, emoji: string) => {
+    const id = m.id
+    if (!id || String(id).startsWith('local-')) {
+      showToast?.('Wait for the message to send')
+      return
+    }
+    const meId = myId
+    const minePrev = (m.reactions || []).find((r) => !r.user_id || (meId && r.user_id === meId))
+    const same = !!(minePrev && minePrev.emoji === emoji)
+    setMsgs((list) =>
+      list.map((x) => {
+        if (x.id !== id && x.clientKey !== id) return x
+        const others = (x.reactions || []).filter((r) => r.user_id && meId && r.user_id !== meId)
+        const reactions = same ? others : [...others, { emoji, user_id: meId }]
+        return { ...x, reactions }
+      }),
+    )
+    setActionMsg(null)
+    try {
+      if (same) await api.removeReaction(id, emoji)
+      else await api.reactMessage(id, emoji)
+    } catch {
+      showToast?.('Could not update reaction')
+    }
+  }
+
+  // Live reactions from realtime (same event as 1:1 chat)
+  useEffect(() => {
+    const onReact = (ev: Event) => {
+      const d = (ev as CustomEvent).detail as {
+        cid?: string
+        id?: string
+        emoji?: string
+        userId?: string
+        removed?: boolean
+      }
+      if (!d?.id || !d.emoji) return
+      if (d.cid && conversationId && d.cid !== conversationId) return
+      setMsgs((prev) =>
+        prev.map((x) => {
+          if (x.id !== d.id && x.clientKey !== d.id) return x
+          let reactions = [...(x.reactions || [])]
+          reactions = reactions.filter((r) => r.user_id !== d.userId)
+          if (!d.removed) {
+            reactions.push({ emoji: d.emoji!, user_id: d.userId })
+          }
+          return { ...x, reactions }
+        }),
+      )
+    }
+    window.addEventListener('sc:rt-react', onReact)
+    return () => window.removeEventListener('sc:rt-react', onReact)
+  }, [conversationId])
+
   if (!g && !loading) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 bg-white dark:bg-[#0b141a]">
@@ -630,101 +980,23 @@ export function GroupChat({
                 )
               }
               const mine = !!m.mine
+              const bareGif = isBareGifMessage(m)
+              const reactionsList = Array.isArray(m.reactions) ? m.reactions : []
+              const hasReactions = reactionsList.length > 0
               return (
-                <motion.div
+                <GroupMessageRow
                   key={m.id}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className={`mb-1.5 flex ${mine ? 'justify-end' : 'justify-start'}`}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setActionMsg(m)}
-                    className={`max-w-[78%] rounded-2xl px-3 py-2 text-left shadow-sm ${
-                      mine
-                        ? 'rounded-br-md bg-brand-purple text-white'
-                        : 'rounded-bl-md bg-white text-ink ring-1 ring-black/[0.04] dark:bg-[#1f2c34] dark:text-gray-100 dark:ring-white/10'
-                    } ${m.deleted ? 'opacity-70 italic' : ''}`}
-                  >
-                    {!mine ? (
-                      <span className="mb-0.5 block text-[11px] font-extrabold text-brand-purple">
-                        {nameFor(m.from)}
-                      </span>
-                    ) : null}
-                    {(m.replyToId || m.replyToText) && !m.deleted ? (
-                      <div
-                        className={`mb-1.5 border-l-2 pl-2 text-left ${
-                          mine ? 'border-white/50 text-white/90' : 'border-brand-purple/50 text-gray-500 dark:text-gray-400'
-                        }`}
-                      >
-                        <span className="block text-[10px] font-extrabold uppercase opacity-80">Reply</span>
-                        <span className="line-clamp-2 text-xs font-semibold">{m.replyToText || 'Original message'}</span>
-                      </div>
-                    ) : null}
-                    {m.image && !m.deleted ? (
-                      <div className={`mb-1 overflow-hidden ${mine ? 'rounded-xl rounded-br-sm' : 'rounded-xl rounded-bl-sm'}`}>
-                        <img
-                          src={mediaUrl(m.image)}
-                          alt=""
-                          className="max-h-60 w-full bg-transparent object-contain"
-                          loading="lazy"
-                        />
-                      </div>
-                    ) : null}
-                    {m.file?.url && !m.deleted ? (
-                      <a
-                        href={mediaUrl(m.file.url)}
-                        download={m.file.name || 'attachment'}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className={`mb-1 flex items-center gap-2 rounded-xl px-2.5 py-2 text-left text-sm font-bold ring-1 ring-black/10 ${
-                          mine ? 'bg-white/20 text-white' : 'bg-black/5 text-ink dark:bg-white/10 dark:text-gray-100'
-                        }`}
-                      >
-                        <span className="text-lg">📎</span>
-                        <span className="min-w-0 flex-1 truncate">{m.file.name || 'Attachment'}</span>
-                        <Download size={16} className="shrink-0 opacity-80" />
-                      </a>
-                    ) : null}
-                    {m.text && !(m.image && (m.text === '📷 Photo' || m.text.startsWith('📷'))) && !(m.file && m.text.startsWith('📎')) ? (
-                      <span className="whitespace-pre-wrap break-words font-semibold leading-snug">
-                        {renderGroupText(m.text)}
-                      </span>
-                    ) : m.text && !m.image && !m.file ? (
-                      <span className="whitespace-pre-wrap break-words font-semibold leading-snug">
-                        {renderGroupText(m.text)}
-                      </span>
-                    ) : null}
-                    <div
-                      className={`mt-1 flex items-center justify-end gap-1 text-[10px] font-bold ${
-                        mine ? 'text-white/75' : 'text-gray-400'
-                      }`}
-                    >
-                      {m.edited && !m.deleted ? <span className="opacity-80">edited</span> : null}
-                      <span>{formatLocalTime(m.createdAt)}</span>
-                      {mine ? (
-                        m.state === 'pending' ? (
-                          <Clock size={12} />
-                        ) : m.state === 'failed' ? (
-                          <span
-                            className="inline-flex items-center gap-0.5 text-red-200"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              void retry(m)
-                            }}
-                          >
-                            <RotateCcw size={12} /> Retry
-                          </span>
-                        ) : m.state === 'read' ? (
-                          <CheckCheck size={14} className="text-sky-200" />
-                        ) : (
-                          <Check size={12} />
-                        )
-                      ) : null}
-                    </div>
-                  </button>
-                </motion.div>
+                  m={m}
+                  mine={mine}
+                  bareGif={bareGif}
+                  nameFor={nameFor}
+                  hasReactions={hasReactions}
+                  reactionsList={reactionsList}
+                  onOpenAction={() => setActionMsg(m)}
+                  onReply={() => startReply(m)}
+                  onReact={(emoji) => void reactToMsg(m, emoji)}
+                  onRetry={() => void retry(m)}
+                />
               )
             })}
           </AnimatePresence>
@@ -742,8 +1014,25 @@ export function GroupChat({
               onClick={(e) => e.stopPropagation()}
             >
               <p className="truncate border-b border-gray-100 px-5 py-3 text-sm font-bold text-gray-500 dark:border-white/10 dark:text-gray-300">
-                {actionMsg.deleted ? 'Deleted message' : actionMsg.text.slice(0, 80)}
+                {actionMsg.deleted
+                  ? 'Deleted message'
+                  : actionMsg.text.slice(0, 80) || (actionMsg.image ? '📷 Media' : 'Message')}
               </p>
+              {!actionMsg.deleted && !actionMsg.system ? (
+                <div className="flex items-center justify-around gap-1 border-b border-gray-100 px-3 py-2.5 dark:border-white/10">
+                  {REACT_EMOJIS.map((em) => (
+                    <button
+                      key={em}
+                      type="button"
+                      className="flex h-10 w-10 items-center justify-center rounded-full text-xl hover:bg-gray-100 dark:hover:bg-white/10"
+                      onClick={() => void reactToMsg(actionMsg, em)}
+                      aria-label={`React ${em}`}
+                    >
+                      {em}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               {!actionMsg.deleted && !actionMsg.system ? (
                 <button
                   type="button"

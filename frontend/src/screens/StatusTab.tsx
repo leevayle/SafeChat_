@@ -123,7 +123,16 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
     }
     if (!f.type.startsWith('image/')) return
     try {
-      const data = await compressForWeb(f)
+      // GIFs stay as original data URLs so animation + transparency are preserved
+      const data =
+        f.type === 'image/gif' || /\.gif$/i.test(f.name || '')
+          ? await new Promise<string>((resolve, reject) => {
+              const r = new FileReader()
+              r.onload = () => resolve(String(r.result))
+              r.onerror = reject
+              r.readAsDataURL(f)
+            })
+          : await compressForWeb(f)
       setImage(data)
       setVideo(null)
     } catch {

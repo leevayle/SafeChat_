@@ -60,6 +60,29 @@ function mediaUrl(path?: string | null) {
   return `${API_ORIGIN}${path}`
 }
 
+/** True when the media path looks like an animated GIF. */
+function isGifUrl(path?: string | null) {
+  if (!path) return false
+  if (/^data:image\/gif/i.test(path)) return true
+  try {
+    const clean = path.split('?')[0].split('#')[0]
+    return /\.gif$/i.test(clean)
+  } catch {
+    return false
+  }
+}
+
+/** GIF-only message: image is a GIF and there is no real caption / file / voice / status quote. */
+function isBareGifMessage(m: { image?: string | null; text?: string | null; file?: unknown; statusReply?: unknown; deleted?: boolean }) {
+  if (m.deleted || !m.image || !isGifUrl(m.image)) return false
+  if (m.file || m.statusReply) return false
+  const t = String(m.text || '').trim()
+  if (!t) return true
+  // Placeholder labels used when only media was sent
+  if (t === '📷 Photo' || t === '📷 GIF' || t === 'GIF' || /^📷\s*/.test(t) && t.length <= 12) return true
+  return false
+}
+
 const STATE_RANK: Record<string, number> = {
   pending: 0,
   failed: 0,
@@ -348,17 +371,20 @@ const MessageBubble = memo(function MessageBubble({
         }}
         className={`relative ${
           (() => {
+            if (isBareGifMessage(m)) return 'min-w-0 bg-transparent shadow-none ring-0'
             const letters = String(m.text || '').replace(/[^A-Za-z]/g, '').length
             const shortText = !m.image && !m.statusReply && letters > 0 && letters < 5
             // Short letter-only bubbles share one width so time + ticks never cram
             return shortText ? 'min-w-[8.25rem]' : 'min-w-[5.75rem]'
           })()
         } ${
-          mine
-            ? 'bubble-mine rounded-2xl rounded-br-sm text-white shadow-[0_4px_18px_-6px_rgba(0,0,0,0.28)]'
-            : 'rounded-2xl rounded-bl-sm bg-white text-ink shadow-[0_4px_16px_-8px_rgba(15,23,42,0.18)] ring-1 ring-black/[0.04]'
-        } ${mine && m.state === 'failed' ? 'ring-2 ring-red-300/80' : ''} ${
-          highlight ? 'ring-2 ring-brand-purple shadow-[0_0_0_6px_rgba(var(--brand-shadow-rgb),0.22)] transition-shadow duration-700' : 'transition-shadow duration-700'
+          isBareGifMessage(m)
+            ? 'bg-transparent text-ink shadow-none ring-0 dark:text-gray-100'
+            : mine
+              ? 'bubble-mine rounded-2xl rounded-br-sm text-white shadow-[0_4px_18px_-6px_rgba(0,0,0,0.28)]'
+              : 'rounded-2xl rounded-bl-sm bg-white text-ink shadow-[0_4px_16px_-8px_rgba(15,23,42,0.18)] ring-1 ring-black/[0.04]'
+        } ${mine && m.state === 'failed' && !isBareGifMessage(m) ? 'ring-2 ring-red-300/80' : ''} ${
+          highlight && !isBareGifMessage(m) ? 'ring-2 ring-brand-purple shadow-[0_0_0_6px_rgba(var(--brand-shadow-rgb),0.22)] transition-shadow duration-700' : 'transition-shadow duration-700'
         }`}
       >
         {m.statusReply && (
@@ -402,7 +428,13 @@ const MessageBubble = memo(function MessageBubble({
         {m.image && (
           <button
             type="button"
-            className={`block w-full overflow-hidden ${mine ? 'rounded-2xl rounded-br-sm' : 'rounded-2xl rounded-bl-sm'}`}
+            className={`block w-full overflow-hidden bg-transparent ${
+              isBareGifMessage(m)
+                ? 'rounded-xl'
+                : mine
+                  ? 'rounded-2xl rounded-br-sm'
+                  : 'rounded-2xl rounded-bl-sm'
+            }`}
             onClick={(e) => {
               e.stopPropagation()
               onOpenImage?.(mediaUrl(m.image))
@@ -411,7 +443,13 @@ const MessageBubble = memo(function MessageBubble({
             <img
               src={mediaUrl(m.image)}
               alt=""
-              className={`sc-msg-image max-h-60 w-full bg-transparent object-contain ${mine ? 'rounded-2xl rounded-br-sm' : 'rounded-2xl rounded-bl-sm'}`}
+              className={`sc-msg-image max-h-60 w-full bg-transparent object-contain ${
+                isBareGifMessage(m)
+                  ? 'rounded-xl'
+                  : mine
+                    ? 'rounded-2xl rounded-br-sm'
+                    : 'rounded-2xl rounded-bl-sm'
+              }`}
               loading="lazy"
             />
           </button>
@@ -470,8 +508,10 @@ const MessageBubble = memo(function MessageBubble({
         )}
 
         <p
-          className={`flex items-center justify-end gap-1 whitespace-nowrap px-3.5 pb-1.5 pt-0.5 text-[10px] font-bold tabular-nums tracking-wide ${
-            mine ? 'text-white/70' : 'text-gray-400'
+          className={`flex items-center justify-end gap-1 whitespace-nowrap text-[10px] font-bold tabular-nums tracking-wide ${
+            isBareGifMessage(m)
+              ? 'px-1 pb-0.5 pt-1 text-gray-500 drop-shadow-sm dark:text-gray-300'
+              : `px-3.5 pb-1.5 pt-0.5 ${mine ? 'text-white/70' : 'text-gray-400'}`
           }`}
         >
           {(m as any).editing ? <span className="mr-0.5 opacity-80">editing…</span> : (m as any).edited ? <span className="mr-0.5 opacity-80">edited</span> : null}

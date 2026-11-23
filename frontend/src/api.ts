@@ -633,10 +633,23 @@ function mapGroup(g: any): any {
       pending: !!(m.pending || pendingIds.includes(String(m.id))),
     })),
     inviteCode: g.invite_code || g.inviteCode || null,
-    inviteLink:
-      g.invite_link ||
-      g.inviteLink ||
-      ((g.invite_code || g.inviteCode) ? `safechat.app/join/${g.invite_code || g.inviteCode}` : null),
+    inviteLink: (() => {
+      const code = g.invite_code || g.inviteCode || null
+      const fromApi = g.invite_link || g.inviteLink || null
+      if (fromApi && /^https?:\/\//i.test(String(fromApi))) return String(fromApi)
+      try {
+        // Lazy import avoided — build from public app origin env
+        const origin = String(
+          (import.meta as any).env?.VITE_APP_URL ||
+            (import.meta as any).env?.VITE_PUBLIC_URL ||
+            (typeof window !== 'undefined' ? window.location?.origin : '') ||
+            'https://safechat.app',
+        ).replace(/\/+$/, '')
+        return code ? `${origin}/join/${encodeURIComponent(String(code))}` : null
+      } catch {
+        return code ? `https://safechat.app/join/${encodeURIComponent(String(code))}` : null
+      }
+    })(),
     permissions: (() => {
       const gp = g.group_permissions || g.permissions || {}
       return {
@@ -1216,6 +1229,7 @@ export const api = {
       groups_add: 'groupsAdd',
       force_read_receipts: 'forceReadReceipts',
       live_typing: 'liveTyping',
+      animated_profile_photos: 'animatedProfilePhotos',
       status_ads_enabled: 'statusAdsEnabled',
       verified_badge: 'verifiedBadge',
       wallpaper: 'wallpaper',
@@ -1242,6 +1256,7 @@ export const api = {
             forceReadReceipts: !!data.settings.force_read_receipts,
             // Defaults: live typing ON, status ads ON unless user turned them off
             liveTyping: data.settings.live_typing !== false,
+            animatedProfilePhotos: data.settings.animated_profile_photos !== false,
             statusAdsEnabled: data.settings.status_ads_enabled !== false,
           }
         : {}),
@@ -1252,6 +1267,7 @@ export const api = {
         verified_badge: true,
         force_read_receipts: false,
         live_typing: true,
+        animated_profile_photos: true,
         status_ads_enabled: true,
       },
       deactivatedAt: data?.deactivated_at || null,

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { resolvePhoto, warmPhoto } from '../lib/photoCache'
 import { API_ORIGIN } from '../config'
+import { useStore } from '../store'
+import { isPremium } from '../lib/plan'
 
 type ContactLike = {
   id: string
@@ -11,6 +13,44 @@ type ContactLike = {
   /** Show premium verification mark */
   premium?: boolean
   verified?: boolean
+}
+
+function looksLikeGif(src?: string | null) {
+  if (!src) return false
+  if (/^data:image\/gif/i.test(src)) return true
+  try {
+    return /\.gif$/i.test(src.split('?')[0].split('#')[0])
+  } catch {
+    return false
+  }
+}
+
+/** Rasterize first frame of a GIF (or any image) to a still PNG data URL. */
+function stillFrameFromUrl(src: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+      try {
+        const w = img.naturalWidth || img.width || 1
+        const h = img.naturalHeight || img.height || 1
+        const canvas = document.createElement('canvas')
+        canvas.width = w
+        canvas.height = h
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          reject(new Error('no canvas'))
+          return
+        }
+        ctx.drawImage(img, 0, 0)
+        resolve(canvas.toDataURL('image/png'))
+      } catch (e) {
+        reject(e)
+      }
+    }
+    img.onerror = () => reject(new Error('load failed'))
+    img.src = src
+  })
 }
 
 export function Avatar({
@@ -25,13 +65,44 @@ export function Avatar({
   /** Override premium badge */
   premium?: boolean
 }) {
+  const { settings, me } = useStore()
   const [a, b] = contact.hue || ['#7B2CBF', '#6389EB']
   const [broken, setBroken] = useState(false)
+  const [stillSrc, setStillSrc] = useState<string | null>(null)
   const src = resolvePhoto(contact.id, contact.photo, API_ORIGIN)
+
+  const viewerPremium = isPremium(
+    (settings as any)?.subscriptionPlan || (me as any)?.subscriptionPlan,
+  )
+  // Premium + setting on (default) → animate GIFs. Pro always still.
+  const allowAnimate =
+    viewerPremium && (settings as any)?.animatedProfilePhotos !== false
+  const isGif = looksLikeGif(src) || looksLikeGif(contact.photo)
+
   useEffect(() => {
     setBroken(false)
+    setStillSrc(null)
     if (contact.photo) warmPhoto(contact.id, contact.photo, API_ORIGIN)
   }, [contact.id, contact.photo])
+
+  useEffect(() => {
+    let cancelled = false
+    if (!src || !isGif || allowAnimate) {
+      setStillSrc(null)
+      return
+    }
+    stillFrameFromUrl(src)
+      .then((data) => {
+        if (!cancelled) setStillSrc(data)
+      })
+      .catch(() => {
+        // Fall back to original URL; browser may still animate — best effort
+        if (!cancelled) setStillSrc(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [src, isGif, allowAnimate])
 
   const initials = (contact.name || '?')
     .split(' ')
@@ -40,11 +111,13 @@ export function Avatar({
     .slice(0, 2)
     .toUpperCase()
 
-  const showImg = Boolean(src) && !broken
+  // While freezing a GIF, wait for the still frame so Pro never flashes animation
+  const displaySrc = isGif && !allowAnimate ? stillSrc : src
+  const showImg = Boolean(displaySrc) && !broken
 
   const body = showImg ? (
     <img
-      src={src}
+      src={displaySrc!}
       alt=""
       className="h-full w-full rounded-full object-cover"
       style={{ width: size, height: size }}

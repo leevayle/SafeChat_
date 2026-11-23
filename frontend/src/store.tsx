@@ -164,6 +164,8 @@ export type Settings = {
   statusNotifs?: boolean
   forceReadReceipts?: boolean
   liveTyping?: boolean
+  /** Premium only — animate GIF avatars (default on). Pro always sees still frame. */
+  animatedProfilePhotos?: boolean
   hideLiveTyping?: boolean
   verifiedBadge?: boolean
   statusAdsEnabled?: boolean
@@ -593,6 +595,7 @@ const defaultSettings: Settings = {
   statusExcludedContacts: [],
   forceReadReceipts: false,
   liveTyping: true,
+  animatedProfilePhotos: true,
   hideLiveTyping: false,
   verifiedBadge: true,
   statusAdsEnabled: true,
@@ -841,6 +844,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         verifiedBadge: isPremium && ((user as any).verifiedBadge !== false) && ps.verified_badge !== false,
         forceReadReceipts: isPremium && !!(ps.force_read_receipts ?? (s as any)?.forceReadReceipts),
         liveTyping: isPremium && (ps.live_typing !== false) && ((s as any)?.liveTyping !== false),
+        animatedProfilePhotos:
+          isPremium &&
+          (ps.animated_profile_photos !== false) &&
+          ((s as any)?.animatedProfilePhotos !== false),
         // Default ON unless the user explicitly turned ads off
         statusAdsEnabled:
           isPremium &&

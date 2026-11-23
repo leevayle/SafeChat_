@@ -24,3 +24,36 @@ export const API_BASE = import.meta.env.DEV ? '' : API_ORIGIN
 export const APP_VERSION = String(
   import.meta.env.VITE_APP_VERSION || import.meta.env.VITE_SAFECHAT_VERSION || '1.0.0',
 ).trim() || '1.0.0'
+
+/**
+ * Public web origin for shareable links (group invites, deep links).
+ * Set VITE_APP_URL in .env (e.g. https://safechat.app).
+ */
+function resolveAppOrigin(): string {
+  const raw = String(
+    import.meta.env.VITE_APP_URL ||
+      import.meta.env.VITE_PUBLIC_URL ||
+      import.meta.env.VITE_APP_DOMAIN ||
+      '',
+  ).trim()
+  if (raw) {
+    try {
+      return normalizeOrigin(raw)
+    } catch {
+      /* fall through */
+    }
+  }
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin
+  }
+  return 'https://safechat.app'
+}
+
+export const APP_ORIGIN = resolveAppOrigin()
+
+/** Build a public group invite URL from an invite code. */
+export function groupInviteUrl(code: string | null | undefined): string | null {
+  const c = String(code || '').trim()
+  if (!c) return null
+  return `${APP_ORIGIN}/join/${encodeURIComponent(c)}`
+}

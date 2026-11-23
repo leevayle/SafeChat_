@@ -528,7 +528,37 @@ export function Settings({
                     e.target.value = ''
                     if (!f || !f.type.startsWith('image/')) return
                     try {
-                      const src = await fileToDataUrl(f)
+                      let src = await fileToDataUrl(f)
+                      const isGif = f.type === 'image/gif' || /\.gif$/i.test(f.name || '')
+                      // Premium may keep animated GIFs; Pro is converted to a still frame
+                      if (isGif) {
+                        const plan = ((s as any).subscriptionPlan || me?.subscriptionPlan || 'pro') as string
+                        if (plan !== 'premium') {
+                          try {
+                            const { stillFrameDataUrl } = await import('../lib/imageProcess')
+                            src = await stillFrameDataUrl(src)
+                            setToast('Pro keeps a still profile photo — upgrade to Premium for animated GIFs')
+                          } catch {
+                            setToast('Could not process GIF')
+                            return
+                          }
+                        } else {
+                          // Premium GIF — skip cropper so animation is preserved
+                          setToast('Changing your profile pic…')
+                          try {
+                            await saveProfile({
+                              name: draft.name.trim() || s.name,
+                              username: draft.username.trim() || s.username,
+                              bio: draft.bio || s.bio || '',
+                              photo: src,
+                            })
+                            setToast('Changed successfully')
+                          } catch {
+                            setToast('Could not update photo')
+                          }
+                          return
+                        }
+                      }
                       setCropSrc(src)
                     } catch {
                       setToast('Could not open image')
@@ -1726,6 +1756,32 @@ export function Settings({
                         void api.updatePreferences({ hide_live_typing: v }).catch(() => {})
                       }}
                       label="Hide live typing"
+                    />
+                  }
+                />
+                <Row
+                  label="Animated profile photos"
+                  hint="Premium: play GIF profile pics. Pro always sees a still frame"
+                  right={
+                    <Toggle
+                      on={
+                        ((s as any).subscriptionPlan || me?.subscriptionPlan) === 'premium' &&
+                        (s as any).animatedProfilePhotos !== false
+                      }
+                      onChange={(v) => {
+                        if (((s as any).subscriptionPlan || me?.subscriptionPlan) !== 'premium') {
+                          setToast('Animated profile photos are a Premium feature')
+                          return
+                        }
+                        setSetting('animatedProfilePhotos' as any, v as never)
+                        void api
+                          .updatePremiumSettings({ animated_profile_photos: v })
+                          .catch(() => {
+                            setSetting('animatedProfilePhotos' as any, !v as never)
+                            setToast('Could not save setting')
+                          })
+                      }}
+                      label="Animated profile photos"
                     />
                   }
                 />

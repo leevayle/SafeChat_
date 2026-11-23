@@ -19,6 +19,7 @@ import { ImageCropper } from '../components/ImageCropper'
 import { PrimaryButton, ScreenHeader, Sheet, Toast, Toggle } from '../components/ui'
 import { api } from '../api'
 import { useStore } from '../store'
+import { groupInviteUrl } from '../config'
 
 function Card({ children, title }: { children: ReactNode; title?: string }) {
   return (
@@ -440,7 +441,8 @@ export function GroupInfo({
             <div className="min-w-0 flex-1">
               <p className="truncate font-bold text-ink dark:text-gray-100">
                 {g.inviteLink ||
-                  (g.inviteCode ? `safechat.app/join/${g.inviteCode}` : 'Generating link…')}
+                  groupInviteUrl(g.inviteCode) ||
+                  'Generating link…'}
               </p>
               <p className="text-xs font-semibold text-gray-400">Tap copy to share this group</p>
             </div>
@@ -449,7 +451,7 @@ export function GroupInfo({
               className="shrink-0 rounded-full bg-brand-purple/10 px-3 py-1.5 text-xs font-extrabold text-brand-purple disabled:opacity-40"
               disabled={!g.inviteCode && !g.inviteLink}
               onClick={async () => {
-                const url = g.inviteLink || (g.inviteCode ? `safechat.app/join/${g.inviteCode}` : '')
+                const url = g.inviteLink || groupInviteUrl(g.inviteCode) || ''
                 if (!url) return
                 try {
                   await navigator.clipboard.writeText(url)

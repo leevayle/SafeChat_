@@ -219,7 +219,7 @@ export function GroupsTab({ onOpen, onCreate }: { onOpen: (id: string) => void; 
       )}
 
       <Sheet open={join} onClose={() => setJoin(false)} title="Join with invite link">
-        <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="safechat.app/join/abc123" className="mb-4 h-13 w-full rounded-full bg-gray-100 px-5 py-3 font-bold outline-none focus:ring-4 focus:ring-brand-purple/25 dark:bg-white/10" />
+        <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://your-domain.com/join/abc123" className="mb-4 h-13 w-full rounded-full bg-gray-100 px-5 py-3 font-bold outline-none focus:ring-4 focus:ring-brand-purple/25 dark:bg-white/10" />
         <PrimaryButton disabled={!link.trim() || joining} onClick={() => void doJoin()}>{joining ? 'Joining…' : 'Join group'}</PrimaryButton>
       </Sheet>
       <Toast msg={toast} clear={() => setToast(null)} />

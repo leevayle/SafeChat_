@@ -66,7 +66,21 @@ export function Profile({
       return
     }
     try {
-      const src = await fileToDataUrl(file)
+      let src = await fileToDataUrl(file)
+      // GIFs: Premium may keep animation; Pro is flattened to first frame
+      if (file.type === 'image/gif' || /\.gif$/i.test(file.name || '')) {
+        try {
+          const { stillFrameDataUrl } = await import('../lib/imageProcess')
+          // Onboarding profile — treat as Pro (no premium yet); always still
+          src = await stillFrameDataUrl(src)
+        } catch {
+          /* keep original if rasterize fails */
+        }
+        setPhoto(src)
+        setCropSrc(null)
+        setError('')
+        return
+      }
       setCropSrc(src)
       setError('')
     } catch {

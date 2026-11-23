@@ -208,10 +208,17 @@ export function ChatImageCropper({ src, onCancel, onDone, title = 'Crop photo' }
       canvas.width = outW
       canvas.height = outH
       const ctx = canvas.getContext('2d')!
+      ctx.clearRect(0, 0, outW, outH)
       ctx.imageSmoothingEnabled = true
       ctx.imageSmoothingQuality = 'high'
       ctx.drawImage(full, x, y, w, h, 0, 0, outW, outH)
-      onDone(canvas.toDataURL('image/jpeg', 0.85))
+      // Preserve transparency for PNG/WebP sources; JPEG for photos
+      const mime = /^data:([^;,]+)/i.exec(src)?.[1]?.toLowerCase() || ''
+      if (mime === 'image/png' || mime === 'image/webp') {
+        onDone(canvas.toDataURL('image/png'))
+      } else {
+        onDone(canvas.toDataURL('image/jpeg', 0.85))
+      }
     } catch {
       /* */
     } finally {
