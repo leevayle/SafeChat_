@@ -1761,7 +1761,7 @@ export function Settings({
                 />
                 <Row
                   label="Animated profile photos"
-                  hint="Premium: play GIF profile pics. Pro always sees a still frame"
+                  hint="Premium can upload a GIF profile photo — everyone sees it animated. Pro can only use a still photo"
                   right={
                     <Toggle
                       on={
