@@ -3,11 +3,11 @@
  * Stale-while-revalidate: paint cached UI instantly, merge network updates in place.
  *
  * Stores: chats, contacts, messages, statuses, notifications, saveRequests,
- *         statusViewers, outbox (unsent), meta
+ *         statusViewers, outbox (unsent), meta, groups
  */
 
 const DB_NAME = 'safechat_cache_v1'
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 type StoreName =
   | 'chats'
@@ -19,6 +19,7 @@ type StoreName =
   | 'statusViewers'
   | 'outbox'
   | 'meta'
+  | 'groups'
 
 let dbPromise: Promise<IDBDatabase> | null = null
 
@@ -42,6 +43,7 @@ function openDb(): Promise<IDBDatabase> {
         'statusViewers',
         'outbox',
         'meta',
+        'groups',
       ]
       for (const name of stores) {
         if (!db.objectStoreNames.contains(name)) {
@@ -166,6 +168,7 @@ export async function clearAllCaches() {
     'statusViewers',
     'outbox',
     'meta',
+    'groups',
   ]
   await Promise.all(stores.map((s) => idbClear(s)))
 }
@@ -178,6 +181,16 @@ export async function loadCachedChats<T>(): Promise<T[]> {
 
 export async function saveCachedChats<T>(items: T[]) {
   await idbPut('chats', { id: 'list', items, updatedAt: Date.now() })
+}
+
+// Groups (same stale-while-revalidate pattern as chats)
+export async function loadCachedGroups<T>(): Promise<T[]> {
+  const row = await idbGet<{ id: string; items: T[] }>('groups', 'list')
+  return row?.items || []
+}
+
+export async function saveCachedGroups<T>(items: T[]) {
+  await idbPut('groups', { id: 'list', items, updatedAt: Date.now() })
 }
 
 // Contacts

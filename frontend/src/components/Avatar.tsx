@@ -19,38 +19,54 @@ function looksLikeGif(src?: string | null) {
   if (!src) return false
   if (/^data:image\/gif/i.test(src)) return true
   try {
-    return /\.gif$/i.test(src.split('?')[0].split('#')[0])
+    const path = src.split('?')[0].split('#')[0]
+    // Extension or common media routes that serve GIFs without a .gif suffix
+    if (/\.gif$/i.test(path)) return true
+    if (/\/media\/[^/]+\/gif\b/i.test(path)) return true
+    if (/[?&](?:type|format|mime)=gif\b/i.test(src)) return true
+    return false
   } catch {
     return false
   }
 }
 
-/** Rasterize first frame of a GIF (or any image) to a still PNG data URL. */
+/** Rasterize first frame of a GIF (or any image) to a still PNG data URL.
+ * Tries CORS first (needed for cross-origin canvas in prod); falls back to
+ * same-origin / no-CORS load so data: and same-host photos still work.
+ */
 function stillFrameFromUrl(src: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.crossOrigin = 'anonymous'
-    img.onload = () => {
-      try {
-        const w = img.naturalWidth || img.width || 1
-        const h = img.naturalHeight || img.height || 1
-        const canvas = document.createElement('canvas')
-        canvas.width = w
-        canvas.height = h
-        const ctx = canvas.getContext('2d')
-        if (!ctx) {
-          reject(new Error('no canvas'))
-          return
-        }
-        ctx.drawImage(img, 0, 0)
-        resolve(canvas.toDataURL('image/png'))
-      } catch (e) {
-        reject(e)
+  const tryLoad = (useCors: boolean) =>
+    new Promise<string>((resolve, reject) => {
+      const img = new Image()
+      if (useCors && !src.startsWith('data:') && !src.startsWith('blob:')) {
+        img.crossOrigin = 'anonymous'
       }
-    }
-    img.onerror = () => reject(new Error('load failed'))
-    img.src = src
-  })
+      img.onload = () => {
+        try {
+          const w = img.naturalWidth || img.width || 1
+          const h = img.naturalHeight || img.height || 1
+          const canvas = document.createElement('canvas')
+          canvas.width = w
+          canvas.height = h
+          const ctx = canvas.getContext('2d')
+          if (!ctx) {
+            reject(new Error('no canvas'))
+            return
+          }
+          ctx.drawImage(img, 0, 0)
+          resolve(canvas.toDataURL('image/png'))
+        } catch (e) {
+          reject(e)
+        }
+      }
+      img.onerror = () => reject(new Error('load failed'))
+      img.src = src
+    })
+
+  // Prefer CORS so cross-origin prod media can be read into canvas.
+  // If that taints / fails (missing ACAO headers), retry without CORS —
+  // works for data: URLs and same-origin assets.
+  return tryLoad(true).catch(() => tryLoad(false))
 }
 
 export function Avatar({
@@ -71,12 +87,15 @@ export function Avatar({
   const [stillSrc, setStillSrc] = useState<string | null>(null)
   const src = resolvePhoto(contact.id, contact.photo, API_ORIGIN)
 
-  const viewerPremium = isPremium(
-    (settings as any)?.subscriptionPlan || (me as any)?.subscriptionPlan,
-  )
-  // Premium + setting on (default) → animate GIFs. Pro always still.
-  const allowAnimate =
-    viewerPremium && (settings as any)?.animatedProfilePhotos !== false
+  // Prefer live me.plan — settings can lag after a Premium upgrade in prod.
+  const planRaw =
+    (me as any)?.subscriptionPlan ||
+    (settings as any)?.subscriptionPlan ||
+    (me as any)?.subscription_plan ||
+    'pro'
+  const viewerPremium = isPremium(planRaw)
+  // Premium + setting on (undefined counts as ON) → animate GIFs. Pro always still.
+  const allowAnimate = viewerPremium && (settings as any)?.animatedProfilePhotos !== false
   const isGif = looksLikeGif(src) || looksLikeGif(contact.photo)
 
   useEffect(() => {
@@ -87,6 +106,7 @@ export function Avatar({
 
   useEffect(() => {
     let cancelled = false
+    // Premium / non-GIF: never keep a still frame around
     if (!src || !isGif || allowAnimate) {
       setStillSrc(null)
       return
@@ -96,8 +116,9 @@ export function Avatar({
         if (!cancelled) setStillSrc(data)
       })
       .catch(() => {
-        // Fall back to original URL; browser may still animate — best effort
-        if (!cancelled) setStillSrc(null)
+        // Fall back to original URL so avatar still shows (may animate) if
+        // canvas is tainted or CORS blocks still-frame extraction in prod.
+        if (!cancelled) setStillSrc(src)
       })
     return () => {
       cancelled = true
@@ -111,7 +132,8 @@ export function Avatar({
     .slice(0, 2)
     .toUpperCase()
 
-  // While freezing a GIF, wait for the still frame so Pro never flashes animation
+  // Premium: always live src so GIF animation is not blocked by a stale still frame.
+  // Pro: still frame when ready (avoids animation flash).
   const displaySrc = isGif && !allowAnimate ? stillSrc : src
   const showImg = Boolean(displaySrc) && !broken
 
@@ -121,8 +143,9 @@ export function Avatar({
       alt=""
       className="h-full w-full rounded-full object-cover"
       style={{ width: size, height: size }}
-      loading="lazy"
-      decoding="async"
+      // Lazy + async decode can prevent GIF animation in some prod browsers
+      loading={isGif && allowAnimate ? 'eager' : 'lazy'}
+      decoding={isGif && allowAnimate ? 'sync' : 'async'}
       onError={() => setBroken(true)}
     />
   ) : (

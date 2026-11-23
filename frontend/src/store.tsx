@@ -28,6 +28,8 @@ import {
   clearAllCaches,
   loadCachedChats,
   saveCachedChats,
+  loadCachedGroups,
+  saveCachedGroups,
   loadCachedContacts,
   saveCachedContacts,
   loadCachedStatuses,
@@ -843,16 +845,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         premiumExpiresAt: (user as any).premiumExpiresAt || (s as any)?.premiumExpiresAt || null,
         verifiedBadge: isPremium && ((user as any).verifiedBadge !== false) && ps.verified_badge !== false,
         forceReadReceipts: isPremium && !!(ps.force_read_receipts ?? (s as any)?.forceReadReceipts),
-        liveTyping: isPremium && (ps.live_typing !== false) && ((s as any)?.liveTyping !== false),
-        animatedProfilePhotos:
-          isPremium &&
-          (ps.animated_profile_photos !== false) &&
-          ((s as any)?.animatedProfilePhotos !== false),
-        // Default ON unless the user explicitly turned ads off
-        statusAdsEnabled:
-          isPremium &&
-          (ps.status_ads_enabled !== false) &&
-          ((s as any)?.statusAdsEnabled !== false),
+        // Premium feature flags: server premium_settings is source of truth.
+        // Do NOT AND with previous local false — that permanently disabled the
+        // flag after a Pro session and blocked GIF avatars after upgrade to Premium.
+        liveTyping: isPremium ? ps.live_typing !== false : false,
+        animatedProfilePhotos: isPremium ? ps.animated_profile_photos !== false : false,
+        statusAdsEnabled: isPremium ? ps.status_ads_enabled !== false : false,
         // Appearance: resolve already prefers local cache over stale server
         theme: appearance.theme,
         chatAccent: appearance.chatAccent,
@@ -1107,6 +1105,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         return g
       })
+      void saveCachedGroups(g)
     } catch {
       /* */
     }
@@ -1539,10 +1538,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const uid = meRef.current?.id || getStoredUser()?.id || ''
       const owner = cacheOwnerId()
       if (uid && (!owner || owner === uid)) {
-        const [cachedChats, cachedContacts, cachedStatuses] = await Promise.all([
+        const [cachedChats, cachedContacts, cachedStatuses, cachedGroups] = await Promise.all([
           loadCachedChats<ChatPreview>(),
           loadCachedContacts<ApiContact>(),
           loadCachedStatuses<any>(),
+          loadCachedGroups<any>(),
         ])
         if (cachedChats.length) {
           hadCachedChats = true
@@ -1554,6 +1554,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         if (cachedStatuses.length) {
           setStatusList((prev: any[]) => (prev?.length ? prev : cachedStatuses))
+        }
+        if (cachedGroups.length) {
+          setGroups((prev) => (prev.length ? prev : cachedGroups))
         }
         setCacheOwner(uid)
         // Only unlock home when cache has chats to show
@@ -1638,10 +1641,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         try {
           const owner = cacheOwnerId()
           if (!owner || owner === stored.id) {
-            const [cachedChats, cachedContacts, cachedStatuses] = await Promise.all([
+            const [cachedChats, cachedContacts, cachedStatuses, cachedGroups] = await Promise.all([
               loadCachedChats<ChatPreview>(),
               loadCachedContacts<ApiContact>(),
               loadCachedStatuses<any>(),
+              loadCachedGroups<any>(),
             ])
             if (cachedChats.length) {
               setChats(sanitizeChatList(cachedChats as any))
@@ -1649,6 +1653,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             }
             if (cachedContacts.length) setContacts(cachedContacts)
             if (cachedStatuses.length) setStatusList(cachedStatuses)
+            if (cachedGroups.length) setGroups(cachedGroups)
             setCacheOwner(stored.id)
           }
         } catch {
