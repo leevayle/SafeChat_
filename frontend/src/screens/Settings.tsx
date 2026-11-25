@@ -23,6 +23,7 @@ import { LogoIcon, Wordmark } from '../components/Logo'
 import { fileToDataUrl } from '../lib/imageProcess'
 import { StatusAudiencePicker } from '../components/StatusAudiencePicker'
 import { APP_VERSION } from '../config'
+import { openLegal } from '../legal/legalRoute'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 const WHO = ['Everyone', 'My contacts', 'Nobody']
@@ -405,7 +406,9 @@ export function Settings({
                 <SectionLabel>Customer care</SectionLabel>
                 <Card>
                   <Row label="Help" onClick={() => setPage('help')} />
-                  <Row label="Blocked contacts" onClick={() => setPage('blocked')} />
+                    <Row label="Privacy policy" onClick={() => openLegal('privacy')} />
+                    <Row label="User agreement" onClick={() => openLegal('terms')} />
+                    <Row label="Blocked contacts" onClick={() => setPage('blocked')} />
                 </Card>
               </div>
 

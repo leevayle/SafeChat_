@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react'
 import { LogoIcon, Wordmark } from '../components/Logo'
 import { ProgressDots } from '../components/ProgressDots'
 import { PillButton } from '../components/PillButton'
+import { legalHref } from '../legal/legalRoute'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../lib/kv'
 export function Welcome({
@@ -60,8 +61,8 @@ export function Welcome({
           Already have an account? Log in
         </button>
         <p className="mt-1 flex gap-4 text-center text-[11px] font-semibold text-gray-400">
-          <span className="cursor-default hover:text-brand-blue">Privacy policy</span>
-          <span className="cursor-default hover:text-brand-blue">Terms of service</span>
+          <a href={legalHref('privacy')} className="hover:text-brand-blue">Privacy policy</a>
+          <a href={legalHref('terms')} className="hover:text-brand-blue">User agreement</a>
         </p>
       </div>
 

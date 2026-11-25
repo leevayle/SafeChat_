@@ -5,7 +5,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   const rawApiUrl = env.VITE_API_URL?.trim()
   if (!rawApiUrl) {
-    throw new Error('VITE_API_URL is required in admin/.env or the build environment')
+    throw new Error('VITE_API_URL is required in admin-portal/.env or the build environment')
   }
   const candidate = /^[a-z][a-z\d+.-]*:\/\//i.test(rawApiUrl)
     ? rawApiUrl

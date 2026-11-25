@@ -5,6 +5,7 @@ import { ProgressDots } from '../components/ProgressDots'
 import { PillButton } from '../components/PillButton'
 import { COUNTRIES, CountryPicker, type Country } from '../components/CountryPicker'
 import { api } from '../api'
+import { legalHref } from '../legal/legalRoute'
 
 type Props = {
   loading: boolean
@@ -217,14 +218,17 @@ export function Signup({ loading, onSubmit, onLogin, onBack }: Props) {
             {checking ? 'Checking number…' : 'Continue'}
           </PillButton>
           <p className="px-2 text-center text-[11px] font-medium leading-relaxed text-gray-400">
-            By continuing you agree to SafeChat&apos;s Terms & Privacy Policy.
+            By continuing you agree to SafeChat&apos;s{' '}
+            <a href={legalHref('terms')} className="font-bold text-brand-purple underline-offset-2 hover:underline">User Agreement</a>{' '}
+            and{' '}
+            <a href={legalHref('privacy')} className="font-bold text-brand-purple underline-offset-2 hover:underline">Privacy Policy</a>.
           </p>
           <button
             type="button"
             onClick={onLogin}
-            className="w-full py-2 text-center text-sm font-bold text-brand-purple"
+            className="w-full py-2 text-center text-sm font-bold text-brand-blue"
           >
-            Already have an account? <span className="underline underline-offset-2">Log in</span>
+            Already have an account? <span className="underline underline-offset-2 text-brand-purple">Log in</span>
           </button>
         </motion.div>
       </div>

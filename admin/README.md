@@ -1,66 +1,52 @@
-# SafeChat Admin Portal
+# SafeChat Admin Portal (v2)
 
-Standalone administrator interface for the SafeChat API.
+A rebuilt admin console for the SafeChat backend. It talks to the existing `/api/v1/admin/*` routes — **no backend changes are needed**.
+It lives in its own folder, so your current `admin/` app is untouched and you can switch over when you're happy.
 
-## Run locally
+## 1. Update the backend (one small change)
+The backend had no way to change a username, so the Account tab needs one new endpoint, `PATCH /api/v1/users/me/username` (password-confirmed, same rules as registration, written to the audit log for admins).
+From your repo root: `git apply backend-username-change.patch` (it only touches `backend/app/api/v1/users/router.py`), then restart the backend.
+Everything else in the portal works without it; only "Change username" needs it.
 
-Copy `.env.example` to `.env` and set `VITE_API_URL` to your backend origin
-(for local development, `http://localhost:8000`). This value is mandatory for
-both the dev server and production builds. Start the backend, then run:
-
-```powershell
-cd D:\safechat\admin
+## 2. Run it
+```bash
+cd admin-portal
+cp .env.example .env        # Windows: copy .env.example .env   — then set VITE_API_URL, e.g. http://localhost:8000
 npm install
-npm run dev
+npm run dev                 # http://localhost:5174
 ```
+Port 5174 is already in your backend `CORS_ORIGINS`, so it works with no config. Stop the old `admin/` dev server first (same port), or change the port in `package.json`.
 
-Open `http://localhost:5174`. The Vite development server proxies API calls to
-`VITE_API_URL`. For deployment, set `VITE_API_URL` in the portal's build
-environment and add the portal's **frontend origin** (the URL users visit) to
-the backend's comma-separated `CORS_ORIGINS` environment variable when the
-portal calls the API directly. Do not add the backend URL there. `VITE_`
-variables are public client configuration; do not put secrets in them.
+Sign in with an account whose role is `ADMIN` or `SUPER_ADMIN` (create one with `backend/app/scripts/bootstrap_superadmin.py`).
 
-## Access and controls
+## Deploy
+```bash
+VITE_API_URL=https://your-api.example.com npm run build   # outputs dist/ (static site)
+```
+Host `dist/` anywhere static, and add the portal's origin to the backend `CORS_ORIGINS`.
 
-- Sign-in uses the regular SafeChat username/password endpoint. The portal
-  refuses non-admin roles; every admin endpoint also checks the current
-  database role on the server.
-- Access tokens stay in memory and are not written to local storage. The
-  backend's HttpOnly refresh cookie is used to renew the session.
-- Admins can search users, review status and subscription details, deactivate
-  or ban eligible accounts, reactivate accounts, and grant or revoke Premium.
-- Support tickets submitted from the desktop Settings → Support screen appear
-  in the admin inbox. New tickets are assigned round-robin to enabled admins
-  with an active portal session. Assigned admins see only their own tickets;
-  superadmins can see every ticket, its assignment history, and pending work.
-  Tickets move through Pending, In progress, and Closed states. Replies remain
-  visible on the user's existing support screen.
-- Admin Settings provide system/light/dark themes and audited password resets
-  for accounts below the acting admin's role. A generated temporary password
-  is emailed to the user's account address and shown once for admin-side copying.
-  Existing sessions are invalidated; the credential expires and forces a
-  password change when used to sign in.
-- The portal reports authenticated admin sessions as active for ticket
-  assignment while their presence heartbeat is current.
-- Payment records are read-only. Payment status must come from the payment
-  provider flow, not a manual admin action. The existing M-Pesa API is still
-  in demo mode and simulates successful payments; connect and verify real
-  provider callbacks/status queries before using payment data in production.
-- Admins can nominate users for the `ADMIN` role. Only a `SUPER_ADMIN` can
-  approve or reject a nomination, or revoke an existing admin role. A role
-  request cannot grant `SUPER_ADMIN`.
-- Report dispositions and privileged changes are recorded in the system audit
-  log.
-- A first superadmin can be established once from the backend host with:
+## What's in it → which endpoint
+| Screen | Endpoints |
+|---|---|
+| Overview | `GET /admin/overview`, `GET /admin/health` (auto-refresh 30s) |
+| Users | `GET /admin/users` · `PATCH /users/{id}/status?status=` · `PATCH /users/{id}/subscription` · `POST /users/{id}/revoke-sessions` · `POST /users/reset-password` · `POST /users/{id}/revoke-admin` |
+| Access control | `GET/POST /admin/role-requests` · `POST /role-requests/{id}/approve｜reject` |
+| Support inbox | `GET /admin/support/tickets` · `POST …/replies` · `PATCH …/status` |
+| Reports | `GET /admin/reports` · `PATCH /admin/reports/{id}` |
+| Payments | `GET /admin/payments` |
+| Audit log | `GET /admin/audit` (paged in the browser and filtered by date; no backend change) |
+| My account | `GET /auth/me` · `PATCH /users/me` · `PATCH /users/me/username` (new) · `POST /auth/change-password` · `GET/DELETE /users/me/sessions` · `POST /users/me/deactivate` · `GET /auth/username/check` |
+| Backups | `GET /admin/backups[/scopes]` · `POST /admin/backups` · job polling · authenticated download · `DELETE` |
+| Session | `POST /auth/login｜refresh｜logout`, `GET /auth/me`, `PUT/DELETE /admin/presence` |
 
-  ```powershell
-  cd D:\safechat\backend
-  python -m app.scripts.bootstrap_superadmin <username>
-  ```
+Notes: every mutating action asks for a reason (the API requires 3–500 chars and stores it in the audit log). Superadmin-only actions (approve/reject admin, revoke admin) only appear for `SUPER_ADMIN`; the backend enforces them regardless.
+Theme (light/dark) is saved in `localStorage` as `safechat-admin-theme`, the same key as the old admin.
 
-  This requires an existing active user, interactive confirmation, and no
-  existing superadmin. Protect database access and the backend host accordingly.
+## Audit log, export and print
+- Date range defaults to **This week** (Monday → today). Presets: Today, This week, Last 7 days, This month, **Latest 50** (shows the dates those 50 rows span), or pick any From/To.
+- **Export** → Excel (.xlsx), CSV, PDF or JSON, for everything in the selected range (not just the visible page). **Print** opens a clean landscape print layout.
+- Exports neutralise spreadsheet-formula injection (cells starting with `= + - @`). Ranges are capped at the newest 3,000 entries; narrow the dates for older ones.
+- Payments has the same Export / Print.
 
-The health panel reports API reachability and MongoDB ping status. Online user
-counts reflect live WebSocket connections in the current backend process.
+## Also included
+Idle sign-out after 30 minutes, open-work count in the browser tab title, error boundary per screen, light/dark theme shared between the top bar and Account.

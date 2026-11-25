@@ -228,6 +228,69 @@ async def update_my_profile(
     return success_response("Profile updated", updates)
 
 
+class UsernameChange(BaseModel):
+    username: str = Field(..., min_length=3, max_length=32)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+@router.patch("/me/username")
+async def change_my_username(
+    body: UsernameChange,
+    user: dict = Depends(get_current_user),
+):
+    """Change the signed-in user's username (password confirmation required)."""
+    from pymongo.errors import DuplicateKeyError
+    from app.core.exceptions import ConflictError, UnauthorizedError
+    from app.core.security import verify_password
+
+    new_username = body.username.strip().lower()
+    if not re.match(r"^[a-z0-9_]{3,32}$", new_username):
+        raise ValidationError(
+            "Username must be 3-32 chars, lowercase letters, numbers, underscores only"
+        )
+    db = get_database()
+    full = await db.users.find_one({"_id": ObjectId(user["id"])})
+    if not full or not verify_password(body.password, full.get("password_hash") or ""):
+        raise UnauthorizedError("Incorrect password")
+    old_username = full.get("username")
+    if new_username == old_username:
+        raise ValidationError("That is already your username")
+    if await db.users.find_one({"username": new_username}, {"_id": 1}):
+        raise ConflictError("Username already taken")
+    now = datetime.now(timezone.utc)
+    try:
+        await db.users.update_one(
+            {"_id": ObjectId(user["id"])},
+            {"$set": {"username": new_username, "updated_at": now}},
+        )
+    except DuplicateKeyError:  # lost a race with another signup
+        raise ConflictError("Username already taken")
+    await db.user_activity_logs.insert_one(
+        {
+            "user_id": user["id"],
+            "event_type": "user",
+            "action": "username_change",
+            "resource_type": "user",
+            "resource_id": user["id"],
+            "timestamp": now,
+            "metadata": {"from": old_username, "to": new_username},
+        }
+    )
+    if full.get("account_role") in ("ADMIN", "SUPER_ADMIN"):
+        await db.system_audit_logs.insert_one(
+            {
+                "actor_id": user["id"],
+                "actor_username": new_username,
+                "actor_role": full.get("account_role"),
+                "action_type": "admin_username_changed",
+                "resource_type": "user",
+                "resource_id": user["id"],
+                "metadata": {"from": old_username, "to": new_username},
+                "timestamp": now,
+            }
+        )
+    return success_response("Username updated", {"username": new_username})
+
 @router.post("/me/chat-lock")
 async def set_chat_lock_pin(
     body: ChatLockPinBody,
