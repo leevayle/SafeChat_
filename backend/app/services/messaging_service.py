@@ -536,7 +536,14 @@ class MessagingService:
         user_id: str,
         limit: int = 50,
         before_id: Optional[str] = None,
+        after_id: Optional[str] = None,
     ) -> dict:
+        """Load messages for a thread.
+
+        - before_id: page older history (scroll up)
+        - after_id: delta sync — only messages newer than the client's cached tip
+          (industry-style incremental fetch; skip what is already on device)
+        """
         db = get_database()
         if not ObjectId.is_valid(conversation_id):
             raise ValidationError("Invalid conversation id")
@@ -550,14 +557,24 @@ class MessagingService:
             "conversation_id": conversation_id,
             # Soft-deleted messages stay in history as placeholders
         }
-        if before_id and ObjectId.is_valid(before_id):
-            query["_id"] = {"$lt": ObjectId(before_id)}
+        # Prefer after_id for forward delta; before_id for backward history.
+        # Do not combine both in one query.
+        if after_id and ObjectId.is_valid(after_id):
+            query["_id"] = {"$gt": ObjectId(after_id)}
+            cursor = (
+                db.messages.find(query)
+                .sort("created_at", 1)
+                .limit(min(limit, 100))
+            )
+        else:
+            if before_id and ObjectId.is_valid(before_id):
+                query["_id"] = {"$lt": ObjectId(before_id)}
+            cursor = (
+                db.messages.find(query)
+                .sort("created_at", -1)
+                .limit(min(limit, 100))
+            )
 
-        cursor = (
-            db.messages.find(query)
-            .sort("created_at", -1)
-            .limit(min(limit, 100))
-        )
         messages = []
         now = datetime.now(timezone.utc)
         async for m in cursor:
@@ -579,9 +596,15 @@ class MessagingService:
                     upsert=True,
                 )
             messages.append(await MessagingService._serialize_message(m, viewer_id=user_id))
-        messages.reverse()  # chronological
-        next_cursor = messages[0]["id"] if messages and len(messages) == limit else None
-        return {"messages": messages, "next_cursor": next_cursor}
+        if not (after_id and ObjectId.is_valid(after_id)):
+            messages.reverse()  # chronological when we fetched newest-first
+        next_cursor = messages[0]["id"] if messages and len(messages) == limit and not after_id else None
+        newest_id = messages[-1]["id"] if messages else None
+        return {
+            "messages": messages,
+            "next_cursor": next_cursor,
+            "newest_id": newest_id,
+        }
 
     @staticmethod
     async def edit_message(message_id: str, user_id: str, content: str) -> dict:

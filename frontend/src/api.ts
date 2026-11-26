@@ -1667,10 +1667,15 @@ rejectContactRequest: async (requestId: string) => {
     return mapConversation(conv, meId())
   },
 
-  messages: async (conversationId: string, opts?: { limit?: number; beforeId?: string }) => {
+  messages: async (
+    conversationId: string,
+    opts?: { limit?: number; beforeId?: string; afterId?: string },
+  ) => {
     const q = new URLSearchParams()
     q.set('limit', String(opts?.limit ?? 50))
-    if (opts?.beforeId) q.set('before_id', opts.beforeId)
+    // before_id = older history (scroll up); after_id = delta since cached tip
+    if (opts?.afterId) q.set('after_id', opts.afterId)
+    else if (opts?.beforeId) q.set('before_id', opts.beforeId)
     const data = await req<any>(
       `/api/v1/messages/conversations/${conversationId}?${q.toString()}`,
     )
@@ -1679,6 +1684,7 @@ rejectContactRequest: async (requestId: string) => {
     return {
       messages: list.map((m: any) => mapMessage(m, mid)),
       nextCursor: data.next_cursor || null,
+      newestId: data.newest_id || (list.length ? list[list.length - 1]?.id : null),
     }
   },
 

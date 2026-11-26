@@ -1,3 +1,4 @@
+import { loadCachedThreadMeta } from '../lib/appCache'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -21,6 +22,7 @@ import {
   MoreVertical,
 } from 'lucide-react'
 import { Avatar } from '../components/Avatar'
+import { AudioMessagePlayer, isAudioFile } from '../components/AudioMessagePlayer'
 import { ChatImageCropper } from '../components/ChatImageCropper'
 import { api } from '../api'
 import {
@@ -336,7 +338,11 @@ function GroupMessageRow({
               />
             </div>
           ) : null}
-          {m.file?.url && !m.deleted ? (
+          {m.file?.url && !m.deleted && isAudioFile(m.file) ? (
+            <div className="mb-1">
+              <AudioMessagePlayer src={mediaUrl(m.file.url)} name={m.file.name} mine={mine} />
+            </div>
+          ) : m.file?.url && !m.deleted ? (
             <a
               href={mediaUrl(m.file.url)}
               download={m.file.name || 'attachment'}
@@ -518,15 +524,33 @@ export function GroupChat({
       setLoading(true)
       try {
         const cached = getCachedMessages(conversationId)
-        if (cached?.length && !cancelled) {
-          setMsgs(cached.map((m: any) => mapApiMsg(m, myId)))
-        }
-        const { messages } = await api.messages(conversationId)
+        if (cached?.length) setMsgs(cached)
+        let tipId: string | null = null
+        try {
+          const meta = await loadCachedThreadMeta<any>(conversationId)
+          const tip = meta.tipId || (cached?.length ? String(cached[cached.length - 1]?.id || '') : '')
+          if (tip && !String(tip).startsWith('local-')) tipId = tip
+        } catch { /* */ }
+        const { messages } = await api.messages(
+          conversationId,
+          tipId ? { limit: 50, afterId: tipId } : { limit: 50 },
+        )
         if (cancelled) return
         const mapped = (messages || []).map((m: any) => mapApiMsg(m, myId))
-        setMsgs(mapped)
-        await applyThreadMessages(conversationId, messages || [], 'replace')
-        void mergeCachedMessages(conversationId, messages || [])
+        if (tipId && cached?.length) {
+          // Delta: append newer only; do not wipe the cached thread
+          setMsgs((prev) => {
+            const base = prev.length ? prev : cached.map((m: any) => mapApiMsg(m, myId))
+            const byId = new Map(base.map((m: any) => [m.id, m]))
+            for (const m of mapped) byId.set(m.id, m)
+            return Array.from(byId.values())
+          })
+          void mergeCachedMessages(conversationId, messages || [])
+        } else {
+          setMsgs(mapped)
+          await applyThreadMessages(conversationId, messages || [], 'replace')
+          void mergeCachedMessages(conversationId, messages || [])
+        }
       } catch {
         /* keep cache */
       } finally {
@@ -624,7 +648,10 @@ export function GroupChat({
       showToast?.('File is too large (max 25 MB)')
       return
     }
-    if (!f.type.startsWith('image/') && !f.type.startsWith('video/')) {
+    const isAudio =
+      f.type.startsWith('audio/') ||
+      /\.(mp3|wav|ogg|m4a|aac|flac|webm|opus|oga|weba)$/i.test(f.name || '')
+    if (!f.type.startsWith('image/') && !f.type.startsWith('video/') && !isAudio) {
       showToast?.('Use the paperclip button for documents')
       return
     }
@@ -641,7 +668,7 @@ export function GroupChat({
         return
       }
       setPendingImage(null)
-      setPendingFile({ name: f.name, url: data, mime: f.type || 'video/mp4', size: f.size })
+      setPendingFile({ name: f.name, url: data, mime: f.type || (isAudio ? 'audio/mpeg' : 'video/mp4'), size: f.size })
       showToast?.(`Attached ${f.name}`)
     } catch {
       showToast?.('Could not process media')
@@ -1234,7 +1261,7 @@ export function GroupChat({
             <input
               ref={fileRef}
               type="file"
-              accept="image/*,video/*,image/gif"
+              accept="image/*,video/*,image/gif,audio/*"
               hidden
               onChange={onPickImage}
             />
@@ -1249,7 +1276,7 @@ export function GroupChat({
             <input
               ref={docRef}
               type="file"
-              accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip,.csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,application/zip"
+              accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip,.csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,application/zip"
               hidden
               onChange={onPickDoc}
             />

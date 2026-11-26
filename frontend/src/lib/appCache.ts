@@ -173,49 +173,143 @@ export async function clearAllCaches() {
   await Promise.all(stores.map((s) => idbClear(s)))
 }
 
-// Chats (home list)
-export async function loadCachedChats<T>(): Promise<T[]> {
-  const row = await idbGet<{ id: string; items: T[] }>('chats', 'list')
-  return row?.items || []
+/** ISO-8601 UTC timestamp — industry-style “cached up to” watermark. */
+export function utcNowIso(): string {
+  return new Date().toISOString()
 }
 
-export async function saveCachedChats<T>(items: T[]) {
-  await idbPut('chats', { id: 'list', items, updatedAt: Date.now() })
+export type CacheListPayload<T> = {
+  items: T[]
+  /** Exclusive upper bound of what this cache covers (UTC). Next fetch starts after this. */
+  syncedAtUtc: string | null
+  updatedAt: number
+}
+
+async function loadList<T>(store: StoreName): Promise<CacheListPayload<T>> {
+  const row = await idbGet<{ id: string; items?: T[]; syncedAtUtc?: string; updatedAt?: number }>(store, 'list')
+  return {
+    items: (row?.items as T[]) || [],
+    syncedAtUtc: row?.syncedAtUtc || null,
+    updatedAt: row?.updatedAt || 0,
+  }
+}
+
+async function saveList<T>(store: StoreName, items: T[], syncedAtUtc?: string | null) {
+  const at = syncedAtUtc || utcNowIso()
+  await idbPut(store, {
+    id: 'list',
+    items,
+    syncedAtUtc: at,
+    updatedAt: Date.now(),
+  })
+}
+
+// Chats (home list)
+export async function loadCachedChats<T>(): Promise<T[]> {
+  return (await loadList<T>('chats')).items
+}
+
+export async function loadCachedChatsMeta<T>(): Promise<CacheListPayload<T>> {
+  return loadList<T>('chats')
+}
+
+export async function saveCachedChats<T>(items: T[], syncedAtUtc?: string | null) {
+  await saveList('chats', items, syncedAtUtc)
 }
 
 // Groups (same stale-while-revalidate pattern as chats)
 export async function loadCachedGroups<T>(): Promise<T[]> {
-  const row = await idbGet<{ id: string; items: T[] }>('groups', 'list')
-  return row?.items || []
+  return (await loadList<T>('groups')).items
 }
 
-export async function saveCachedGroups<T>(items: T[]) {
-  await idbPut('groups', { id: 'list', items, updatedAt: Date.now() })
+export async function loadCachedGroupsMeta<T>(): Promise<CacheListPayload<T>> {
+  return loadList<T>('groups')
+}
+
+export async function saveCachedGroups<T>(items: T[], syncedAtUtc?: string | null) {
+  await saveList('groups', items, syncedAtUtc)
 }
 
 // Contacts
 export async function loadCachedContacts<T>(): Promise<T[]> {
-  const row = await idbGet<{ id: string; items: T[] }>('contacts', 'list')
-  return row?.items || []
+  return (await loadList<T>('contacts')).items
 }
 
-export async function saveCachedContacts<T>(items: T[]) {
-  await idbPut('contacts', { id: 'list', items, updatedAt: Date.now() })
+export async function loadCachedContactsMeta<T>(): Promise<CacheListPayload<T>> {
+  return loadList<T>('contacts')
 }
 
-// Messages per conversation (last N)
+export async function saveCachedContacts<T>(items: T[], syncedAtUtc?: string | null) {
+  await saveList('contacts', items, syncedAtUtc)
+}
+
+// Messages per conversation (last N) + tip watermark for delta sync
+export type ThreadCachePayload<T> = {
+  items: T[]
+  /** Newest message id present in cache — pass as after_id for delta fetch. */
+  tipId: string | null
+  /** UTC time this thread was last fully synced. */
+  syncedAtUtc: string | null
+}
+
 export async function loadCachedThread<T>(conversationId: string): Promise<T[] | null> {
   if (!conversationId) return null
   const row = await idbGet<{ id: string; items: T[] }>('messages', conversationId)
   return row?.items ?? null
 }
 
-export async function saveCachedThread<T>(conversationId: string, items: T[]) {
+export async function loadCachedThreadMeta<T>(conversationId: string): Promise<ThreadCachePayload<T>> {
+  if (!conversationId) return { items: [], tipId: null, syncedAtUtc: null }
+  const row = await idbGet<{
+    id: string
+    items?: T[]
+    tipId?: string
+    syncedAtUtc?: string
+  }>('messages', conversationId)
+  const items = (row?.items as T[]) || []
+  const tipId =
+    row?.tipId ||
+    (items.length ? String((items[items.length - 1] as { id?: string })?.id || '') || null : null)
+  return {
+    items,
+    tipId: tipId || null,
+    syncedAtUtc: row?.syncedAtUtc || null,
+  }
+}
+
+export async function saveCachedThread<T extends { id?: string }>(
+  conversationId: string,
+  items: T[],
+  opts?: { tipId?: string | null; syncedAtUtc?: string | null },
+) {
   if (!conversationId) return
   // Keep last 80 for reopen speed
+  const trimmed = items.slice(-80)
+  const tipId =
+    opts?.tipId ||
+    (trimmed.length ? String(trimmed[trimmed.length - 1]?.id || '') || null : null)
   await idbPut('messages', {
     id: conversationId,
-    items: items.slice(-80),
+    items: trimmed,
+    tipId,
+    syncedAtUtc: opts?.syncedAtUtc || utcNowIso(),
+    updatedAt: Date.now(),
+  })
+}
+
+/**
+ * Resource-level sync watermark (e.g. chats / contacts / statuses).
+ * Used so a re-login for the same user can skip a full refetch when possible.
+ */
+export async function getResourceSyncedAt(resource: string): Promise<string | null> {
+  const row = await idbGet<{ id: string; syncedAtUtc?: string }>('meta', `sync:${resource}`)
+  return row?.syncedAtUtc || null
+}
+
+export async function setResourceSyncedAt(resource: string, syncedAtUtc?: string | null) {
+  await idbPut('meta', {
+    id: `sync:${resource}`,
+    syncedAtUtc: syncedAtUtc || utcNowIso(),
     updatedAt: Date.now(),
   })
 }
@@ -228,12 +322,11 @@ export async function removeCachedThread(conversationId: string) {
 
 // Statuses
 export async function loadCachedStatuses<T>(): Promise<T[]> {
-  const row = await idbGet<{ id: string; items: T[] }>('statuses', 'list')
-  return row?.items || []
+  return (await loadList<T>('statuses')).items
 }
 
-export async function saveCachedStatuses<T>(items: T[]) {
-  await idbPut('statuses', { id: 'list', items, updatedAt: Date.now() })
+export async function saveCachedStatuses<T>(items: T[], syncedAtUtc?: string | null) {
+  await saveList('statuses', items, syncedAtUtc)
 }
 
 // Notifications

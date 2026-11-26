@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent, type 
 import { AnimatePresence, motion } from 'framer-motion'
 import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, Paperclip, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download, Gamepad2, Reply, Trash2, Pencil } from 'lucide-react'
 import { Avatar, VerifiedCheck } from '../components/Avatar'
+import { AudioMessagePlayer, isAudioFile } from '../components/AudioMessagePlayer'
 import { NotesBoard } from '../components/NotesBoard'
 import { ChatImageCropper } from '../components/ChatImageCropper'
 import { TicTacToe } from '../components/TicTacToe'
@@ -31,7 +32,7 @@ import {
   hydrateThread,
 } from '../lib/messageStore'
 import { warmPhoto } from '../lib/photoCache'
-import { putOutbox, removeOutbox } from '../lib/appCache'
+import { putOutbox, removeOutbox, loadCachedThreadMeta } from '../lib/appCache'
 import { API_ORIGIN } from '../config'
 import { linkifyText } from '../lib/linkify'
 import { copyText } from '../lib/clipboard'
@@ -454,7 +455,16 @@ const MessageBubble = memo(function MessageBubble({
             />
           </button>
         )}
-        {m.file && m.file.url && (
+        {m.file && m.file.url && isAudioFile(m.file) && (
+          <div className={`mt-1 ${mine ? '' : ''}`}>
+            <AudioMessagePlayer
+              src={mediaUrl(m.file.url)}
+              name={m.file.name}
+              mine={mine}
+            />
+          </div>
+        )}
+        {m.file && m.file.url && !isAudioFile(m.file) && (
           <a
             href={mediaUrl(m.file.url)}
             download={m.file.name || 'attachment'}
@@ -851,9 +861,25 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         setMsgs((prev) => (prev.length ? prev : cached))
         if (!silent) setLoading(false)
       }
-      const { messages, nextCursor } = await api.messages(cid, { limit: 50 })
-      setThreadCursor(cid, nextCursor || (messages.length ? messages[0]?.id : null))
-      setHasMoreOlder(!!nextCursor || messages.length >= 50)
+      // Delta sync: if we already have this thread for this user, only fetch
+      // messages newer than the cached tip (after_id). Full page when cold.
+      let tipId: string | null = null
+      try {
+        const meta = await loadCachedThreadMeta<any>(cid)
+        const tip = meta.tipId || (cached?.length ? String(cached[cached.length - 1]?.id || '') : '')
+        if (tip && !String(tip).startsWith('local-')) tipId = tip
+      } catch {
+        /* cold cache */
+      }
+      const { messages, nextCursor } = await api.messages(
+        cid,
+        tipId ? { limit: 50, afterId: tipId } : { limit: 50 },
+      )
+      // When delta-syncing, keep older-cursor from previous session if any
+      if (!tipId) {
+        setThreadCursor(cid, nextCursor || (messages.length ? messages[0]?.id : null))
+        setHasMoreOlder(!!nextCursor || messages.length >= 50)
+      }
       // Incoming messages we just pulled: ack delivered before/while painting (no await)
       for (const m of messages) {
         const mine = m.mine ?? m.from === me?.id
@@ -881,6 +907,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
               edited: !!(prior as any).edited || !!(sm as any).edited,
               text: sm.text || prior.text,
               image: sm.image ?? prior.image,
+              file: (sm as any).file ?? (prior as any).file,
               timeLabel: sm.timeLabel || prior.timeLabel,
               replyToId: sm.replyToId || prior.replyToId,
               replyToText: sm.replyToText || prior.replyToText,
@@ -1822,8 +1849,11 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       showToast('File is too large (max 25 MB)')
       return
     }
-    // Only photos / videos / GIFs on this button
-    if (!f.type.startsWith('image/') && !f.type.startsWith('video/')) {
+    // Photos / videos / GIFs / audio on this button
+    const isAudio =
+      f.type.startsWith('audio/') ||
+      /\.(mp3|wav|ogg|m4a|aac|flac|webm|opus|oga|weba)$/i.test(f.name || '')
+    if (!f.type.startsWith('image/') && !f.type.startsWith('video/') && !isAudio) {
       showToast('Use the paperclip button for documents')
       return
     }
@@ -1841,9 +1871,14 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         setPendingFile(null)
         return
       }
-      // Video: attach as file for now (no in-chat player yet)
+      // Audio or video: attach as file (audio renders as in-chat player)
       setPendingImage(null)
-      setPendingFile({ name: f.name, url: data, mime: f.type || 'video/mp4', size: f.size })
+      setPendingFile({
+        name: f.name,
+        url: data,
+        mime: f.type || (isAudio ? 'audio/mpeg' : 'video/mp4'),
+        size: f.size,
+      })
       showToast(`Attached ${f.name}`)
     } catch {
       showToast('Could not process media')
@@ -1863,6 +1898,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       showToast('Use the photo button for images and videos')
       return
     }
+    // audio/* is allowed here too — renders as in-chat player
     try {
       const data = await fileToDataUrl(f)
       setPendingImage(null)
@@ -3626,7 +3662,7 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
               <input
                 ref={fileRef}
                 type="file"
-                accept="image/*,video/*,image/gif"
+                accept="image/*,video/*,image/gif,audio/*"
                 hidden
                 onChange={onPickImage}
               />
@@ -3641,7 +3677,7 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
               <input
                 ref={docRef}
                 type="file"
-                accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip,.csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,application/zip"
+                accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac,.flac,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip,.csv,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain,application/zip"
                 hidden
                 onChange={onPickDoc}
               />

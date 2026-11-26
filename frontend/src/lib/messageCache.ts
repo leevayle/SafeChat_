@@ -74,7 +74,11 @@ export async function setCachedMessages(
     if (oldest === undefined) break
     mem.delete(oldest)
   }
-  await saveCachedThread(conversationId, trimmed)
+  const tipId = trimmed.length ? String(trimmed[trimmed.length - 1]?.id || '') || null : null
+  await saveCachedThread(conversationId, trimmed, {
+    tipId,
+    syncedAtUtc: new Date().toISOString(),
+  })
 }
 
 /** Merge a live or optimistic message without replacing an unloaded disk cache. */

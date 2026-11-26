@@ -41,10 +41,12 @@ async def get_messages(
     conversation_id: str,
     limit: int = Query(50, ge=1, le=100),
     before_id: Optional[str] = None,
+    after_id: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
+    """Page messages. before_id = older history; after_id = only newer than cached tip."""
     data = await MessagingService.get_messages(
-        conversation_id, user["id"], limit, before_id
+        conversation_id, user["id"], limit, before_id, after_id=after_id
     )
     return success_response("Messages", data)
 
