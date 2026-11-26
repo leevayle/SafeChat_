@@ -291,6 +291,7 @@ async def change_my_username(
         )
     return success_response("Username updated", {"username": new_username})
 
+
 @router.post("/me/chat-lock")
 async def set_chat_lock_pin(
     body: ChatLockPinBody,
@@ -505,20 +506,28 @@ async def update_notifications(
 
 @router.get("/me/sessions")
 async def list_sessions(user: dict = Depends(get_current_user)):
+    """Live sessions: at most one per device class (mobile / tablet / desktop)."""
+    from app.services.session_policy import LABELS, session_class
+
     db = get_database()
     cursor = db.sessions.find(
         {"user_id": user["id"], "revoked": False}
     ).sort("created_at", -1)
     sessions = []
     async for s in cursor:
+        kind = session_class(s)
         sessions.append(
             {
                 "id": str(s["_id"]),
                 "device_id": s.get("device_id"),
                 "device_name": s.get("device_name"),
+                "device_type": kind,
+                "device_label": LABELS[kind],
+                "current": bool(user.get("sid")) and s.get("sid") == user.get("sid"),
                 "user_agent": s.get("user_agent"),
                 "ip_address": s.get("ip_address"),
                 "created_at": s["created_at"].isoformat() if s.get("created_at") else None,
+                "last_used_at": s["last_used_at"].isoformat() if s.get("last_used_at") else None,
                 "expires_at": s["expires_at"].isoformat() if s.get("expires_at") else None,
             }
         )
@@ -530,17 +539,28 @@ async def revoke_session(session_id: str, user: dict = Depends(get_current_user)
     db = get_database()
     if not ObjectId.is_valid(session_id):
         raise ValidationError("Invalid session id")
-    result = await db.sessions.update_one(
-        {"_id": ObjectId(session_id), "user_id": user["id"], "revoked": False},
+    target = await db.sessions.find_one(
+        {"_id": ObjectId(session_id), "user_id": user["id"], "revoked": False}
+    )
+    if not target:
+        raise NotFoundError("Session not found")
+    await db.sessions.update_one(
+        {"_id": target["_id"], "revoked": False},
         {
             "$set": {
                 "revoked": True,
                 "revoked_at": datetime.now(timezone.utc),
+                "revoked_reason": "user_revoked",
             }
         },
     )
-    if result.matched_count == 0:
-        raise NotFoundError("Session not found")
+    if target.get("sid"):  # drop that device's live socket immediately
+        try:
+            from app.websocket.manager import manager
+
+            await manager.close_sessions(user["id"], {target["sid"]})
+        except Exception:
+            pass
     return success_response("Session revoked")
 
 

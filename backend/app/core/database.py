@@ -62,6 +62,7 @@ async def create_indexes() -> None:
     # sessions
     await database.sessions.create_index("user_id")
     await database.sessions.create_index("token_hash", unique=True)
+    await database.sessions.create_index("sid")
     await database.sessions.create_index("expires_at", expireAfterSeconds=0)
     await database.sessions.create_index([("user_id", 1), ("revoked", 1)])
 

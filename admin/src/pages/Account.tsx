@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { AtSign, Check, Copy, Eye, EyeOff, KeyRound, LoaderCircle, LogOut, Monitor, Moon, Pencil, Smartphone, Sun, TriangleAlert, X } from 'lucide-react'
+import { AtSign, Check, Copy, Eye, EyeOff, KeyRound, LoaderCircle, LogOut, Monitor, Moon, Pencil, Smartphone, Sun, Tablet, TriangleAlert, X } from 'lucide-react'
 import { api, del, forgetSession, patch, post, type Admin } from '../api'
 import { useTheme } from '../theme'
-import { ErrorBox, Loading, Modal, PageHead, Pill, ago, fmtDate, useFetch, useToast } from '../ui'
+import { Busy, ErrorBox, Modal, PageHead, Pill, Sk, ago, fmtDate, useFetch, useToast } from '../ui'
 
 type Profile = { id: string; username: string; display_name?: string; email?: string; phone_number?: string; account_role?: string; created_at?: string; subscription_plan?: string }
-type Session = { id: string; device_name?: string; user_agent?: string; ip_address?: string; created_at?: string; expires_at?: string }
+type Session = { id: string; device_name?: string; device_type?: 'mobile' | 'tablet' | 'desktop'; device_label?: string; current?: boolean; user_agent?: string; ip_address?: string; created_at?: string; last_used_at?: string; expires_at?: string }
 type Props = { admin: Admin; onAdmin: (a: Admin) => void; onSignedOut: (notice?: string) => void }
 
 const Section = ({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) => (
@@ -53,9 +53,10 @@ export function AccountPage({ admin, onAdmin, onSignedOut }: Props) {
     <>
       <PageHead eyebrow="YOU" title="My account" sub="Manage your profile, sign-in security and devices." />
       {me.error && <ErrorBox text={me.error} retry={me.reload} />}
-      {!p ? (me.loading ? <Loading /> : null) : (
+      {(
         <div className="grid acct">
           <Section title="Profile">
+            {!p ? (me.loading ? <ProfileSkeleton /> : null) : (<div className="reveal">
             <div className="row" style={{ marginBottom: 16 }}>
               <span className="avatar big">{(p.display_name || p.username)[0]?.toUpperCase()}</span>
               <div><b style={{ fontSize: 18 }}>{p.display_name || p.username}</b><div className="row" style={{ gap: 8 }}><small>@{p.username}</small><Pill value="approved" text={sup ? 'superadmin' : 'admin'} /></div></div>
@@ -68,28 +69,33 @@ export function AccountPage({ admin, onAdmin, onSignedOut }: Props) {
               <KV k="Email" v={p.email} /><KV k="Phone" v={p.phone_number} /><KV k="Member since" v={fmtDate(p.created_at).split(',')[0]} />
               <div className="kv"><span>Account ID</span><b className="clip" style={{ maxWidth: 190 }}>{p.id}</b><button className="icon-btn" aria-label="Copy account ID" onClick={() => { void navigator.clipboard?.writeText(p.id); toast('Copied') }}><Copy size={16} /></button></div>
             </div>
+            </div>)}
           </Section>
 
           <Section title="Password" sub="Changing it signs you out of every device, including this one.">
             <PasswordForm onDone={() => ended('Password changed. Sign in with your new password.')} />
           </Section>
 
-          <Section title="Active sessions" sub="Devices currently signed in to your account.">
+          <Section title="Active sessions" sub="You can be signed in on one phone, one tablet and one computer at a time. Signing in on another device of the same kind signs the older one out.">
             {sessions.error && <ErrorBox text={sessions.error} retry={sessions.reload} />}
-            {sessions.loading && !sessions.data ? <Loading /> : (
-              <div className="sessions">
+            {sessions.loading ? <SessionsSkeleton /> : (
+              <div className="sessions reveal">
                 {(sessions.data ?? []).map((s) => {
-                  const mobile = /mobile|android|iphone/i.test(s.user_agent ?? '')
+                  const kind = s.device_type ?? (/mobile|android|iphone/i.test(s.user_agent ?? '') ? 'mobile' : 'desktop')
+                  const Icon = kind === 'mobile' ? Smartphone : kind === 'tablet' ? Tablet : Monitor
+                  const title = { mobile: 'Phone', tablet: 'Tablet', desktop: 'Computer' }[kind]
                   return (
                     <div key={s.id} className="session">
-                      <span className="chip-icon">{mobile ? <Smartphone size={18} /> : <Monitor size={18} />}</span>
-                      <div style={{ minWidth: 0 }}><b>{s.device_name || 'Unknown device'}</b><small className="sub clip">{s.ip_address || 'IP unknown'} · signed in {ago(s.created_at)}</small></div>
+                      <span className="chip-icon"><Icon size={18} /></span>
+                      <div style={{ minWidth: 0 }}>
+                        <div className="row" style={{ gap: 8 }}><b>{title}</b>{s.current && <Pill value="approved" text="This device" />}</div>
+                        <small className="sub clip">{s.device_name || 'Unknown device'} · {s.ip_address || 'IP unknown'} · signed in {ago(s.created_at)}</small></div>
                       <button className="btn sm ghost" onClick={() => void revoke(s)}>Sign out</button>
                     </div>)
                 })}
                 {!sessions.data?.length && <small>No other active sessions.</small>}
               </div>)}
-            <small className="sub">Signing out the session you’re using will sign you out here too.</small>
+            <small className="sub">Signing out “This device” signs you out here too.</small>
             <div className="row end"><button className="btn" onClick={() => setDialog('signout-all')}><LogOut size={16} />Sign out of all devices</button></div>
           </Section>
 
@@ -211,3 +217,28 @@ function PasswordConfirm({ title, text, confirm, danger, onClose, onConfirm }: {
     </Modal>
   )
 }
+
+/** Wireframe of the Profile card: avatar + name, display-name field, 5 key/value rows. */
+function ProfileSkeleton() {
+  return (
+    <Busy label="Loading profile">
+      <div className="row" style={{ marginBottom: 16 }}>
+        <Sk w={56} h={56} r={18} className="flex-none" />
+        <div style={{ display: 'grid', gap: 8 }}><Sk w={140} h={18} /><Sk w={110} h={12} /></div>
+      </div>
+      <div style={{ display: 'grid', gap: 6 }}><Sk w={92} h={13} /><div className="row"><Sk h={42} r={12} /><Sk w={92} h={40} r={12} className="flex-none" /></div></div>
+      <div className="kvs">{[96, 150, 120, 90, 170].map((w, i) => (
+        <div key={i} className="kv"><Sk w={80} h={12} className="flex-none" /><Sk w={w} h={14} /></div>))}</div>
+    </Busy>
+  )
+}
+const SessionsSkeleton = () => (
+  <Busy label="Loading sessions" className="sessions">
+    {[0, 1].map((i) => (
+      <div key={i} className="session">
+        <Sk w={36} h={36} r={10} className="flex-none" />
+        <div style={{ display: 'grid', gap: 7, flex: 1 }}><Sk w={86} h={14} /><Sk w={i ? 190 : 230} h={10} /></div>
+        <Sk w={72} h={32} r={10} className="flex-none" />
+      </div>))}
+  </Busy>
+)

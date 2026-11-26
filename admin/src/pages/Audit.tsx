@@ -5,7 +5,7 @@ import { dayEnd, dayStart, presetRange, ymd, type Preset } from '../dates'
 import type { Col, Spec } from '../export'
 import { ExportBar } from '../ExportBar'
 import type { AuditRow } from '../types'
-import { Empty, ErrorBox, Loading, PageHead, Pager, Pill, Seg, fmtDate, label } from '../ui'
+import { Empty, ErrorBox, PageHead, Pager, Pill, Seg, SkPager, SkTable, fmtDate, label, type SkCol } from '../ui'
 
 const PAGE = 50
 const cols: Col<AuditRow>[] = [
@@ -17,6 +17,7 @@ const cols: Col<AuditRow>[] = [
   { header: 'Resource ID', value: (a) => a.resource_id },
   { header: 'Details', value: (a) => (a.metadata && Object.keys(a.metadata).length ? JSON.stringify(a.metadata) : '') },
 ]
+const SK: SkCol[] = [{ h: 'When', kind: 'text' }, { h: 'Actor', kind: 'two' }, { h: 'Action', kind: 'pill' }, { h: 'Resource', kind: 'two' }, { kind: 'btns' }]
 const OPTIONS: { id: Preset; label: string }[] = [
   { id: 'today', label: 'Today' }, { id: 'week', label: 'This week' }, { id: '7d', label: 'Last 7 days' },
   { id: 'month', label: 'This month' }, { id: 'latest', label: 'Latest 50' }, { id: 'custom', label: 'Custom' },
@@ -93,7 +94,7 @@ export function AuditPage({ admin }: { admin: Admin }) {
       {error && <ErrorBox text={error} retry={() => void load()} />}
       {truncated && <div className="callout"><CalendarRange size={20} /><div><b>Showing the newest {rows.length.toLocaleString()} entries in this range</b><p>Narrow the dates to see older entries.</p></div></div>}
       <div className="card">
-        {loading ? <Loading /> : !rows.length ? <Empty text={preset === 'latest' ? 'No audit entries yet.' : 'No activity in this date range.'} /> : (
+        {loading ? <SkTable cols={SK} rows={8} /> : !rows.length ? <Empty text={preset === 'latest' ? 'No audit entries yet.' : 'No activity in this date range.'} /> : (
           <div className="table-wrap"><table>
             <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Resource</th><th /></tr></thead>
             <tbody>{slice.map((a) => (
@@ -104,7 +105,7 @@ export function AuditPage({ admin }: { admin: Admin }) {
                 <td><button className="btn sm ghost" onClick={() => setOpen(open === a.id ? null : a.id)}>{open === a.id ? 'Hide' : 'Details'}</button></td></tr>))}</tbody>
           </table></div>
         )}
-        {!loading && rows.length > 0 && <Pager page={page} total={rows.length} size={PAGE} onPage={setPage} />}
+        {loading ? <SkPager /> : rows.length > 0 && <Pager page={page} total={rows.length} size={PAGE} onPage={setPage} />}
       </div>
     </>
   )

@@ -4,11 +4,16 @@ import { fetchAll, patch, post, qs, type Admin, type Paged } from '../api'
 import type { Col, Spec } from '../export'
 import { ExportBar } from '../ExportBar'
 import type { Payment, Report, RoleRequest } from '../types'
-import { ActionDialog, Empty, ErrorBox, Loading, PageHead, Pager, Pill, Seg, ago, fmtDate, label, num, useFetch, useToast } from '../ui'
+import { ActionDialog, Empty, ErrorBox, PageHead, Pager, Pill, Seg, SkPager, SkTable, ago, fmtDate, label, num, useFetch, useToast, type SkCol } from '../ui'
 
-function Shell<T>({ d, e, l, r, empty, children }: { d: Paged<T> | null; e: string; l: boolean; r: () => void; empty: string; children: (items: T[]) => React.ReactNode }) {
-  return <>{e && <ErrorBox text={e} retry={r} />}<div className="card">{l && !d ? <Loading /> : !d?.items.length ? <Empty text={empty} /> : <div className="table-wrap">{children(d.items)}</div>}</div></>
+function Shell<T>({ d, e, l, r, empty, sk, children }: { d: Paged<T> | null; e: string; l: boolean; r: () => void; empty: string; sk: SkCol[]; children: (items: T[]) => React.ReactNode }) {
+  return <>{e && <ErrorBox text={e} retry={r} />}<div className="card">{l ? <SkTable cols={sk} /> : !d?.items.length ? <Empty text={empty} /> : <div className="table-wrap">{children(d.items)}</div>}</div></>
 }
+const REPORT_SK: SkCol[] = [{ h: 'Target', kind: 'two' }, { h: 'Reason', kind: 'text' }, { h: 'Status', kind: 'pill' }, { h: 'Reported', kind: 'short' }, { kind: 'btns' }]
+const PAYMENT_SK: SkCol[] = [{ h: 'User', kind: 'two' }, { h: 'Plan', kind: 'short' }, { h: 'Amount', kind: 'short' }, { h: 'Provider', kind: 'short' }, { h: 'Status', kind: 'pill' }, { h: 'Created', kind: 'text' }, { h: 'Paid', kind: 'text' }]
+const ACCESS_SK: SkCol[] = [{ h: 'User', kind: 'two' }, { h: 'Requested by', kind: 'short' }, { h: 'Reason', kind: 'two' }, { h: 'Status', kind: 'pill' }, { h: 'Created', kind: 'short' }, { kind: 'btns' }]
+const PagerCard = ({ loading, data, page, onPage }: { loading: boolean; data: { total: number; page_size: number } | null; page: number; onPage: (p: number) => void }) =>
+  loading || data ? <div className="card" style={{ marginTop: 12 }}>{loading ? <SkPager /> : <Pager page={page} total={data!.total} size={data!.page_size} onPage={onPage} />}</div> : null
 
 /* ---------- Reports ---------- */
 export function ReportsPage() {
@@ -20,14 +25,14 @@ export function ReportsPage() {
     <>
       <PageHead eyebrow="MODERATION" title="Reports" sub="Content and account reports submitted by users." />
       <div className="toolbar"><Seg value={f} onChange={(v) => { setF(v); setPage(1) }} options={[{ id: '', label: 'All' }, { id: 'open', label: 'Open' }, { id: 'under_review', label: 'Under review' }, { id: 'resolved', label: 'Resolved' }, { id: 'dismissed', label: 'Dismissed' }]} /></div>
-      <Shell d={data} e={error} l={loading} r={reload} empty="No reports in this view.">{(items) => (
+      <Shell d={data} e={error} l={loading} r={reload} sk={REPORT_SK} empty="No reports in this view.">{(items) => (
         <table><thead><tr><th>Target</th><th>Reason</th><th>Status</th><th>Reported</th><th /></tr></thead><tbody>{items.map((r) => (
           <tr key={r.id}><td><b>{label(r.target_type)}</b><small className="sub">{r.target_id}</small></td><td><span className="clip" style={{ display: 'block' }}>{r.reason || '—'}</span></td>
             <td><Pill value={r.status} /></td><td>{ago(r.created_at)}</td>
             <td><div className="row end">{r.status !== 'under_review' && r.status !== 'resolved' && r.status !== 'dismissed' && <button className="btn sm" onClick={() => setAct({ r, to: 'under_review' })}>Review</button>}
               {r.status !== 'resolved' && <button className="btn sm primary" onClick={() => setAct({ r, to: 'resolved' })}>Resolve</button>}
               {r.status !== 'dismissed' && <button className="btn sm ghost" onClick={() => setAct({ r, to: 'dismissed' })}>Dismiss</button>}</div></td></tr>))}</tbody></table>)}</Shell>
-      {data && <div className="card" style={{ marginTop: 12 }}><Pager page={page} total={data.total} size={data.page_size} onPage={setPage} /></div>}
+      <PagerCard loading={loading} data={data} page={page} onPage={setPage} />
       {act && <ActionDialog title={`${label(act.to)} report`} confirm="Confirm" intro="Add a short note for the audit trail." onClose={() => setAct(null)}
         onSubmit={async (reason) => { await patch(`/admin/reports/${act.r.id}`, { status: act.to, reason }); toast('Report updated.'); void reload() }} />}
     </>
@@ -51,11 +56,11 @@ export function PaymentsPage() {
         return { title: 'SafeChat payments', subtitle: `${f ? `Status: ${f} · ` : ''}${rows.length.toLocaleString()} payments${truncated ? ' (newest only)' : ''} · ${new Date().toLocaleString()}`, filename: `safechat-payments${f ? '_' + f : ''}`, cols: payCols, rows }
       }} /></div>} />
       <div className="toolbar"><Seg value={f} onChange={(v) => { setF(v); setPage(1) }} options={[{ id: '', label: 'All' }, { id: 'paid', label: 'Paid' }, { id: 'pending', label: 'Pending' }, { id: 'failed', label: 'Failed' }]} /></div>
-      <Shell d={data} e={error} l={loading} r={reload} empty="No payments yet.">{(items) => (
+      <Shell d={data} e={error} l={loading} r={reload} sk={PAYMENT_SK} empty="No payments yet.">{(items) => (
         <table><thead><tr><th>User</th><th>Plan</th><th>Amount</th><th>Provider</th><th>Status</th><th>Created</th><th>Paid</th></tr></thead><tbody>{items.map((p) => (
           <tr key={p.id}><td><b>{p.display_name || p.username || '—'}</b><small className="sub">@{p.username}</small></td><td style={{ textTransform: 'capitalize' }}>{p.plan}</td>
             <td><b>{num(p.amount)}</b> <small>{p.currency}</small></td><td style={{ textTransform: 'capitalize' }}>{p.provider}</td><td><Pill value={p.status} /></td><td>{fmtDate(p.created_at)}</td><td>{p.paid_at ? fmtDate(p.paid_at) : '—'}</td></tr>))}</tbody></table>)}</Shell>
-      {data && <div className="card" style={{ marginTop: 12 }}><Pager page={page} total={data.total} size={data.page_size} onPage={setPage} /></div>}
+      <PagerCard loading={loading} data={data} page={page} onPage={setPage} />
     </>
   )
 }
@@ -73,7 +78,7 @@ export function AccessPage({ admin }: { admin: Admin }) {
       <div className="callout"><ShieldCheck size={20} /><div><b>Two-person control</b><p>Admins can request access for a user; only a superadmin can approve or reject it. Every decision is audited.</p></div></div>
       <div className="toolbar"><Seg value={f} onChange={setF} options={[{ id: 'pending', label: 'Pending' }, { id: 'approved', label: 'Approved' }, { id: 'rejected', label: 'Rejected' }, { id: '', label: 'All' }]} /></div>
       {error && <ErrorBox text={error} retry={reload} />}
-      <div className="card">{loading && !data ? <Loading /> : !data?.length ? <Empty text="No requests in this view." /> : (
+      <div className="card">{loading ? <SkTable cols={ACCESS_SK} rows={4} /> : !data?.length ? <Empty text="No requests in this view." /> : (
         <div className="table-wrap"><table><thead><tr><th>User</th><th>Requested by</th><th>Reason</th><th>Status</th><th>Created</th><th /></tr></thead><tbody>{data.map((r) => (
           <tr key={r.id}><td><b>@{r.target_username}</b><small className="sub">{(r.target_role ?? '').toLowerCase()}</small></td><td>@{r.requester_username}</td>
             <td><span className="clip" style={{ display: 'block' }}>{r.reason}</span>{r.decision_reason && <small className="sub">Decision: {r.decision_reason}</small>}</td>

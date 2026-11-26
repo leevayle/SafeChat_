@@ -1,4 +1,4 @@
-import { Component, createContext, useCallback, useContext, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
+import { Component, createContext, type CSSProperties, useCallback, useContext, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react'
 import { AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, Inbox, LoaderCircle, X } from 'lucide-react'
 import { api } from './api'
 
@@ -111,7 +111,6 @@ export function Seg<T extends string>({ value, onChange, options }: { value: T; 
 }
 
 export const Empty = ({ text }: { text: string }) => (<div className="empty"><Inbox size={26} /><p>{text}</p></div>)
-export const Loading = () => (<div className="empty"><LoaderCircle className="spin" size={22} /></div>)
 export const ErrorBox = ({ text, retry }: { text: string; retry?: () => void }) => (
   <div className="errbox"><AlertCircle size={18} /><span>{text}</span>{retry && <button className="btn ghost sm" onClick={retry}>Retry</button>}</div>
 )
@@ -191,3 +190,46 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { failed: 
       : this.props.children
   }
 }
+
+/* ---------- skeletons (shimmer placeholders that mirror the real layout) ---------- */
+type SkProps = { w?: number | string; h?: number | string; r?: number | string; className?: string; style?: CSSProperties }
+/** One shimmering block. Decorative, so hidden from screen readers. */
+export const Sk = ({ w = '100%', h = 14, r, className = '', style }: SkProps) => (
+  <span aria-hidden className={`sk ${className}`} style={{ width: w, height: h, ...(r !== undefined ? { borderRadius: r } : null), ...style }} />
+)
+/** Wraps a skeleton so assistive tech announces one "Loading…" instead of dozens of empty boxes. */
+export const Busy = ({ label = 'Loading', className, children }: { label?: string; className?: string; children: ReactNode }) => (
+  <div role="status" aria-busy="true" className={className}><span className="sr-only">{label}…</span>{children}</div>
+)
+/** Deterministic pseudo-random width so rows look natural but never jump between renders. */
+const pick = (seed: number, min: number, max: number) => min + ((seed * 37 + 11) % (max - min + 1))
+
+export type SkKind = 'user' | 'two' | 'text' | 'short' | 'pill' | 'pillsub' | 'btns' | 'icon'
+export type SkCol = { h?: string; kind: SkKind }
+function skCell(kind: SkKind, seed: number): ReactNode {
+  switch (kind) {
+    case 'user': return <div className="cell-user"><Sk w={38} h={38} r={12} className="flex-none" /><div style={{ display: 'grid', gap: 6, flex: 1 }}><Sk w={pick(seed, 90, 150)} h={13} /><Sk w={pick(seed + 3, 60, 100)} h={10} /></div></div>
+    case 'two': return <div style={{ display: 'grid', gap: 6 }}><Sk w={pick(seed, 100, 190)} h={13} /><Sk w={pick(seed + 5, 70, 130)} h={10} /></div>
+    case 'text': return <Sk w={pick(seed, 110, 190)} h={13} />
+    case 'short': return <Sk w={pick(seed, 50, 90)} h={13} />
+    case 'pill': return <Sk w={pick(seed, 56, 86)} h={22} r={99} />
+    case 'pillsub': return <div style={{ display: 'grid', gap: 6 }}><Sk w={62} h={22} r={99} /><Sk w={pick(seed, 50, 80)} h={10} /></div>
+    case 'btns': return <div className="row end"><Sk w={64} h={32} r={10} /><Sk w={64} h={32} r={10} /></div>
+    case 'icon': return <Sk w={34} h={34} r={11} />
+  }
+}
+/** Table skeleton: real column headers stay visible, only the data cells shimmer. */
+export function SkTable({ cols, rows = 6 }: { cols: SkCol[]; rows?: number }) {
+  return (
+    <Busy label="Loading data" className="table-wrap sk-wrap">
+      <table>
+        <thead><tr>{cols.map((c, i) => <th key={i}>{c.h}</th>)}</tr></thead>
+        <tbody>{Array.from({ length: rows }, (_, r) => (
+          <tr key={r}>{cols.map((c, i) => <td key={i}>{skCell(c.kind, r * 7 + i * 3)}</td>)}</tr>))}</tbody>
+      </table>
+    </Busy>
+  )
+}
+export const SkPager = () => (
+  <div className="pager" aria-hidden><Sk w={92} h={12} /><div className="row" style={{ gap: 4 }}><Sk w={34} h={34} r={11} /><Sk w={34} h={34} r={11} /></div></div>
+)

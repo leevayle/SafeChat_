@@ -1,4 +1,6 @@
 /** Talks to the SafeChat FastAPI backend (/api/v1). Access token lives in memory; refresh uses the httpOnly cookie. */
+import { detectDeviceType } from './device'
+
 export type Envelope<T> = { success?: boolean; message?: string; data: T }
 export type Paged<T> = { items: T[]; total: number; page: number; page_size: number }
 export type Admin = { username: string; role: 'ADMIN' | 'SUPER_ADMIN'; display_name?: string }
@@ -74,7 +76,7 @@ function toAdmin(user: { username: string; display_name?: string; account_role?:
 
 export async function login(username: string, password: string): Promise<Admin> {
   const data = await post<{ access_token: string; user: { username: string; display_name?: string; account_role?: string } }>(
-    '/auth/login', { username, password, device_name: 'SafeChat Admin Portal' },
+    '/auth/login', { username, password, device_name: 'SafeChat Admin Portal', device_type: detectDeviceType() },
   )
   const admin = toAdmin(data.user) // throws for non-admins before the token is kept
   token = data.access_token

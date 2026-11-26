@@ -9,35 +9,6 @@ ISSUE FIXING TAB
 CLIENT SIDE
 -----------------
 
-
-
-1. Status to have posting time just below the name of the poster, where it says just now after posting, time should remain there in user's preferred time like 24hr or 12hr clock. Both on viewer's and poster's side.
-
-2. i need the premium purchase for me and for a friend (both to be disabled because for now they just work without payment i will configure the payment later for now if stk push is not sent actually, do not unlock premium) only admins can grant premium.
-
-3. Status views algorithm:
- I need it to go like this, a status view comes with all it's payload who viewed, did they like it and so on all we need in a status. So when it hits the status owner's side it has all we need including profile photo username and all those stuff. So, when a view registers; before we even update owner's view count cache the info we need to view it in viewer's list then update the view count, this will enable us to eliminate the waiting time as we fetch viewers. I want cached viewers, cache before we update anything. We should see viewers list the moment we load them not wait for fetching.
-
-
- ----------->>>> 
-
- 1. Sponsor a friend option in premium should always be there even when you have bought yours. where it says membership in setting below that block make another for sponsoring a friend, wired to the same backend. redesign the membership tab too to look more modern and intentional for now it's scattered messages. Do not use the ai dash.
-
- 2. optimistic ui in status the moment you click on it, clear the color to show viewed then reconcile with backend no viewing and the status still shows as unviewed.
-
- 3. Logout procedure when the user clicks on logout the menu that pulls up from the bottom (mobile screen) is enough to log them out do not load the second modal, also redesign the logging out screen to be more 'Safechatty :)' also when a session expires it should show logging you out screen as it logs them out.
- Also i need to understand when a user gets logged out how a session expires and such stuff that can get a user logged out i need to know all scenarios for this app.
-
- 4. The status like button seems to be obstructed by something if you click it it only responds if you click towards the top part for some reason, check and make sure it's well responsive.
-
- 5. swipe to reply on a status does not work only tap works i need them both to work.
-
- 6. Profile view; copy phone only works on desktop on mobile it's dead.
-
- bear in mind this code is used for both desktop and phones fix jyst that, do not break anything else, after you're done, check and make sure no ai dash, no ui erros and then zip and share with me.
-
--------------->>>>
-
 1. When you pick a friend in setting allow for changing the plan weekly should be pre selected though but user can tap another one.
 also the premium settings was fine i did not mean you redesign that one just the membership section, roll back premium section to what it was just the settings and a nice banner showing you you're in premium.
 
@@ -161,7 +132,6 @@ Group logs <userx joined> <user y changed privacy> these need to be there.
 ADMIN PORTAL
 ------------
 - Rd dot for notifying number of support inbox, reports and stuff like that.
-- Superadmin can revoke admin account to normal account, and can admit an admin to be a superadmin
 - 
 
 
@@ -187,5 +157,3 @@ ADMIN PORTAL
 ---------------
 DESIGN CHANGES
 ---------------
-- Design the chat ui make some safechatty outlines (thin ones) and repeated patterns
-- The whole ui for admin portal needs a fix

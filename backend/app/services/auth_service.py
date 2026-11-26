@@ -25,6 +25,12 @@ from app.core.exceptions import (
 from app.core.permissions import Role
 from app.models.user import AccountStatus, AccountRole
 from app.schemas.auth import RegisterRequest, LoginRequest
+from app.services.session_policy import (
+    classify_device,
+    enforce_session_limits,
+    ended_message,
+    session_class,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -257,23 +263,30 @@ class AuthService:
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
+        user_agent = request.headers.get("user-agent") if request else None
+        device_type = classify_device(user_agent, getattr(data, "device_type", None))
         access_token = create_access_token(
             subject=user_id,
             extra_claims={
                 "role": user.get("account_role", Role.USER.value),
                 "username": user["username"],
                 "auth_version": user.get("auth_version", 0),
+                "sid": session_id,
             },
         )
         refresh_token = create_refresh_token(subject=user_id, session_id=session_id)
 
         session_doc = {
+            "sid": session_id,
+            "device_type": device_type,
+            "last_used_at": now,
+            "revoked_reason": None,
             "user_id": user_id,
             "token_hash": hash_token(refresh_token),
             "auth_version": user.get("auth_version", 0),
             "device_id": data.device_id,
             "device_name": data.device_name,
-            "user_agent": request.headers.get("user-agent") if request else None,
+            "user_agent": user_agent,
             "ip_address": request.client.host if request and request.client else None,
             "created_at": now,
             "expires_at": expires_at,
@@ -281,6 +294,17 @@ class AuthService:
             "revoked_at": None,
         }
         await db.sessions.insert_one(session_doc)
+
+        # One live session per device class (mobile / tablet / desktop): the
+        # newest login wins and older ones on the same class are closed.
+        closed_sids = await enforce_session_limits(db, user_id, now)
+        if closed_sids:
+            try:  # kick the replaced device's live socket right away
+                from app.websocket.manager import manager
+
+                await manager.close_sessions(user_id, set(closed_sids))
+            except Exception:
+                logger.debug("could not close replaced sockets user=%s", user_id, exc_info=True)
 
         await db.users.update_one(
             {"_id": user["_id"]},
@@ -366,18 +390,9 @@ class AuthService:
             raise UnauthorizedError("Session not found or revoked")
 
         if session.get("revoked"):
-            # Short grace after explicit logout / password revoke only helps
-            # concurrent in-flight requests; still reject if fully revoked.
-            revoked_at = session.get("revoked_at")
-            if revoked_at is not None:
-                try:
-                    ra = revoked_at.replace(tzinfo=timezone.utc) if revoked_at.tzinfo is None else revoked_at
-                except Exception:
-                    ra = None
-                if ra is None or (now - ra).total_seconds() > 90:
-                    raise UnauthorizedError("Session not found or revoked")
-            else:
-                raise UnauthorizedError("Session not found or revoked")
+            # A closed session never comes back: no grace period and no
+            # "un-revoking" by refreshing (that let a kicked device revive itself).
+            raise UnauthorizedError(ended_message(session))
 
         exp = session.get("expires_at")
         if exp is not None:
@@ -398,11 +413,12 @@ class AuthService:
         if status not in (AccountStatus.ACTIVE.value, AccountStatus.BANNED.value):
             raise AccountRestrictedError("Account restricted", details={"status": status})
 
-        # Touch session; keep the same refresh token (no rotate race)
-        await db.sessions.update_one(
-            {"_id": session["_id"]},
-            {"$set": {"last_used_at": now, "revoked": False, "revoked_at": None}},
-        )
+        # Touch session; keep the same refresh token (no rotate race).
+        # Sessions created before device limits get their sid / class filled in.
+        touch = {"last_used_at": now, "sid": session_id}
+        if session.get("device_type") not in ("mobile", "tablet", "desktop"):
+            touch["device_type"] = session_class(session)
+        await db.sessions.update_one({"_id": session["_id"], "revoked": False}, {"$set": touch})
 
         new_access = create_access_token(
             subject=user_id,
@@ -410,6 +426,7 @@ class AuthService:
                 "role": user.get("account_role", Role.USER.value),
                 "username": user["username"],
                 "auth_version": user.get("auth_version", 0),
+                "sid": session_id,
             },
         )
         # Return the same refresh token so cookie and body stay in sync
@@ -426,7 +443,13 @@ class AuthService:
         token_h = hash_token(refresh_token)
         await db.sessions.update_one(
             {"token_hash": token_h},
-            {"$set": {"revoked": True, "revoked_at": datetime.now(timezone.utc)}},
+            {
+                "$set": {
+                    "revoked": True,
+                    "revoked_at": datetime.now(timezone.utc),
+                    "revoked_reason": "logout",
+                }
+            },
         )
 
     @staticmethod
@@ -455,6 +478,16 @@ class AuthService:
         # Active + banned allowed (banned = limited client). Others blocked.
         if status not in (AccountStatus.ACTIVE.value, AccountStatus.BANNED.value):
             raise AccountRestrictedError("Account restricted", details={"status": status})
+
+        # Tie the access token to its session so a closed session stops working
+        # at once (not when the 60-minute token expires). Tokens issued before
+        # this change carry no sid and stay valid until they expire.
+        sid = payload.get("sid")
+        if sid:
+            if not await db.sessions.find_one({"sid": sid, "user_id": user_id, "revoked": False}, {"_id": 1}):
+                ended = await db.sessions.find_one({"sid": sid, "user_id": user_id})
+                raise UnauthorizedError(ended_message(ended))
+        user["sid"] = sid
 
         user["id"] = str(user["_id"])
         user["ban_reason"] = user.get("ban_reason") or user.get("status_reason")

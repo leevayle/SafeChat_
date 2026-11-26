@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
-from app.core.security import decode_token
+from app.services.auth_service import AuthService
 from app.websocket.manager import manager, packet_msg, packet_rcpt
 
 logger = logging.getLogger(__name__)
@@ -33,17 +33,18 @@ async def websocket_endpoint(
     token: str = Query(...),
 ):
     user_id: str | None = None
+    sid: str | None = None
     try:
-        payload = decode_token(token)
-        user_id = str(payload.get("sub") or payload.get("user_id") or "")
-        if not user_id:
-            await websocket.close(code=4401)
-            return
+        # Same checks as the HTTP API: a closed session / password change /
+        # restricted account must not keep a live socket.
+        authed = await AuthService.get_user_from_access_token(token)
+        user_id = str(authed["id"])
+        sid = authed.get("sid")
     except Exception:
         await websocket.close(code=4401)
         return
 
-    was_offline = await manager.connect(user_id, websocket)
+    was_offline = await manager.connect(user_id, websocket, sid)
     await _touch_last_seen(user_id)
     # Only announce online when coming from a true offline state.
     # Reconnects within the grace window stay silently online for contacts.

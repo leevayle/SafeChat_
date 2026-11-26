@@ -3,7 +3,9 @@ import { Clock, Download, LoaderCircle, Play, Trash2 } from 'lucide-react'
 import { localDT } from '../dates'
 import { api, del, downloadBackup, post } from '../api'
 import type { BackupFile, BackupJob } from '../types'
-import { Empty, ErrorBox, Loading, Modal, PageHead, Pill, bytes, fmtDate, label, num, useFetch, useToast } from '../ui'
+import { Empty, ErrorBox, Modal, PageHead, Pill, Sk, SkTable, bytes, fmtDate, label, num, useFetch, useToast, type SkCol } from '../ui'
+
+const SK: SkCol[] = [{ h: 'File', kind: 'text' }, { h: 'Scope', kind: 'pill' }, { h: 'Documents', kind: 'short' }, { h: 'Size', kind: 'short' }, { h: 'Created', kind: 'text' }, { kind: 'btns' }]
 
 export function BackupsPage() {
   const scopes = useFetch<{ scopes: { id: string; label: string }[] }>('/admin/backups/scopes')
@@ -51,7 +53,7 @@ export function BackupsPage() {
         <h3>New backup</h3>
         <div className="row wrap" style={{ alignItems: 'flex-end' }}>
           <label className="field" style={{ flex: '1 1 200px' }}><span>What to include</span>
-            <select value={scope} onChange={(e) => setScope(e.target.value)}>{(scopes.data?.scopes ?? [{ id: 'full', label: 'Full' }]).map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label>
+            {scopes.loading ? <Sk h={42} r={12} /> : <select value={scope} onChange={(e) => setScope(e.target.value)}>{(scopes.data?.scopes ?? [{ id: 'full', label: 'Full' }]).map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select>}</label>
           <label className="field" style={{ flex: '1 1 260px' }}><span>Include data up to</span>
             <div className="row"><input type="datetime-local" value={until} max={localDT()} onChange={(e) => { setUntil(e.target.value); setTouched(true) }} />
               <button type="button" className="btn" title="Reset to the current date and time" onClick={() => { setUntil(localDT()); setTouched(false) }}><Clock size={15} />Now</button></div></label>
@@ -61,7 +63,7 @@ export function BackupsPage() {
       </section>
       {list.error && <ErrorBox text={list.error} retry={list.reload} />}
       <div className="card">
-        {list.loading && !list.data ? <Loading /> : !list.data?.files.length ? <Empty text="No backups yet. Start one above." /> : (
+        {list.loading ? <SkTable cols={SK} rows={4} /> : !list.data?.files.length ? <Empty text="No backups yet. Start one above." /> : (
           <div className="table-wrap"><table><thead><tr><th>File</th><th>Scope</th><th>Documents</th><th>Size</th><th>Created</th><th /></tr></thead><tbody>{list.data.files.map((f) => (
             <tr key={f.filename}><td><b className="clip" style={{ display: 'block' }}>{f.filename}</b></td><td><Pill value="mute" text={label(f.scope ?? 'full')} /></td><td>{f.document_count != null ? num(f.document_count) : '—'}</td><td>{bytes(f.size_bytes)}</td><td>{fmtDate(f.created_at)}</td>
               <td><div className="row end"><button className="btn sm" onClick={() => void downloadBackup(f.filename).catch(() => toast('Download failed', 'err'))}><Download size={14} />Download</button>

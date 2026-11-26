@@ -1,5 +1,5 @@
 """Auth request/response schemas."""
-from typing import Optional
+from typing import Literal, Optional
 from pydantic import BaseModel, Field, EmailStr, field_validator, model_validator
 import re
 
@@ -38,6 +38,8 @@ class LoginRequest(BaseModel):
     password: str
     device_id: Optional[str] = None
     device_name: Optional[str] = None
+    # Optional hint (iPadOS reports itself as a Mac). Only ever picks one of 3 slots.
+    device_type: Optional[Literal["mobile", "tablet", "desktop"]] = None
 
     @model_validator(mode="after")
     def need_identity(self):

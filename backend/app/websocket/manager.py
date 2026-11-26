@@ -24,6 +24,8 @@ class ConnectionManager:
     def __init__(self) -> None:
         # user_id -> set of live sockets (multi-device)
         self._by_user: Dict[str, Set[WebSocket]] = {}
+        # socket -> session id, so a closed session's socket can be dropped
+        self._sid_by_ws: Dict[WebSocket, str] = {}
         self._lock = asyncio.Lock()
         # user_id -> delayed offline task
         self._offline_tasks: Dict[str, asyncio.Task] = {}
@@ -64,7 +66,7 @@ class ConnectionManager:
 
         self._offline_tasks[uid] = asyncio.create_task(_fire())
 
-    async def connect(self, user_id: str, ws: WebSocket) -> bool:
+    async def connect(self, user_id: str, ws: WebSocket, sid: Optional[str] = None) -> bool:
         """Accept socket. Returns True if this is the first live socket (was offline)."""
         await ws.accept()
         uid = str(user_id)
@@ -72,6 +74,8 @@ class ConnectionManager:
             sockets = self._by_user.setdefault(uid, set())
             was_offline = len(sockets) == 0
             sockets.add(ws)
+            if sid:
+                self._sid_by_ws[ws] = sid
         # Cancel any pending offline announcement
         self._cancel_offline(uid)
         logger.debug(
@@ -91,6 +95,7 @@ class ConnectionManager:
             if not sockets:
                 return True
             sockets.discard(ws)
+            self._sid_by_ws.pop(ws, None)
             if not sockets:
                 self._by_user.pop(uid, None)
                 fully_offline = True
@@ -98,6 +103,17 @@ class ConnectionManager:
         if fully_offline:
             self._schedule_offline(uid)
         return fully_offline
+
+    async def close_sessions(self, user_id: str, sids: set[str], code: int = 4403) -> int:
+        """Close the live sockets that belong to the given (now closed) sessions."""
+        async with self._lock:
+            targets = [w for w in self._by_user.get(str(user_id), ()) if self._sid_by_ws.get(w) in sids]
+        for w in targets:
+            try:
+                await w.close(code=code)
+            except Exception:
+                logger.debug("ws close failed user=%s", user_id, exc_info=True)
+        return len(targets)
 
     def is_online(self, user_id: str) -> bool:
         uid = str(user_id or "")

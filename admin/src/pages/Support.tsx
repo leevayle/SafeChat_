@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { CheckCheck, LoaderCircle, Send } from 'lucide-react'
 import { patch, post, qs, type Paged } from '../api'
 import type { Ticket } from '../types'
-import { ActionDialog, Avatar, Empty, ErrorBox, Loading, Modal, PageHead, Pager, Pill, Seg, ago, fmtDate, useFetch, useToast } from '../ui'
+import { ActionDialog, Avatar, Empty, ErrorBox, Modal, PageHead, Pager, Pill, Seg, SkPager, SkTable, ago, fmtDate, useFetch, useToast, type SkCol } from '../ui'
+
+const SK: SkCol[] = [{ h: 'Subject', kind: 'two' }, { h: 'From', kind: 'user' }, { h: 'Status', kind: 'pill' }, { h: 'Assigned', kind: 'short' }, { h: 'Updated', kind: 'short' }]
 
 type F = '' | 'pending' | 'in_progress' | 'closed'
 
@@ -18,7 +20,7 @@ export function SupportPage() {
       <div className="toolbar"><Seg<F> value={f} onChange={(v) => { setF(v); setPage(1) }} options={[{ id: '', label: 'All' }, { id: 'pending', label: 'Pending' }, { id: 'in_progress', label: 'In progress' }, { id: 'closed', label: 'Closed' }]} /></div>
       {error && <ErrorBox text={error} retry={reload} />}
       <div className="card">
-        {loading && !data ? <Loading /> : !data?.items.length ? <Empty text="Inbox zero. Nothing here." /> : (
+        {loading ? <SkTable cols={SK} /> : !data?.items.length ? <Empty text="Inbox zero. Nothing here." /> : (
           <div className="table-wrap"><table>
             <thead><tr><th>Subject</th><th>From</th><th>Status</th><th>Assigned</th><th>Updated</th></tr></thead>
             <tbody>{data.items.map((t) => (
@@ -29,7 +31,7 @@ export function SupportPage() {
               </tr>))}</tbody>
           </table></div>
         )}
-        {data && <Pager page={page} total={data.total} size={data.page_size} onPage={setPage} />}
+        {loading ? <SkPager /> : data && <Pager page={page} total={data.total} size={data.page_size} onPage={setPage} />}
       </div>
       {ticket && <TicketDrawer t={ticket} onClose={() => setOpen(null)} onChanged={() => void reload()} />}
     </>

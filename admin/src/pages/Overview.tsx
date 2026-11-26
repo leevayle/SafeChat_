@@ -1,11 +1,12 @@
+import { Fragment } from 'react'
 import { CreditCard, Flag, LifeBuoy, RefreshCw, UserCheck, UserCog, Users, Wifi, Crown } from 'lucide-react'
 import type { Go } from '../App'
 import type { Health, Overview as O } from '../types'
-import { ErrorBox, Loading, PageHead, Pill, ago, num } from '../ui'
+import { Busy, ErrorBox, PageHead, Pill, Sk, ago, num } from '../ui'
 
-export function Overview({ ov, health, error, loading, reload, go }: { ov: O | null; health: Health | null; error: string; loading: boolean; reload: () => void; go: Go }) {
+export function Overview({ ov, health, error, reload, go }: { ov: O | null; health: Health | null; error: string; reload: () => void; go: Go }) {
   const head = <PageHead eyebrow="MONITORING" title="Overview" sub="Your platform at a glance." action={<button className="btn" onClick={reload}><RefreshCw size={16} />Refresh</button>} />
-  if (!ov) return <>{head}{error ? <ErrorBox text={error} retry={reload} /> : loading ? <Loading /> : null}</>
+  if (!ov) return <>{head}{error ? <ErrorBox text={error} retry={reload} /> : <OverviewSkeleton />}</>
   const u = ov.users
   const parts = [
     { k: 'Active', v: u.active, c: 'var(--good)' }, { k: 'Pending review', v: u.pending_review, c: 'var(--orange)' },
@@ -17,13 +18,13 @@ export function Overview({ ov, health, error, loading, reload, go }: { ov: O | n
   return (
     <>
       {head}
-      <div className="grid g4">
+      <div className="grid g4 reveal">
         <div className="card kpi"><div className="chip"><Users size={19} /></div><b>{num(u.total)}</b><span>Total users</span></div>
         <div className="card kpi g"><div className="chip"><Wifi size={19} /></div><b>{num(u.online)}</b><span>Online now</span></div>
         <div className="card kpi o"><div className="chip"><Crown size={19} /></div><b>{num(u.premium)}</b><span>Premium members</span></div>
         <div className="card kpi b"><div className="chip"><CreditCard size={19} /></div><b>{num(ov.payments.paid_last_30_days)}</b><span>Paid in last 30 days</span></div>
       </div>
-      <div className="grid g2" style={{ marginTop: 16 }}>
+      <div className="grid g2 reveal" style={{ marginTop: 16 }}>
         <section className="card card-pad">
           <h3>Account status</h3>
           <div className="stackbar" role="img" aria-label="Account status distribution">
@@ -46,7 +47,7 @@ export function Overview({ ov, health, error, loading, reload, go }: { ov: O | n
           </div>
         </section>
       </div>
-      <div className="grid g2" style={{ marginTop: 16 }}>
+      <div className="grid g2 reveal" style={{ marginTop: 16 }}>
         <section className="card card-pad">
           <h3>Needs attention</h3>
           <div className="attn">
@@ -58,13 +59,60 @@ export function Overview({ ov, health, error, loading, reload, go }: { ov: O | n
         </section>
         <section className="card card-pad">
           <h3>System health</h3>
-          <div className="health">
-            <div>API<Pill value={health?.api} text={health?.api ?? '…'} /></div>
-            <div>MongoDB<Pill value={health?.mongodb} text={health?.mongodb ?? '…'} /></div>
-            <small>Last checked {ago(health?.checked_at)}</small>
-          </div>
+          {health ? (
+            <div className="health">
+              <div>API<Pill value={health.api} /></div>
+              <div>MongoDB<Pill value={health.mongodb} /></div>
+              <small>Last checked {ago(health.checked_at)}</small>
+            </div>
+          ) : <HealthSkeleton />}
         </section>
       </div>
     </>
+  )
+}
+
+const HealthSkeleton = () => (
+  <Busy label="Checking system health" className="health">
+    <div><Sk w={36} h={14} /><Sk w={66} h={22} r={99} /></div>
+    <div><Sk w={64} h={14} /><Sk w={66} h={22} r={99} /></div>
+    <Sk w={120} h={11} />
+  </Busy>
+)
+
+/** Wireframe of the Overview: 4 KPI cards, status + plans, attention + health. */
+export function OverviewSkeleton() {
+  const legendRow = (w: number) => (<div><Sk w={10} h={10} r={3} className="flex-none" /><Sk w={w} h={13} /><Sk w={28} h={13} style={{ marginLeft: 'auto' }} /></div>)
+  return (
+    <Busy label="Loading overview">
+      <div className="grid g4">
+        {[88, 70, 96, 84].map((w, i) => (
+          <div key={i} className="card kpi"><Sk w={38} h={38} r={12} style={{ marginBottom: 8 }} /><Sk w={w} h={30} /><Sk w={110} h={13} /></div>))}
+      </div>
+      <div className="grid g2" style={{ marginTop: 16 }}>
+        <section className="card card-pad">
+          <Sk w={120} h={16} style={{ marginBottom: 14 }} />
+          <Sk h={14} r={99} />
+          <div className="legend">{[84, 104, 90, 62].map((w, i) => <Fragment key={i}>{legendRow(w)}</Fragment>)}</div>
+        </section>
+        <section className="card card-pad">
+          <Sk w={60} h={16} style={{ marginBottom: 14 }} />
+          <div className="row" style={{ gap: 20 }}>
+            <Sk w={110} h={110} r="50%" className="flex-none" />
+            <div className="legend" style={{ gridTemplateColumns: '1fr', margin: 0, flex: 1 }}>{[74, 40].map((w, i) => <Fragment key={i}>{legendRow(w)}</Fragment>)}</div>
+          </div>
+        </section>
+      </div>
+      <div className="grid g2" style={{ marginTop: 16 }}>
+        <section className="card card-pad">
+          <Sk w={130} h={16} style={{ marginBottom: 14 }} />
+          <div className="attn">{[150, 104, 176, 142].map((w, i) => (
+            <div key={i} className="row" style={{ gap: 12, padding: '12px 14px', border: '1px solid var(--line)', borderRadius: 12 }}>
+              <Sk w={18} h={18} r={5} className="flex-none" /><Sk w={w} h={14} /><Sk w={26} h={18} style={{ marginLeft: 'auto' }} />
+            </div>))}</div>
+        </section>
+        <section className="card card-pad"><Sk w={110} h={16} style={{ marginBottom: 14 }} /><HealthSkeleton /></section>
+      </div>
+    </Busy>
   )
 }

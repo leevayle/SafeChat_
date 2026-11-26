@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 import { Ban, Copy, Crown, KeyRound, LogOut, MoreHorizontal, Power, Search, ShieldCheck, ShieldOff, UserCheck } from 'lucide-react'
 import { patch, post, qs, type Admin, type Paged } from '../api'
 import type { UserRow } from '../types'
-import { ActionDialog, Avatar, Empty, ErrorBox, Loading, Modal, PageHead, Pager, Pill, ago, fmtDate, useFetch, useToast } from '../ui'
+import { ActionDialog, Avatar, Empty, ErrorBox, Modal, PageHead, Pager, Pill, SkPager, SkTable, ago, fmtDate, useFetch, useToast, type SkCol } from '../ui'
+
+const SK: SkCol[] = [{ h: 'User', kind: 'user' }, { h: 'Contact', kind: 'two' }, { h: 'Role', kind: 'pill' }, { h: 'Status', kind: 'pill' }, { h: 'Plan', kind: 'pillsub' }, { h: 'Joined', kind: 'short' }, { h: 'Last seen', kind: 'short' }, { kind: 'icon' }]
 
 type Act = { kind: 'status'; to: 'active' | 'deactivated' | 'banned' } | { kind: 'plan' } | { kind: 'sessions' } | { kind: 'reset' } | { kind: 'request-admin' } | { kind: 'revoke-admin' }
 
@@ -49,7 +51,7 @@ export function UsersPage({ admin, initialStatus }: { admin: Admin; initialStatu
       </div>
       {error && <ErrorBox text={error} retry={reload} />}
       <div className="card">
-        {loading && !data ? <Loading /> : !data?.items.length ? <Empty text="No users match these filters." /> : (
+        {loading ? <SkTable cols={SK} rows={8} /> : !data?.items.length ? <Empty text="No users match these filters." /> : (
           <div className="table-wrap"><table>
             <thead><tr><th>User</th><th>Contact</th><th>Role</th><th>Status</th><th>Plan</th><th>Joined</th><th>Last seen</th><th /></tr></thead>
             <tbody>{data.items.map((u) => (
@@ -66,7 +68,7 @@ export function UsersPage({ admin, initialStatus }: { admin: Admin; initialStatu
             ))}</tbody>
           </table></div>
         )}
-        {data && <Pager page={page} total={data.total} size={data.page_size} onPage={setPage} />}
+        {loading ? <SkPager /> : data && <Pager page={page} total={data.total} size={data.page_size} onPage={setPage} />}
       </div>
       {act && <UserAction act={act} onClose={() => setAct(null)} onSubmit={submit} />}
       {secret && (

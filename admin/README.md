@@ -50,3 +50,7 @@ Theme (light/dark) is saved in `localStorage` as `safechat-admin-theme`, the sam
 
 ## Also included
 Idle sign-out after 30 minutes, open-work count in the browser tab title, error boundary per screen, light/dark theme shared between the top bar and Account.
+
+## Loading states
+Every screen that fetches data shows a shimmering wireframe of its own layout first (real table headers stay visible; only the data cells shimmer), then fades in the real content. Filters and paging re-trigger it. The first load shows a skeleton of the whole app shell. Shimmer respects the OS "reduce motion" setting and has light and dark variants (tokens `--sk-base` / `--sk-shine` in `styles.css`).
+To add one to a new screen: `<SkTable cols={[{ h: 'Name', kind: 'user' }, ...]} />` or compose `Sk` blocks inside `<Busy label="Loading …">` (see `src/ui.tsx`).

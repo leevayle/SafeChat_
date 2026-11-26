@@ -68,6 +68,16 @@ async def test_existing_password_cancels_pending_reset_token(monkeypatch):
         async def insert_one(self, session):
             sessions.append(session)
 
+        def find(self, _query):  # used by the device-limit check after login
+            async def rows():
+                for item in sessions:
+                    yield item
+
+            return rows()
+
+        async def update_many(self, *_args, **_kwargs):
+            return SimpleNamespace(modified_count=0)
+
     database = SimpleNamespace(
         users=users,
         sessions=FakeSessions(),

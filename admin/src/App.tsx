@@ -4,10 +4,10 @@ import {
   Menu, Moon, ScrollText, ShieldCheck, Sun, UserRound, Users as UsersIcon,
 } from 'lucide-react'
 import { login, logout, put, restoreSession, type Admin } from './api'
-import { ErrorBoundary, ToastHost, useFetch, useToast } from './ui'
+import { Busy, ErrorBoundary, Sk, SkTable, ToastHost, useFetch, useToast } from './ui'
 import { useTheme } from './theme'
 import type { Health, Overview as OverviewData } from './types'
-import { Overview } from './pages/Overview'
+import { Overview, OverviewSkeleton } from './pages/Overview'
 import { UsersPage } from './pages/Users'
 import { SupportPage } from './pages/Support'
 import { ReportsPage, PaymentsPage, AccessPage } from './pages/Ops'
@@ -131,11 +131,13 @@ function Shell({ admin, onAdmin, onSignOut }: { admin: Admin; onAdmin: (a: Admin
         <div className="topbar">
           <button className="icon-btn menu-btn" aria-label="Open menu" onClick={() => setOpen(true)}><Menu size={20} /></button>
           <strong className="grow">{current.label}</strong>
-          <span className={`live ${online || !health.data ? '' : 'off'}`}><i />{!health.data ? 'Checking…' : online ? 'All systems normal' : 'Service issue'}</span>
+          {!health.data
+            ? <Sk w={150} h={14} r={99} />
+            : <span className={`live ${online ? '' : 'off'}`}><i />{online ? 'All systems normal' : 'Service issue'}</span>}
           <button className="icon-btn" aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`} onClick={toggle}>{theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}</button>
         </div>
         <div className="content" key={page}><ErrorBoundary>
-          {page === 'overview' && <Overview ov={ov.data} health={health.data} error={ov.error} loading={ov.loading} reload={() => { void ov.reload(); void health.reload() }} go={go} />}
+          {page === 'overview' && <Overview ov={ov.data} health={health.data} error={ov.error} reload={() => { void ov.reload(); void health.reload() }} go={go} />}
           {page === 'users' && <UsersPage admin={admin} initialStatus={params.status} />}
           {page === 'access' && <AccessPage admin={admin} />}
           {page === 'support' && <SupportPage />}
@@ -145,6 +147,33 @@ function Shell({ admin, onAdmin, onSignOut }: { admin: Admin; onAdmin: (a: Admin
           {page === 'backups' && <BackupsPage />}
           {page === 'account' && <AccountPage admin={admin} onAdmin={onAdmin} onSignedOut={onSignOut} />}
         </ErrorBoundary></div>
+      </div>
+    </div>
+  )
+}
+
+/** Shown while the saved session is checked on load: a wireframe of the real shell (sidebar, top bar, page). */
+function AppSkeleton() {
+  const groups = [1, 2, 2, 1, 2, 1]
+  const onOverview = fromHash() === 'overview'
+  return (
+    <div className="shell">
+      <aside className="side" aria-hidden>
+        <div className="brand"><Sk w={36} h={36} r={10} className="flex-none" /><div style={{ display: 'grid', gap: 6 }}><Sk w={84} h={16} /><Sk w={44} h={9} /></div></div>
+        {groups.map((n, g) => (
+          <div key={g}>
+            <Sk w={64} h={10} style={{ margin: '14px 10px 6px' }} />
+            {Array.from({ length: n }, (_, i) => (
+              <div key={i} className="nav" style={{ pointerEvents: 'none' }}><Sk w={19} h={19} r={6} className="flex-none" /><Sk w={72 + ((g * 3 + i * 5) % 5) * 14} h={14} /></div>))}
+          </div>))}
+        <div className="side-foot"><div className="me"><Sk w={38} h={38} r={12} className="flex-none" /><div style={{ display: 'grid', gap: 6 }}><Sk w={96} h={13} /><Sk w={72} h={10} /></div></div><Sk w={96} h={32} r={10} /></div>
+      </aside>
+      <div className="main">
+        <div className="topbar" aria-hidden><Sk w={120} h={18} /><span className="grow" /><Sk w={150} h={14} r={99} /><Sk w={38} h={38} r={11} /></div>
+        <Busy label="Loading the admin portal" className="content">
+          <header className="page-head"><div style={{ display: 'grid', gap: 8 }}><Sk w={78} h={10} /><Sk w={230} h={30} /><Sk w={300} h={14} /></div></header>
+          {onOverview ? <OverviewSkeleton /> : <div className="card"><SkTable cols={[{ h: '', kind: 'user' }, { h: '', kind: 'two' }, { h: '', kind: 'pill' }, { h: '', kind: 'short' }]} rows={7} /></div>}
+        </Busy>
       </div>
     </div>
   )
@@ -160,6 +189,6 @@ export default function App() {
     return () => window.removeEventListener('admin:session-expired', expired)
   }, [])
   const signedOut = useCallback((msg?: string) => { setNotice(msg); setAdmin(null); location.hash = '' }, [])
-  if (admin === undefined) return <div className="login"><LoaderCircle className="spin" size={28} /></div>
+  if (admin === undefined) return <AppSkeleton />
   return <ToastHost>{admin ? <Shell admin={admin} onAdmin={setAdmin} onSignOut={signedOut} /> : <Login notice={notice} onLogin={(a) => { setNotice(undefined); setAdmin(a) }} />}</ToastHost>
 }
