@@ -1307,8 +1307,8 @@ export function Settings({
 
               {/* Modal: warn before set */}
               {chatPinStep === 'warn' && (
-                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={() => setChatPinStep('idle')}>
-                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 md:items-center" onClick={() => setChatPinStep('idle')}>
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem]" onClick={(e) => e.stopPropagation()}>
                     <p className="text-lg font-black text-ink">Before you set a PIN</p>
                     <p className="mt-2 text-sm font-semibold leading-relaxed text-gray-500">
                       If you lose this PIN, locked chats stay locked. The only recovery is to permanently delete every locked chat on this device.
@@ -1332,8 +1332,8 @@ export function Settings({
               )}
 
               {chatPinStep === 'set' && (
-                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={() => setChatPinStep('idle')}>
-                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 md:items-center" onClick={() => setChatPinStep('idle')}>
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem]" onClick={(e) => e.stopPropagation()}>
                     <p className="text-lg font-black text-ink">Choose a PIN</p>
                     <p className="mt-1 text-xs font-semibold text-gray-400">4 to 8 digits</p>
                     <input
@@ -1368,8 +1368,8 @@ export function Settings({
               )}
 
               {chatPinStep === 'confirm' && (
-                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center">
-                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl">
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 md:items-center">
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem]">
                     <p className="text-lg font-black text-ink">Confirm PIN</p>
                     <input
                       type="password"
@@ -1420,8 +1420,8 @@ export function Settings({
               )}
 
               {chatPinStep === 'change' && (
-                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={() => setChatPinStep('idle')}>
-                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 md:items-center" onClick={() => setChatPinStep('idle')}>
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem]" onClick={(e) => e.stopPropagation()}>
                     <p className="text-lg font-black text-ink">Change PIN</p>
                     <p className="mt-1 text-xs font-semibold text-gray-400">Current PIN, then new PIN</p>
                     <input
@@ -1496,8 +1496,8 @@ export function Settings({
               )}
 
               {chatPinStep === 'disable' && (
-                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={() => setChatPinStep('idle')}>
-                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 md:items-center" onClick={() => setChatPinStep('idle')}>
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem]" onClick={(e) => e.stopPropagation()}>
                     <p className="text-lg font-black text-ink">Disable chat lock</p>
                     <p className="mt-1 text-xs font-semibold text-gray-400">Enter PIN to unlock all chats and remove the lock PIN</p>
                     <input
@@ -1552,8 +1552,8 @@ export function Settings({
               )}
 
               {chatPinStep === 'forgot' && (
-                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center" onClick={() => setChatPinStep('idle')}>
-                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 md:items-center" onClick={() => setChatPinStep('idle')}>
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem]" onClick={(e) => e.stopPropagation()}>
                     <p className="text-lg font-black text-brand-red">Forgot PIN</p>
                     <p className="mt-2 text-sm font-semibold leading-relaxed text-gray-500">
                       Continuing permanently deletes all locked chats from this device and clears your chat lock PIN. This cannot be undone.
@@ -1576,8 +1576,8 @@ export function Settings({
               )}
 
               {chatPinStep === 'forgot_confirm' && (
-                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center">
-                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl">
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 md:items-center">
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem]">
                     <p className="text-lg font-black text-ink">Confirm deletion</p>
                     <p className="mt-2 text-xs font-semibold text-gray-500">
                       Type <span className="font-black text-ink">delete all my locked chats</span> exactly
@@ -1630,8 +1630,8 @@ export function Settings({
               )}
 
               {chatPinStep === 'forgot_list' && (
-                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 sm:items-center">
-                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl">
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/40 p-4 md:items-center">
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem]">
                     <p className="text-lg font-black text-ink">You are about to delete the following chats</p>
                     <ul className="mt-3 max-h-48 space-y-2 overflow-y-auto rounded-2xl bg-gray-50 p-3">
                       {lockedChatPreview.length === 0 ? (
@@ -2102,8 +2102,8 @@ export function Settings({
               </button>
 
               {mpesaConfirmOpen && (
-                <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40 p-4 sm:items-center">
-                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl">
+                <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/40 p-4 md:items-center">
+                  <div className="w-full max-w-md rounded-3xl bg-white p-5 shadow-xl md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem]">
                     <p className="text-lg font-black text-ink">Confirm M-Pesa number</p>
                     <p className="mt-1 text-sm font-semibold text-gray-500">
                       Is this the number that should receive the STK push for{' '}

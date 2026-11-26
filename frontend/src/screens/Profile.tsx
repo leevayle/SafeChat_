@@ -466,7 +466,7 @@ export function Profile({
               initial={{ y: 40 }}
               animate={{ y: 0 }}
               exit={{ y: 40 }}
-              className="w-full rounded-t-3xl bg-white p-5 sm:mx-auto sm:max-w-md sm:rounded-3xl sm:mb-6"
+              className="w-full rounded-t-3xl bg-white p-5 sm:mx-auto sm:w-[min(22rem,25vw)] sm:min-w-[18rem] sm:max-w-[22rem] sm:rounded-3xl sm:mb-6"
               onClick={(e) => e.stopPropagation()}
             >
               <p className="mb-3 text-center text-sm font-extrabold text-ink">Profile photo</p>

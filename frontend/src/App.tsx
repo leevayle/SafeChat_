@@ -655,7 +655,7 @@ function Shell() {
         {logoutConfirm && (
           <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setLogoutConfirm(false)}>
             <div
-              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:rounded-3xl sm:p-6"
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:max-w-[min(22rem,25vw)] sm:min-w-[18rem] sm:rounded-3xl sm:p-6"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gray-200 dark:bg-white/15 sm:hidden" />
@@ -1309,7 +1309,7 @@ function Shell() {
         {logoutConfirm && (
           <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setLogoutConfirm(false)}>
             <div
-              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:rounded-3xl sm:p-6"
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:max-w-[min(22rem,25vw)] sm:min-w-[18rem] sm:rounded-3xl sm:p-6"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gray-200 dark:bg-white/15 sm:hidden" />
@@ -1581,7 +1581,7 @@ function Shell() {
         {logoutConfirm && (
           <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setLogoutConfirm(false)}>
             <div
-              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:rounded-3xl sm:p-6"
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:max-w-[min(22rem,25vw)] sm:min-w-[18rem] sm:rounded-3xl sm:p-6"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gray-200 dark:bg-white/15 sm:hidden" />
@@ -1707,7 +1707,7 @@ function Shell() {
         {logoutConfirm && (
           <div className="fixed inset-0 z-[200] flex items-end justify-center bg-black/40 sm:items-center" onClick={() => setLogoutConfirm(false)}>
             <div
-              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:rounded-3xl sm:p-6"
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-2xl dark:bg-[#1a222d] sm:max-w-[min(22rem,25vw)] sm:min-w-[18rem] sm:rounded-3xl sm:p-6"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-gray-200 dark:bg-white/15 sm:hidden" />

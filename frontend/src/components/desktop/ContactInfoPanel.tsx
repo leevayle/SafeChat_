@@ -1,6 +1,7 @@
-import { Phone, Video, MessageCircle, Bell, BellOff, Gamepad2, Ban, Copy } from 'lucide-react'
-import { Avatar } from '../Avatar'
+import { Phone, Video, MessageCircle, Bell, BellOff, Gamepad2, Ban, Copy, Pencil } from 'lucide-react'
+import { Avatar, VerifiedCheck } from '../Avatar'
 import { useStore } from '../../store'
+import { api } from '../../api'
 import { useState } from 'react'
 
 import { kvGet, kvSet, kvRemove, kvGetJson, kvSetJson, hydrateKv } from '../../lib/kv'
@@ -12,7 +13,7 @@ type Props = {
 
 /** Desktop right column — mobile contact info + chat actions (mute / game / block). */
 export function ContactInfoPanel({ contactId, onCall, onChat }: Props) {
-  const { contacts, chats, presenceMap, typingPeers, busyMap, showToast, me } = useStore()
+  const { contacts, chats, presenceMap, typingPeers, busyMap, showToast, me, refreshContacts } = useStore()
   const chat = chats.find((c) => c.contactId === contactId || c.conversationId === contactId)
   const contactHit = contacts.find((c) => c.id === contactId || c.peerId === contactId)
   const c = contactHit
@@ -77,6 +78,10 @@ export function ContactInfoPanel({ contactId, onCall, onChat }: Props) {
 
   const showPremium = !!(c as any).verifiedBadge || !!(c as any).premium
 
+  const [editingContactName, setEditingContactName] = useState(false)
+  const [contactNameDraft, setContactNameDraft] = useState('')
+  const [savingContactName, setSavingContactName] = useState(false)
+
   const copyPhone = async () => {
     const phone = c.phone || (c as any).phone_number || ''
     if (!phone) return
@@ -125,17 +130,82 @@ export function ContactInfoPanel({ contactId, onCall, onChat }: Props) {
         </div>
         <h2 className="mt-4 flex items-center gap-1.5 text-2xl font-black text-ink dark:text-white">
           {displayName}
-          {showPremium && (
-            <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-brand-purple text-[10px] font-black text-white" title="Premium">
-              ✓
-            </span>
-          )}
+          {showPremium && <VerifiedCheck size={18} />}
         </h2>
         {!isSelf && (c as any).publicName && (c as any).publicName !== c.name ? (
           <p className="mt-1 text-sm font-semibold text-gray-500 dark:text-gray-400">
             Public name: {(c as any).publicName}
           </p>
         ) : null}
+        {!isSelf && (
+          <div className="mt-3 w-full max-w-xs">
+            {editingContactName ? (
+              <div className="flex flex-col gap-2">
+                <input
+                  value={contactNameDraft}
+                  onChange={(e) => setContactNameDraft(e.target.value)}
+                  className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-center text-sm font-bold text-ink outline-none focus:border-brand-purple dark:border-white/10 dark:bg-white/5 dark:text-white"
+                  placeholder="Display name"
+                  autoFocus
+                  maxLength={64}
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={savingContactName}
+                    onClick={() => {
+                      setEditingContactName(false)
+                      setContactNameDraft('')
+                    }}
+                    className="flex-1 rounded-full bg-gray-100 py-2 text-sm font-extrabold text-ink dark:bg-white/10 dark:text-white"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingContactName || !contactNameDraft.trim()}
+                    onClick={async () => {
+                      const name = contactNameDraft.trim()
+                      if (!name) return
+                      const id = String((c as any).peerId || (c as any).id || contactId || '')
+                      if (!id) {
+                        showToast?.('Could not update contact')
+                        return
+                      }
+                      setSavingContactName(true)
+                      try {
+                        await api.updateContact(id, { savedName: name })
+                        await refreshContacts()
+                        showToast?.('Display name updated')
+                        setEditingContactName(false)
+                        setContactNameDraft('')
+                      } catch (e: any) {
+                        showToast?.(e?.message || 'Could not update name')
+                      } finally {
+                        setSavingContactName(false)
+                      }
+                    }}
+                    className="flex-1 rounded-full bg-brand-purple py-2 text-sm font-extrabold text-white disabled:opacity-50"
+                  >
+                    {savingContactName ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setContactNameDraft(String(displayName || c.name || ''))
+                  setEditingContactName(true)
+                }}
+                className="mx-auto flex items-center gap-1.5 rounded-full bg-brand-purple/10 px-4 py-2 text-sm font-extrabold text-brand-purple"
+              >
+                <Pencil size={14} />
+                Edit display name
+              </button>
+            )}
+          </div>
+        )}
         {c.username ? <p className="mt-2 font-bold text-brand-purple">@{String(c.username).replace(/^@/, '')}</p> : null}
         <p
           className={`mt-2 min-h-[1.25rem] max-w-sm px-4 text-center text-sm font-bold ${

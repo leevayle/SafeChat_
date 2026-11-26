@@ -80,7 +80,7 @@ export function Welcome({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 16 }}
               transition={{ type: 'spring', stiffness: 320, damping: 28 }}
-              className="w-full max-w-md rounded-t-3xl bg-white px-6 pb-8 pt-4 shadow-xl sm:mx-6 sm:rounded-3xl"
+              className="w-full max-w-md rounded-t-3xl bg-white px-6 pb-8 pt-4 shadow-xl sm:mx-6 sm:w-[min(22rem,25vw)] sm:min-w-[18rem] sm:max-w-[22rem] sm:rounded-3xl"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-gray-200 sm:hidden" />

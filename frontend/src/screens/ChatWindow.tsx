@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, memo, type ChangeEvent, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, Paperclip, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download, Gamepad2, Reply, Trash2 } from 'lucide-react'
+import { ArrowLeft, Phone, Video, PhoneMissed, PhoneIncoming, PhoneOutgoing, Smile, Send, Check, CheckCheck, ImagePlus, Paperclip, X, Clock, RotateCcw, MoreVertical, BellOff, Bell, Volume2, Mic, Ban, Lock, Unlock, Download, Gamepad2, Reply, Trash2, Pencil } from 'lucide-react'
 import { Avatar, VerifiedCheck } from '../components/Avatar'
 import { NotesBoard } from '../components/NotesBoard'
 import { ChatImageCropper } from '../components/ChatImageCropper'
@@ -724,6 +724,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [pendingFile, setPendingFile] = useState<{ name: string; url: string; mime: string; size: number } | null>(null)
   const [replyTo, setReplyTo] = useState<ApiMsg | null>(null)
   const [profileOpen, setProfileOpen] = useState(false)
+  const [editingContactName, setEditingContactName] = useState(false)
+  const [contactNameDraft, setContactNameDraft] = useState('')
+  const [savingContactName, setSavingContactName] = useState(false)
   // ESC → back to chats home (blur so list row never keeps a focus outline)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -3235,7 +3238,7 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
 
       {editing && actionMsg && (
         <div className="absolute inset-0 z-50 flex flex-col justify-end bg-black/45 md:items-center md:justify-center">
-          <div className="rounded-t-3xl bg-white p-4 pb-8 shadow-[0_-12px_40px_rgba(0,0,0,0.25)] md:w-full md:max-w-md md:rounded-3xl">
+          <div className="rounded-t-3xl bg-white p-4 pb-8 shadow-[0_-12px_40px_rgba(0,0,0,0.25)] md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem] md:rounded-3xl md:mx-auto">
             <p className="mb-2 text-sm font-extrabold text-gray-500">Edit message</p>
             <textarea value={editText} onChange={(e) => setEditText(e.target.value)} className="min-h-[80px] w-full rounded-2xl bg-gray-100 p-3 font-semibold outline-none" />
             <div className="mt-3 flex gap-2">
@@ -3303,6 +3306,75 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
                 Public name: {(c as any).publicName}
               </p>
             ) : null}
+            {!isSelfChat && (
+              <div className="mt-3 w-full max-w-xs">
+                {editingContactName ? (
+                  <div className="flex flex-col gap-2">
+                    <input
+                      value={contactNameDraft}
+                      onChange={(e) => setContactNameDraft(e.target.value)}
+                      className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-center text-sm font-bold text-ink outline-none focus:border-brand-purple dark:border-white/10 dark:bg-white/5 dark:text-white"
+                      placeholder="Display name"
+                      autoFocus
+                      maxLength={64}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={savingContactName}
+                        onClick={() => {
+                          setEditingContactName(false)
+                          setContactNameDraft('')
+                        }}
+                        className="flex-1 rounded-full bg-gray-100 py-2 text-sm font-extrabold text-ink dark:bg-white/10 dark:text-white"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        disabled={savingContactName || !contactNameDraft.trim()}
+                        onClick={async () => {
+                          const name = contactNameDraft.trim()
+                          if (!name) return
+                          const id = String(peerId || (c as any).peerId || (c as any).id || contactId || '')
+                          if (!id) {
+                            showToast('Could not update contact')
+                            return
+                          }
+                          setSavingContactName(true)
+                          try {
+                            await api.updateContact(id, { savedName: name })
+                            await refreshContacts()
+                            showToast('Display name updated')
+                            setEditingContactName(false)
+                            setContactNameDraft('')
+                          } catch (e: any) {
+                            showToast(e?.message || 'Could not update name')
+                          } finally {
+                            setSavingContactName(false)
+                          }
+                        }}
+                        className="flex-1 rounded-full bg-brand-purple py-2 text-sm font-extrabold text-white disabled:opacity-50"
+                      >
+                        {savingContactName ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setContactNameDraft(String(c.name || (c as any).savedName || ''))
+                      setEditingContactName(true)
+                    }}
+                    className="mx-auto flex items-center gap-1.5 rounded-full bg-brand-purple/10 px-4 py-2 text-sm font-extrabold text-brand-purple"
+                  >
+                    <Pencil size={14} />
+                    Edit display name
+                  </button>
+                )}
+              </div>
+            )}
             {c.username ? <p className="mt-2 font-bold text-brand-purple">@{c.username}</p> : null}
             <p className="mt-1 text-xs font-semibold text-gray-400">
               {(c.phone || (c as any).phone_number) ? 'Contact shared with you' : 'Contact not shared with you'}
@@ -3840,7 +3912,7 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
       
       {blockOpen && (
         <div className="absolute inset-0 z-[55] flex flex-col justify-end bg-black/45 md:items-center md:justify-center" onClick={() => setBlockOpen(false)}>
-          <div className="rounded-t-3xl bg-white px-5 pb-8 pt-4 shadow-[0_-12px_40px_rgba(0,0,0,0.25)] md:w-full md:max-w-md md:rounded-3xl" onClick={(e) => e.stopPropagation()}>
+          <div className="rounded-t-3xl bg-white px-5 pb-8 pt-4 shadow-[0_-12px_40px_rgba(0,0,0,0.25)] md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem] md:rounded-3xl md:mx-auto" onClick={(e) => e.stopPropagation()}>
             <div className="mx-auto mb-3 h-1.5 w-12 rounded-full bg-gray-200" />
             <p className="text-lg font-black">{peerBlocked ? 'Unblock' : 'Block'} {c.name.split(' ')[0]}?</p>
             <p className="mt-2 text-sm font-semibold text-gray-500">

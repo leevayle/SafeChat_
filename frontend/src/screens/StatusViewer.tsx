@@ -1376,7 +1376,7 @@ export function StatusViewer({
               animate={{ y: 0 }}
               exit={{ y: '100%' }}
               transition={{ type: 'spring', stiffness: 340, damping: 34 }}
-              className="absolute inset-x-0 bottom-0 z-50 max-h-[55%] overflow-hidden rounded-t-3xl bg-white shadow-[0_-12px_40px_rgba(0,0,0,0.35)] dark:bg-[#1a222d] dark:shadow-[0_-12px_40px_rgba(0,0,0,0.55)] md:inset-x-auto md:left-1/2 md:bottom-[8%] md:max-h-[50vh] md:w-full md:max-w-md md:-translate-x-1/2 md:rounded-3xl"
+              className="absolute inset-x-0 bottom-0 z-50 max-h-[55%] overflow-hidden rounded-t-3xl bg-white shadow-[0_-12px_40px_rgba(0,0,0,0.35)] dark:bg-[#1a222d] dark:shadow-[0_-12px_40px_rgba(0,0,0,0.55)] md:inset-x-auto md:left-1/2 md:top-1/2 md:bottom-auto md:max-h-[min(80vh,40rem)] md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-3xl"
               data-status-action
             >
               <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3.5 dark:border-white/10">

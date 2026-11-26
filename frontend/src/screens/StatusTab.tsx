@@ -575,7 +575,7 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
       <AnimatePresence>
         {statusSettings && (
           <motion.div
-            className="fixed inset-0 z-[100] flex flex-col justify-end bg-black/50 backdrop-blur-[2px]"
+            className="fixed inset-0 z-[100] flex flex-col justify-end bg-black/50 backdrop-blur-[2px] md:items-center md:justify-center"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -587,7 +587,7 @@ export function StatusTab({ active = true, onOpenStatus }: Props) {
               exit={{ y: '100%' }}
               transition={{ type: 'spring', stiffness: 320, damping: 34 }}
               onClick={(e) => e.stopPropagation()}
-              className="max-h-[80%] overflow-y-auto rounded-t-3xl bg-white px-5 pb-8 pt-4 dark:bg-[#121821] dark:text-white"
+              className="max-h-[85%] w-full overflow-y-auto rounded-t-3xl bg-white px-5 pb-8 pt-4 dark:bg-[#121821] dark:text-white md:max-h-[min(80vh,40rem)] md:w-[min(22rem,25vw)] md:min-w-[18rem] md:max-w-[22rem] md:rounded-3xl md:shadow-2xl"
             >
               <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-gray-200 dark:bg-white/20" />
               <h3 className="text-lg font-black dark:text-white">Status settings</h3>

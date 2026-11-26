@@ -469,7 +469,7 @@ export function Contacts({ onClose, onChat, onCall }: Props) {
           </div>
 
           {notFoundPhone && (
-            <div className="fixed inset-0 z-[95] flex items-end justify-center bg-black/40 p-4 sm:items-center">
+            <div className="fixed inset-0 z-[95] flex items-end justify-center bg-black/40 p-4 md:items-center">
               <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-xl">
                 <p className="text-lg font-black text-ink">Not on SafeChat yet</p>
                 <p className="mt-2 text-sm font-semibold text-gray-500">
