@@ -714,7 +714,9 @@ export function ChatsHome({
                     : `p:${c.contactId}`
                 const isNewRow = !seenRows.current.has(rowKey)
                 if (isNewRow) seenRows.current.add(rowKey)
-                const derived = previewFromThread(c.conversationId)
+                // Thread preview only when this row has a real conversation id
+                const derived =
+                  c.conversationId ? previewFromThread(String(c.conversationId)) : null
                 const rawLast = (derived?.last != null && String(derived.last).trim() !== '')
                   ? derived.last
                   : c.last
@@ -723,7 +725,13 @@ export function ChatsHome({
                   ((c as any).image || (derived as any)?.image ? '📷 Photo' : '') ||
                   ' '
                 const lastMine = derived?.mine ?? c.mine
-                const lastState = derived?.state || c.state
+                // Pending/failed ticks must belong to THIS conversation only
+                const lastState =
+                  derived && derived.mine && (derived.state === 'pending' || derived.state === 'failed')
+                    ? derived.state
+                    : c.state === 'pending' || c.state === 'failed'
+                      ? c.state
+                      : derived?.state || c.state
                 return (
                   <motion.li
                     key={rowKey}

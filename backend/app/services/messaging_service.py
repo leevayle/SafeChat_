@@ -191,7 +191,11 @@ class MessagingService:
         cursor: Optional[str] = None,
         lean: bool = False,
     ) -> dict:
-        """List conversations. lean=True omits profile photos for a fast first paint."""
+        """List conversations. lean=True omits profile photos for a fast first paint.
+
+        Batched reads (no per-row N+1): users, last messages, members, unreads.
+        Prefers denormalized last_message_* fields on the conversation doc.
+        """
         db = get_database()
         # Inbox is private (1:1 + notes-to-self) only — never group threads
         query: Dict[str, Any] = {
@@ -215,23 +219,102 @@ class MessagingService:
             .sort([("last_message_at", -1), ("updated_at", -1)])
             .limit(min(limit * 2, 200))
         )
-        items = []
+        convs: list = []
         async for conv in cursor_q:
             cid = str(conv["_id"])
             if cid in hidden_ids:
                 continue
-            # Belt-and-suspenders: skip group threads even if type field is missing/wrong
             if conv.get("conversation_type") == ConversationType.GROUP.value or conv.get("group_id"):
                 continue
             settings = conv.get("conversation_settings") or {}
             user_settings = settings.get(user_id, {}) if isinstance(settings, dict) else {}
             if user_settings.get("hidden") or user_settings.get("deleted"):
                 continue
-            items.append(
-                await MessagingService._serialize_conversation(conv, user_id, lean=lean)
-            )
-            if len(items) >= min(limit, 100):
+            convs.append(conv)
+            if len(convs) >= min(limit, 100):
                 break
+
+        if not convs:
+            return {"conversations": [], "next_cursor": None}
+
+        # ---- batch users ----
+        user_projection = (
+            {"username": 1, "display_name": 1}
+            if lean
+            else {"username": 1, "display_name": 1, "profile_photo": 1}
+        )
+        pid_oids = []
+        seen_pids = set()
+        for conv in convs:
+            for pid in conv.get("participant_ids", []):
+                sp = str(pid)
+                if sp in seen_pids or not ObjectId.is_valid(sp):
+                    continue
+                seen_pids.add(sp)
+                pid_oids.append(ObjectId(sp))
+        users_by_id: Dict[str, dict] = {}
+        if pid_oids:
+            async for u in db.users.find({"_id": {"$in": pid_oids}}, user_projection):
+                users_by_id[str(u["_id"])] = u
+
+        # ---- batch last messages only when denormalized preview missing ----
+        need_lm: list = []
+        for conv in convs:
+            if conv.get("last_message_preview") is not None or not conv.get("last_message_id"):
+                continue
+            mid = str(conv["last_message_id"])
+            if ObjectId.is_valid(mid):
+                need_lm.append(ObjectId(mid))
+        last_msgs: Dict[str, dict] = {}
+        if need_lm:
+            async for m in db.messages.find({"_id": {"$in": need_lm}}):
+                last_msgs[str(m["_id"])] = m
+
+        # ---- batch member rows (pinned + unread_count) ----
+        cids = [str(c["_id"]) for c in convs]
+        members_by_cid: Dict[str, dict] = {}
+        async for mem in db.conversation_members.find(
+            {"user_id": user_id, "conversation_id": {"$in": cids}},
+            {"conversation_id": 1, "pinned": 1, "unread_count": 1},
+        ):
+            members_by_cid[str(mem.get("conversation_id"))] = mem
+
+        # ---- unread fallback only for rows without stored unread_count ----
+        need_unread = [
+            cid for cid in cids
+            if members_by_cid.get(cid) is None or "unread_count" not in (members_by_cid.get(cid) or {})
+        ]
+        unread_by_cid: Dict[str, int] = {}
+        for cid, mem in members_by_cid.items():
+            if "unread_count" in mem:
+                unread_by_cid[cid] = int(mem.get("unread_count") or 0)
+        if need_unread:
+            pipeline = [
+                {
+                    "$match": {
+                        "user_id": user_id,
+                        "conversation_id": {"$in": need_unread},
+                        "read_at": None,
+                    }
+                },
+                {"$group": {"_id": "$conversation_id", "n": {"$sum": 1}}},
+            ]
+            async for row in db.message_receipts.aggregate(pipeline):
+                unread_by_cid[str(row["_id"])] = int(row.get("n") or 0)
+
+        items = []
+        for conv in convs:
+            items.append(
+                await MessagingService._serialize_conversation(
+                    conv,
+                    user_id,
+                    lean=lean,
+                    users_by_id=users_by_id,
+                    last_msgs=last_msgs,
+                    members_by_cid=members_by_cid,
+                    unread_by_cid=unread_by_cid,
+                )
+            )
         return {"conversations": items, "next_cursor": None}
 
     @staticmethod
@@ -477,18 +560,46 @@ class MessagingService:
         msg_id = str(result.inserted_id)
         msg["_id"] = result.inserted_id
 
+        # Denormalized inbox preview (list path avoids loading messages)
+        preview = (content or "").strip()
+        if preview.startswith("⟦status⟧"):
+            preview = "Status reply"
+        if not preview:
+            atts = media_attachments or []
+            if mt == MessageType.IMAGE or any(
+                (a or {}).get("type") == "image" for a in atts
+            ):
+                preview = "📷 Photo"
+            elif any(
+                str((a or {}).get("mime_type") or (a or {}).get("type") or "").startswith("audio")
+                or str((a or {}).get("name") or "").lower().endswith(
+                    (".webm", ".ogg", ".mp3", ".m4a", ".wav", ".aac")
+                )
+                for a in atts
+            ):
+                preview = "🎤 Voice note"
+            elif atts or mt == MessageType.FILE:
+                preview = "📎 Attachment"
+            else:
+                preview = ""
+        preview = preview[:180]
+
         await db.conversations.update_one(
             {"_id": ObjectId(conversation_id)},
             {
                 "$set": {
                     "last_message_at": now,
                     "last_message_id": msg_id,
+                    "last_message_preview": preview,
+                    "last_message_type": mt.value,
+                    "last_message_sender_id": sender_id,
+                    "last_message_status": DeliveryStatus.SENT.value,
                     "updated_at": now,
                 }
             },
         )
 
-        # Receipts for other participants
+        # Receipts for other participants + bump denormalized unread
         for pid in conv["participant_ids"]:
             if pid != sender_id:
                 await db.message_receipts.update_one(
@@ -502,6 +613,21 @@ class MessagingService:
                             "read_at": None,
                             "created_at": now,
                         }
+                    },
+                    upsert=True,
+                )
+                await db.conversation_members.update_one(
+                    {"conversation_id": conversation_id, "user_id": pid},
+                    {
+                        "$inc": {"unread_count": 1},
+                        "$set": {"updated_at": now},
+                        "$setOnInsert": {
+                            "conversation_id": conversation_id,
+                            "user_id": pid,
+                            "hidden": False,
+                            "pinned": False,
+                            "created_at": now,
+                        },
                     },
                     upsert=True,
                 )
@@ -711,6 +837,11 @@ class MessagingService:
             pass
         result = await db.message_receipts.update_many(
             query, {"$set": {"read_at": now, "delivered_at": now}}
+        )
+        # Denormalized unread badge
+        await db.conversation_members.update_one(
+            {"conversation_id": conversation_id, "user_id": user_id},
+            {"$set": {"unread_count": 0, "updated_at": now}},
         )
         # Flip message.delivery_status so sender ticks update on poll
         if result.modified_count or result.matched_count:
@@ -923,38 +1054,80 @@ class MessagingService:
 
     @staticmethod
     async def _serialize_conversation(
-        conv: dict, viewer_id: str, lean: bool = False
+        conv: dict,
+        viewer_id: str,
+        lean: bool = False,
+        *,
+        users_by_id: Optional[Dict[str, dict]] = None,
+        last_msgs: Optional[Dict[str, dict]] = None,
+        members_by_cid: Optional[Dict[str, dict]] = None,
+        unread_by_cid: Optional[Dict[str, int]] = None,
     ) -> dict:
+        """Serialize one conversation.
+
+        When batch maps are provided (list path), performs zero extra DB calls.
+        Standalone callers still work (loads what it needs).
+        """
         db = get_database()
+        cid = str(conv["_id"])
+
+        # Participants
         participants = []
-        # lean: only id + display_name (no photo bytes / heavy fields) for first paint
         user_projection = (
             {"username": 1, "display_name": 1}
             if lean
             else {"username": 1, "display_name": 1, "profile_photo": 1}
         )
         for pid in conv.get("participant_ids", []):
-            if not ObjectId.is_valid(pid):
+            sp = str(pid)
+            if not ObjectId.is_valid(sp):
                 continue
-            u = await db.users.find_one({"_id": ObjectId(pid)}, user_projection)
+            u = None
+            if users_by_id is not None:
+                u = users_by_id.get(sp)
+            else:
+                u = await db.users.find_one({"_id": ObjectId(sp)}, user_projection)
             if u:
                 participants.append(
                     {
                         "id": str(u["_id"]),
-                        "username": u["username"],
-                        "display_name": u["display_name"],
+                        "username": u.get("username"),
+                        "display_name": u.get("display_name"),
                         "profile_photo": None if lean else u.get("profile_photo"),
                     }
                 )
 
+        # Last message — prefer denormalized fields written on send
         last_message = None
-        if conv.get("last_message_id") and ObjectId.is_valid(conv["last_message_id"]):
-            m = await db.messages.find_one({"_id": ObjectId(conv["last_message_id"])})
+        if conv.get("last_message_id") and (
+            conv.get("last_message_preview") is not None
+            or conv.get("last_message_sender_id") is not None
+        ):
+            created = conv.get("last_message_at")
+            last_message = {
+                "id": str(conv.get("last_message_id")),
+                "content": conv.get("last_message_preview"),
+                "message_type": conv.get("last_message_type") or MessageType.TEXT.value,
+                "sender_id": conv.get("last_message_sender_id"),
+                "created_at": created.isoformat() if hasattr(created, "isoformat") else (created or None),
+                "delivery_status": conv.get("last_message_status")
+                or DeliveryStatus.SENT.value,
+            }
+        elif conv.get("last_message_id") and ObjectId.is_valid(str(conv["last_message_id"])):
+            mid = str(conv["last_message_id"])
+            m = None
+            if last_msgs is not None:
+                m = last_msgs.get(mid)
+            else:
+                m = await db.messages.find_one({"_id": ObjectId(mid)})
             if m and not m.get("deleted_at"):
                 lm_status = m.get("delivery_status", DeliveryStatus.SENT.value)
-                if m.get("sender_id") == viewer_id:
-                    mid = str(m["_id"])
-                    receipts = [r async for r in db.message_receipts.find({"message_id": mid})]
+                if m.get("sender_id") == viewer_id and last_msgs is None:
+                    # Only do receipt walk on standalone path
+                    receipts = [
+                        r
+                        async for r in db.message_receipts.find({"message_id": mid})
+                    ]
                     if any(r.get("read_at") for r in receipts):
                         lm_status = DeliveryStatus.READ.value
                     elif any(r.get("delivered_at") for r in receipts):
@@ -968,27 +1141,43 @@ class MessagingService:
                     "delivery_status": lm_status,
                 }
 
-        # Unread count
-        unread = await db.message_receipts.count_documents(
-            {
-                "conversation_id": str(conv["_id"]),
-                "user_id": viewer_id,
-                "read_at": None,
-            }
-        )
+        # Unread
+        if unread_by_cid is not None and cid in unread_by_cid:
+            unread = int(unread_by_cid.get(cid) or 0)
+        else:
+            mem = None
+            if members_by_cid is not None:
+                mem = members_by_cid.get(cid)
+            else:
+                mem = await db.conversation_members.find_one(
+                    {"conversation_id": cid, "user_id": viewer_id},
+                    {"unread_count": 1, "pinned": 1},
+                )
+            if mem is not None and "unread_count" in mem:
+                unread = int(mem.get("unread_count") or 0)
+            else:
+                unread = await db.message_receipts.count_documents(
+                    {
+                        "conversation_id": cid,
+                        "user_id": viewer_id,
+                        "read_at": None,
+                    }
+                )
 
         settings = conv.get("conversation_settings") or {}
         user_settings = settings.get(viewer_id, {}) if isinstance(settings, dict) else {}
         pinned = bool(user_settings.get("pinned", False))
-        mem = await db.conversation_members.find_one(
-            {"conversation_id": str(conv["_id"]), "user_id": viewer_id},
-            {"pinned": 1},
-        )
+        mem = members_by_cid.get(cid) if members_by_cid is not None else None
+        if mem is None and members_by_cid is None:
+            mem = await db.conversation_members.find_one(
+                {"conversation_id": cid, "user_id": viewer_id},
+                {"pinned": 1},
+            )
         if mem is not None and "pinned" in mem:
             pinned = bool(mem.get("pinned"))
 
         return {
-            "id": str(conv["_id"]),
+            "id": cid,
             "conversation_type": conv["conversation_type"],
             "is_self": bool(conv.get("is_self")),
             "participant_ids": conv.get("participant_ids", []),

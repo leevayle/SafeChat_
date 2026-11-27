@@ -7,3 +7,7 @@ build/
 *.tsbuildinfo
 *.log
 .DS_Store
+.npm/
+.pnpm-store/
+.yarn/cache/
+coverage/

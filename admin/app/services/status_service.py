@@ -1,0 +1,739 @@
+"""Status (stories) service — batched lookups for feed and viewers."""
+from datetime import datetime, timezone, timedelta
+from pymongo.errors import DuplicateKeyError
+from typing import List, Optional, Dict, Any
+from bson import ObjectId
+from app.core.database import get_database
+from app.core.exceptions import (
+    NotFoundError,
+    ForbiddenError,
+    ValidationError,
+)
+from app.models.status import StatusType, StatusVisibility
+from app.models.contact import ContactStatus
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class StatusService:
+
+    @staticmethod
+    async def _accepted_contact_ids(db, user_id: str) -> List[str]:
+        accepted = [ContactStatus.ACCEPTED.value, ContactStatus.ACCEPTED.value.upper()]
+        peers = set()
+        async for contact in db.contacts.find(
+            {
+                "$or": [
+                    {
+                        "owner_user_id": user_id,
+                        "contact_status": {"$in": accepted},
+                    },
+                    {
+                        "contact_user_id": user_id,
+                        "contact_status": {"$in": accepted},
+                    },
+                    {"owner_user_id": user_id, "status": {"$in": accepted}},
+                    {"contact_user_id": user_id, "status": {"$in": accepted}},
+                ]
+            },
+            {"owner_user_id": 1, "contact_user_id": 1},
+        ):
+            peer_id = (
+                contact.get("contact_user_id")
+                if str(contact.get("owner_user_id")) == str(user_id)
+                else contact.get("owner_user_id")
+            )
+            if peer_id and str(peer_id) != str(user_id):
+                peers.add(str(peer_id))
+
+        async for request in db.contact_requests.find(
+            {
+                "status": {"$in": accepted},
+                "$or": [
+                    {"from_user_id": user_id},
+                    {"to_user_id": user_id},
+                ],
+            },
+            {"from_user_id": 1, "to_user_id": 1},
+        ):
+            from_id = str(request.get("from_user_id") or "")
+            to_id = str(request.get("to_user_id") or "")
+            peer_id = to_id if from_id == str(user_id) else from_id
+            if peer_id and peer_id != str(user_id):
+                peers.add(peer_id)
+        if peers:
+            async for blocked in db.blocked_users.find(
+                {
+                    "$or": [
+                        {"blocker_id": user_id, "blocked_id": {"$in": list(peers)}},
+                        {"blocked_id": user_id, "blocker_id": {"$in": list(peers)}},
+                    ]
+                },
+                {"blocker_id": 1, "blocked_id": 1},
+            ):
+                peer_id = (
+                    blocked.get("blocked_id")
+                    if str(blocked.get("blocker_id")) == str(user_id)
+                    else blocked.get("blocker_id")
+                )
+                if peer_id:
+                    peers.discard(str(peer_id))
+        return list(peers)
+
+    @staticmethod
+    async def _eligible_peer_ids(db, owner_id: str, status_doc: dict) -> List[str]:
+        """Contacts who should receive a live status_new / status_delete event."""
+        vis = (status_doc.get("visibility") or "contacts").lower()
+        selected = status_doc.get("selected_viewer_ids") or []
+        if vis in ("selected", "selected_contacts"):
+            return [str(x) for x in selected if str(x) != str(owner_id)]
+        peers = await StatusService._accepted_contact_ids(db, owner_id)
+        if vis == StatusVisibility.CONTACTS_EXCEPT.value:
+            excluded = {str(x) for x in status_doc.get("excluded_viewer_ids") or []}
+            return [peer for peer in peers if peer not in excluded]
+        return peers
+
+    @staticmethod
+    async def _ws_send_users(user_ids: List[str], payload: dict) -> None:
+        try:
+            from app.websocket.manager import manager
+            for uid in user_ids:
+                await manager.send_user(str(uid), payload)
+        except Exception:
+            logger.debug("status ws fanout failed", exc_info=True)
+
+    @staticmethod
+    async def create_status(
+        owner_id: str,
+        content: Optional[str] = None,
+        status_type: str = "text",
+        media_attachments: Optional[List[Dict]] = None,
+        visibility: str = "contacts",
+        selected_viewer_ids: Optional[List[str]] = None,
+        excluded_viewer_ids: Optional[List[str]] = None,
+        expires_in_hours: int = 24,
+        background: Optional[str] = None,
+        is_repost: bool = False,
+        repost_of_status_id: Optional[str] = None,
+    ) -> dict:
+        try:
+            st = StatusType(status_type)
+        except ValueError:
+            raise ValidationError(f"Invalid status_type: {status_type}")
+        try:
+            vis = StatusVisibility(visibility)
+        except ValueError:
+            raise ValidationError(f"Invalid visibility: {visibility}")
+
+        if st == StatusType.TEXT and not content:
+            raise ValidationError("Text status requires content")
+
+        db = get_database()
+        accepted_peers = set(await StatusService._accepted_contact_ids(db, owner_id))
+        selected = [
+            str(peer_id)
+            for peer_id in (selected_viewer_ids or [])
+            if str(peer_id) in accepted_peers and str(peer_id) != str(owner_id)
+        ]
+        excluded = [
+            str(peer_id)
+            for peer_id in (excluded_viewer_ids or [])
+            if str(peer_id) in accepted_peers and str(peer_id) != str(owner_id)
+        ]
+        now = datetime.now(timezone.utc)
+        expires = now + timedelta(hours=min(max(expires_in_hours, 1), 168))
+        doc = {
+            "owner_user_id": owner_id,
+            "content": content,
+            "media_attachments": media_attachments or [],
+            "visibility": vis.value,
+            "selected_viewer_ids": selected,
+            "excluded_viewer_ids": excluded,
+            "created_at": now,
+            "background": background or "solid_1",
+            "expires_at": expires,
+            "status_type": st.value,
+        }
+        if is_repost or repost_of_status_id:
+            doc["is_repost"] = True
+            if repost_of_status_id:
+                doc["repost_of_status_id"] = str(repost_of_status_id)
+        result = await db.statuses.insert_one(doc)
+        doc["_id"] = result.inserted_id
+
+        await db.user_activity_logs.insert_one(
+            {
+                "user_id": owner_id,
+                "event_type": "status",
+                "action": "created",
+                "resource_type": "status",
+                "resource_id": str(result.inserted_id),
+                "timestamp": now,
+                "metadata": {},
+            }
+        )
+        serialized = StatusService._serialize(doc)
+        serialized["viewer_ids"] = []
+        serialized["view_count"] = 0
+        # Attach owner profile for instant client render
+        try:
+            owner = await db.users.find_one(
+                {"_id": ObjectId(owner_id)},
+                {"username": 1, "display_name": 1, "profile_photo": 1},
+            )
+            if owner:
+                serialized["owner"] = {
+                    "id": owner_id,
+                    "username": owner.get("username"),
+                    "display_name": owner.get("display_name"),
+                    "profile_photo": owner.get("profile_photo"),
+                }
+                serialized["owner_user_id"] = owner_id
+        except Exception:
+            pass
+        # Live push to contacts — no refresh needed
+        try:
+            peers = await StatusService._eligible_peer_ids(db, owner_id, doc)
+            await StatusService._ws_send_users(
+                peers,
+                {"t": "status_new", "status": serialized},
+            )
+        except Exception:
+            logger.debug("status_new fanout failed", exc_info=True)
+
+        # If this is a repost, tell the original owner so their viewers list gets reposted:true
+        if repost_of_status_id and ObjectId.is_valid(str(repost_of_status_id)):
+            try:
+                original = await db.statuses.find_one({"_id": ObjectId(str(repost_of_status_id))})
+                if original and str(original.get("owner_user_id")) != str(owner_id):
+                    orig_owner = str(original["owner_user_id"])
+                    reposter = await db.users.find_one(
+                        {"_id": ObjectId(owner_id)},
+                        {"username": 1, "display_name": 1, "profile_photo": 1},
+                    )
+                    already_liked = bool(
+                        await db.status_likes.find_one(
+                            {
+                                "status_id": str(repost_of_status_id),
+                                "user_id": owner_id,
+                            }
+                        )
+                    )
+                    view_count = await db.status_views.count_documents(
+                        {"status_id": str(repost_of_status_id)}
+                    )
+                    from app.websocket.manager import manager
+                    await manager.send_user(
+                        orig_owner,
+                        {
+                            "t": "status_view",
+                            "status_id": str(repost_of_status_id),
+                            "view_count": view_count,
+                            "viewer": {
+                                "viewer_id": owner_id,
+                                "username": (reposter or {}).get("username"),
+                                "display_name": (reposter or {}).get("display_name"),
+                                "profile_photo": (reposter or {}).get("profile_photo"),
+                                "viewed_at": now.isoformat(),
+                                "liked": already_liked,
+                                "reposted": True,
+                            },
+                            "repost_only": True,
+                        },
+                    )
+                    # Soft notification (one per original status + reposter)
+                    try:
+                        name = (
+                            (reposter or {}).get("display_name")
+                            or (reposter or {}).get("username")
+                            or "Someone"
+                        )
+                        already = await db.notifications.find_one(
+                            {
+                                "user_id": orig_owner,
+                                "type": "status_repost",
+                                "status_id": str(repost_of_status_id),
+                                "actor_id": owner_id,
+                            }
+                        )
+                        if not already:
+                            await db.notifications.insert_one(
+                                {
+                                    "user_id": orig_owner,
+                                    "type": "status_repost",
+                                    "status_id": str(repost_of_status_id),
+                                    "actor_id": owner_id,
+                                    "title": f"{name} reposted your status",
+                                    "body": f"{name} reposted your status",
+                                    "created_at": now,
+                                    "read": False,
+                                }
+                            )
+                            await manager.send_user(
+                                orig_owner,
+                                {
+                                    "t": "status_repost",
+                                    "status_id": str(repost_of_status_id),
+                                    "from": owner_id,
+                                    "from_name": name,
+                                    "title": f"{name} reposted your status",
+                                },
+                            )
+                    except Exception:
+                        logger.debug("status_repost notif failed", exc_info=True)
+            except Exception:
+                logger.debug("status_repost fanout failed", exc_info=True)
+
+        return serialized
+
+    @staticmethod
+    async def _contact_ids(db, viewer_id: str) -> List[str]:
+        return await StatusService._accepted_contact_ids(db, viewer_id)
+
+    @staticmethod
+    async def get_feed(viewer_id: str) -> List[dict]:
+        """Statuses from contacts that are still valid and visible to viewer."""
+        db = get_database()
+        now = datetime.now(timezone.utc)
+        contact_ids = await StatusService._contact_ids(db, viewer_id)
+        owner_filter = {"$in": contact_ids + [viewer_id]}
+
+        rows = (
+            await db.statuses.find(
+                {
+                    "owner_user_id": owner_filter,
+                    "expires_at": {"$gt": now},
+                }
+            )
+            .sort("created_at", 1)
+            .to_list(length=500)
+        )
+
+        visible = [
+            s
+            for s in rows
+            if StatusService._can_view_sync(s, viewer_id, contact_ids)
+        ]
+        return await StatusService._enrich_many(db, visible)
+
+    @staticmethod
+    async def get_user_statuses(owner_id: str, viewer_id: str) -> List[dict]:
+        db = get_database()
+        now = datetime.now(timezone.utc)
+        contact_ids = await StatusService._contact_ids(db, viewer_id)
+        rows = (
+            await db.statuses.find(
+                {"owner_user_id": owner_id, "expires_at": {"$gt": now}}
+            )
+            .sort("created_at", 1)
+            .to_list(length=100)
+        )
+        visible = [
+            s
+            for s in rows
+            if StatusService._can_view_sync(s, viewer_id, contact_ids)
+        ]
+        return await StatusService._enrich_many(db, visible)
+
+    @staticmethod
+    async def view_status(status_id: str, viewer_id: str) -> dict:
+        db = get_database()
+        if not ObjectId.is_valid(status_id):
+            raise ValidationError("Invalid status id")
+        s = await db.statuses.find_one({"_id": ObjectId(status_id)})
+        if not s:
+            raise NotFoundError("Status not found")
+        now = datetime.now(timezone.utc)
+        expires = s["expires_at"]
+        if getattr(expires, "tzinfo", None) is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if expires < now:
+            raise NotFoundError("Status expired")
+
+        contact_ids = await StatusService._contact_ids(db, viewer_id)
+        if not StatusService._can_view_sync(s, viewer_id, contact_ids):
+            raise ForbiddenError("Not allowed to view this status")
+
+        if s["owner_user_id"] != viewer_id:
+            try:
+                result = await db.status_views.update_one(
+                    {"status_id": status_id, "viewer_id": viewer_id},
+                    {
+                        "$setOnInsert": {
+                            "status_id": status_id,
+                            "viewer_id": viewer_id,
+                            "viewed_at": now,
+                        }
+                    },
+                    upsert=True,
+                )
+            except DuplicateKeyError:
+                # Parallel first-view race under unique index — treat as existing view
+                class _R:
+                    upserted_id = None
+                result = _R()
+            # Notify owner of a new unique view with FULL viewer payload first
+            # so the owner can cache the row before relying on view_count alone.
+            if result.upserted_id is not None:
+                try:
+                    from app.websocket.manager import manager
+                    viewer = await db.users.find_one(
+                        {"_id": ObjectId(viewer_id)},
+                        {"username": 1, "display_name": 1, "profile_photo": 1},
+                    )
+                    liked_doc = await db.status_likes.find_one(
+                        {"status_id": status_id, "user_id": viewer_id}
+                    )
+                    reposted_doc = await db.statuses.find_one(
+                        {
+                            "owner_user_id": viewer_id,
+                            "repost_of_status_id": status_id,
+                        },
+                        {"_id": 1},
+                    )
+                    viewer_payload = {
+                        "viewer_id": viewer_id,
+                        "id": viewer_id,
+                        "username": (viewer or {}).get("username"),
+                        "display_name": (viewer or {}).get("display_name"),
+                        "name": (viewer or {}).get("display_name")
+                        or (viewer or {}).get("username")
+                        or "User",
+                        "profile_photo": (viewer or {}).get("profile_photo"),
+                        "photo": (viewer or {}).get("profile_photo"),
+                        "viewed_at": now.isoformat(),
+                        "liked": bool(liked_doc),
+                        "reposted": bool(reposted_doc),
+                    }
+                    # Payload is complete before count is computed/sent
+                    view_count = await db.status_views.count_documents({"status_id": status_id})
+                    await manager.send_user(
+                        str(s["owner_user_id"]),
+                        {
+                            "t": "status_view",
+                            "status_id": status_id,
+                            "viewer": viewer_payload,
+                            "view_count": view_count,
+                        },
+                    )
+                except Exception:
+                    pass
+
+        enriched = await StatusService._enrich_many(db, [s])
+        return enriched[0]
+
+    @staticmethod
+    async def delete_status(status_id: str, user_id: str) -> None:
+        db = get_database()
+        if not ObjectId.is_valid(status_id):
+            raise ValidationError("Invalid status id")
+        s = await db.statuses.find_one({"_id": ObjectId(status_id)})
+        if not s:
+            raise NotFoundError("Status not found")
+        if s["owner_user_id"] != user_id:
+            raise ForbiddenError("Can only delete your own status")
+        await db.statuses.delete_one({"_id": ObjectId(status_id)})
+        await db.status_views.delete_many({"status_id": status_id})
+        await db.status_likes.delete_many({"status_id": status_id})
+        # Remove notifications tied to this status (likes, etc.)
+        await db.notifications.delete_many({"status_id": status_id})
+        try:
+            peers = await StatusService._eligible_peer_ids(db, user_id, s)
+            await StatusService._ws_send_users(
+                peers + [user_id],
+                {"t": "status_delete", "status_id": status_id, "owner_id": user_id},
+            )
+        except Exception:
+            logger.debug("status_delete fanout failed", exc_info=True)
+
+    @staticmethod
+    async def list_viewers(status_id: str, owner_id: str) -> List[dict]:
+        db = get_database()
+        if not ObjectId.is_valid(status_id):
+            raise ValidationError("Invalid status id")
+        s = await db.statuses.find_one({"_id": ObjectId(status_id)})
+        if not s:
+            raise NotFoundError("Status not found")
+        if s["owner_user_id"] != owner_id:
+            raise ForbiddenError("Only owner can see viewers")
+
+        views = await db.status_views.find({"status_id": status_id}).to_list(length=500)
+        if not views:
+            return []
+        viewer_ids = [v["viewer_id"] for v in views]
+        oids = [ObjectId(i) for i in viewer_ids if ObjectId.is_valid(i)]
+        users: Dict[str, dict] = {}
+        if oids:
+            async for u in db.users.find(
+                {"_id": {"$in": oids}},
+                {"username": 1, "display_name": 1, "profile_photo": 1},
+            ):
+                users[str(u["_id"])] = u
+
+        like_ids = set()
+        async for lk in db.status_likes.find({"status_id": status_id}):
+            like_ids.add(lk.get("user_id"))
+
+        # Viewers who reposted this status (any of their statuses that reference it)
+        repost_ids = set()
+        if viewer_ids:
+            async for rs in db.statuses.find(
+                {
+                    "owner_user_id": {"$in": viewer_ids},
+                    "repost_of_status_id": status_id,
+                },
+                {"owner_user_id": 1},
+            ):
+                oid = rs.get("owner_user_id")
+                if oid:
+                    repost_ids.add(str(oid))
+
+        results = []
+        for v in views:
+            u = users.get(v["viewer_id"])
+            if not u:
+                continue
+            results.append(
+                {
+                    "viewer_id": v["viewer_id"],
+                    "username": u["username"],
+                    "display_name": u["display_name"],
+                    "profile_photo": u.get("profile_photo"),
+                    "viewed_at": v["viewed_at"].isoformat() if v.get("viewed_at") else None,
+                    "liked": v["viewer_id"] in like_ids,
+                    "reposted": v["viewer_id"] in repost_ids,
+                }
+            )
+        # Engagement first (liked / reposted), then most recent
+        engaged = [r for r in results if r.get("liked") or r.get("reposted")]
+        rest = [r for r in results if not (r.get("liked") or r.get("reposted"))]
+        engaged.sort(
+            key=lambda r: (
+                (2 if r.get("liked") else 0) + (1 if r.get("reposted") else 0),
+                r.get("viewed_at") or "",
+            ),
+            reverse=True,
+        )
+        rest.sort(key=lambda r: r.get("viewed_at") or "", reverse=True)
+        return engaged + rest
+
+
+
+    @staticmethod
+    async def toggle_like(status_id: str, user_id: str) -> dict:
+        """Like/unlike a status. Owner cannot like their own."""
+        db = get_database()
+        if not ObjectId.is_valid(status_id):
+            raise ValidationError("Invalid status id")
+        s = await db.statuses.find_one({"_id": ObjectId(status_id)})
+        if not s:
+            raise NotFoundError("Status not found")
+        if s["owner_user_id"] == user_id:
+            raise ForbiddenError("Cannot like your own status")
+        contact_ids = await StatusService._contact_ids(db, user_id)
+        if not StatusService._can_view_sync(s, user_id, contact_ids):
+            raise ForbiddenError("Not allowed")
+        existing = await db.status_likes.find_one({"status_id": status_id, "user_id": user_id})
+        liker = await db.users.find_one(
+            {"_id": ObjectId(user_id)},
+            {"username": 1, "display_name": 1, "profile_photo": 1},
+        )
+        now = datetime.now(timezone.utc)
+        if existing:
+            await db.status_likes.delete_one({"_id": existing["_id"]})
+            liked = False
+        else:
+            newly_liked = False
+            try:
+                await db.status_likes.insert_one(
+                    {
+                        "status_id": status_id,
+                        "user_id": user_id,
+                        "created_at": now,
+                    }
+                )
+                liked = True
+                newly_liked = True
+            except DuplicateKeyError:
+                # Concurrent like — already liked, do not notify again
+                liked = True
+                newly_liked = False
+            # One notification per (status, liker) — never spam
+            if newly_liked:
+                try:
+                    name = (
+                        (liker or {}).get("display_name")
+                        or (liker or {}).get("username")
+                        or "Someone"
+                    )
+                    already = await db.notifications.find_one(
+                        {
+                            "user_id": s["owner_user_id"],
+                            "type": "status_like",
+                            "status_id": status_id,
+                            "actor_id": user_id,
+                        }
+                    )
+                    if not already:
+                        await db.notifications.insert_one(
+                            {
+                                "user_id": s["owner_user_id"],
+                                "type": "status_like",
+                                "title": f"{name} liked your status",
+                                "body": "Tap to open",
+                                "status_id": status_id,
+                                "actor_id": user_id,
+                                "actor_name": name,
+                                "actor_photo": (liker or {}).get("profile_photo"),
+                                "read": False,
+                                "created_at": now,
+                                "expires_at": s.get("expires_at"),
+                            }
+                        )
+                        try:
+                            from app.websocket.manager import manager as _mgr
+                            await _mgr.send_user(
+                                str(s["owner_user_id"]),
+                                {
+                                    "t": "status_like",
+                                    "status_id": status_id,
+                                    "from": user_id,
+                                    "from_name": name,
+                                    "title": f"{name} liked your status",
+                                    "expires_at": (
+                                        s.get("expires_at").isoformat()
+                                        if hasattr(s.get("expires_at"), "isoformat")
+                                        else s.get("expires_at")
+                                    ),
+                                },
+                            )
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        # Live push to owner: update viewers cache (liked + reposted flags) — no notif spam
+        also_reposted = False
+        try:
+            from app.websocket.manager import manager
+            view_count = await db.status_views.count_documents({"status_id": status_id})
+            also_reposted = bool(
+                await db.statuses.find_one(
+                    {
+                        "owner_user_id": user_id,
+                        "repost_of_status_id": status_id,
+                    },
+                    {"_id": 1},
+                )
+            )
+            await manager.send_user(
+                str(s["owner_user_id"]),
+                {
+                    "t": "status_view",
+                    "status_id": status_id,
+                    "view_count": view_count,
+                    "viewer": {
+                        "viewer_id": user_id,
+                        "username": (liker or {}).get("username"),
+                        "display_name": (liker or {}).get("display_name"),
+                        "profile_photo": (liker or {}).get("profile_photo"),
+                        "viewed_at": now.isoformat(),
+                        "liked": liked,
+                        "reposted": also_reposted,
+                    },
+                    "like_only": True,
+                },
+            )
+        except Exception:
+            pass
+        return {"liked": liked, "status_id": status_id, "reposted": also_reposted}
+
+    @staticmethod
+    async def _enrich_many(db, statuses: List[dict]) -> List[dict]:
+        if not statuses:
+            return []
+        status_ids = [str(s["_id"]) for s in statuses]
+        owner_ids = list({s["owner_user_id"] for s in statuses})
+
+        viewers_map: Dict[str, List[str]] = {sid: [] for sid in status_ids}
+        async for v in db.status_views.find({"status_id": {"$in": status_ids}}):
+            viewers_map.setdefault(v["status_id"], []).append(v["viewer_id"])
+
+        owners: Dict[str, dict] = {}
+        oids = [ObjectId(i) for i in owner_ids if ObjectId.is_valid(i)]
+        if oids:
+            async for u in db.users.find(
+                {"_id": {"$in": oids}},
+                {"username": 1, "display_name": 1, "profile_photo": 1},
+            ):
+                owners[str(u["_id"])] = u
+
+        results = []
+        for s in statuses:
+            sid = str(s["_id"])
+            data = StatusService._serialize(s)
+            vids = viewers_map.get(sid) or []
+            data["viewer_ids"] = vids
+            data["view_count"] = len(vids)
+            u = owners.get(s["owner_user_id"])
+            if u:
+                data["owner"] = {
+                    "id": s["owner_user_id"],
+                    "username": u.get("username"),
+                    "display_name": u.get("display_name"),
+                    "profile_photo": u.get("profile_photo"),
+                }
+            results.append(data)
+        return results
+
+    @staticmethod
+    def _can_view_sync(status: dict, viewer_id: str, viewer_contact_ids: List[str]) -> bool:
+        owner = status["owner_user_id"]
+        if owner == viewer_id:
+            return True
+        vis = status.get("visibility", StatusVisibility.CONTACTS.value)
+        if vis == StatusVisibility.EVERYONE.value:
+            return True
+        if vis == StatusVisibility.CONTACTS.value:
+            return owner in viewer_contact_ids
+        if vis == StatusVisibility.CONTACTS_EXCEPT.value:
+            return (
+                owner in viewer_contact_ids
+                and viewer_id not in (status.get("excluded_viewer_ids") or [])
+            )
+        if vis == StatusVisibility.SELECTED.value:
+            return viewer_id in (status.get("selected_viewer_ids") or [])
+        if vis == StatusVisibility.CLOSE_FRIENDS.value:
+            return owner in viewer_contact_ids
+        return False
+
+    @staticmethod
+    async def _can_view(
+        status: dict, viewer_id: str, viewer_contact_ids: List[str]
+    ) -> bool:
+        return StatusService._can_view_sync(status, viewer_id, viewer_contact_ids)
+
+    @staticmethod
+    def _serialize(s: dict) -> dict:
+        def _iso(v):
+            if v is None:
+                return None
+            if isinstance(v, str):
+                return v if v.endswith("Z") or "+" in v[10:] else v + ("Z" if "T" in v else "")
+            if getattr(v, "tzinfo", None) is None:
+                from datetime import timezone
+                v = v.replace(tzinfo=timezone.utc)
+            return v.astimezone(__import__("datetime").timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        return {
+            "id": str(s["_id"]),
+            "owner_user_id": s["owner_user_id"],
+            "content": s.get("content"),
+            "media_attachments": s.get("media_attachments") or [],
+            "visibility": s.get("visibility"),
+            "status_type": s.get("status_type"),
+            "background": s.get("background") or "theme_purple_grad",
+            "created_at": _iso(s.get("created_at")),
+            "expires_at": _iso(s.get("expires_at")),
+            "is_repost": bool(s.get("is_repost") or s.get("repost_of_status_id")),
+            "repost_of_status_id": s.get("repost_of_status_id"),
+        }

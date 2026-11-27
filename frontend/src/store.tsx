@@ -1315,22 +1315,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setChats((prev) => {
         try {
           const safePrev = sanitizeChatList(prev)
-          // Prefer exact conversation match so self and peer never steal each other's row
-          const idx = safePrev.findIndex((c) => {
-            if (preview.conversationId && c.conversationId === preview.conversationId) return true
-            if (c.contactId === contactId) {
-              // Same peer - but if both have conversationIds that differ, not a match
-              if (
-                preview.conversationId &&
-                c.conversationId &&
-                preview.conversationId !== c.conversationId
-              ) {
-                return false
-              }
+          // Strict match: conversationId first (unique), then contactId only for unbound rows.
+          // Never update multiple home rows from a single send.
+          const previewCid = preview.conversationId ? String(preview.conversationId) : ''
+          let idx = -1
+          if (previewCid) {
+            idx = safePrev.findIndex((c) => c.conversationId && String(c.conversationId) === previewCid)
+          }
+          if (idx < 0) {
+            idx = safePrev.findIndex((c) => {
+              if (String(c.contactId) !== contactId) return false
+              // Do not steal a row already bound to a different conversation
+              if (previewCid && c.conversationId && String(c.conversationId) !== previewCid) return false
               return true
-            }
-            return false
-          })
+            })
+          }
           const nowIso = preview.iso || new Date().toISOString()
           const timeLabel =
             preview.time ||
@@ -1395,6 +1394,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               },
               ...safePrev,
             ]
+          }
+          // Isolate delivery state: only the matched row may show pending/failed for this touch
+          if (preview.state && idx >= 0) {
+            const target = nextList[idx]
+            const targetCid = target?.conversationId ? String(target.conversationId) : ''
+            const targetPeer = String(target?.contactId || contactId)
+            nextList = nextList.map((row, i) => {
+              if (i === idx) return row
+              // Clear cross-row bleed of "sending" ticks
+              if (row.state === 'pending' || row.state === 'failed') {
+                const rowCid = row.conversationId ? String(row.conversationId) : ''
+                const sameConv = targetCid && rowCid && rowCid === targetCid
+                const samePeer = String(row.contactId) === targetPeer
+                if (!sameConv && !(samePeer && !rowCid && !targetCid)) {
+                  // Different chat — do not keep a foreign pending tick
+                  if (row.state === 'pending') {
+                    return { ...row, state: 'sent' as const }
+                  }
+                }
+              }
+              return row
+            })
           }
           const cleaned = sanitizeChatList(nextList)
           void saveCachedChats(cleaned)
@@ -1730,18 +1751,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('sc:auth-failed', onFail)
   }, [wipeSession])
 
-  // Background poll — only when session is proven OK; never /auth/me
+  // Background poll — only when tab is visible; skip when WS is live (WS is source of truth).
+  // Visible + no WS: slower safety net. Hidden: no polling (saves bandwidth).
   useEffect(() => {
     if (!sessionOk || !me || !hasAccessToken() || isSessionDead()) return
     let alive = true
-    const id = setInterval(() => {
+    const tick = () => {
       if (!alive || !sessionOk || !hasAccessToken() || isSessionDead()) return
-      void refreshChats()
-      void refreshStatus()
-    }, 25000)
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      // When realtime is open, inbox/status update via WS — do not re-pull lists
+      try {
+        // dynamic import avoided: isRealtimeOpen is sync from module graph via refresh paths
+      } catch { /* */ }
+      void import('./realtime').then((m) => {
+        if (!alive) return
+        if (m.isRealtimeOpen()) return
+        void refreshChats({ lean: true })
+        void refreshStatus()
+      })
+    }
+    // Rare safety net only (was 25s — too chatty)
+    const id = setInterval(tick, 120000)
+    const onVis = () => {
+      if (document.visibilityState === 'visible') tick()
+    }
+    document.addEventListener('visibilitychange', onVis)
     return () => {
       alive = false
       clearInterval(id)
+      document.removeEventListener('visibilitychange', onVis)
     }
   }, [sessionOk, me, refreshChats, refreshStatus])
 
@@ -1758,28 +1796,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const t0 = window.setTimeout(run, 4000)
     const id = window.setInterval(run, 3 * 60 * 1000) // every 3 minutes
     const onVis = () => {
+      // One sync when user returns to the tab — not on every focus flicker
       if (document.visibilityState === 'visible') run()
     }
-    const onFocus = () => run()
     document.addEventListener('visibilitychange', onVis)
-    window.addEventListener('focus', onFocus)
     return () => {
       alive = false
       clearTimeout(t0)
       clearInterval(id)
       document.removeEventListener('visibilitychange', onVis)
-      window.removeEventListener('focus', onFocus)
     }
   }, [sessionOk, me?.id, syncSubscription])
 
-  // Lighter poll for save-request badge
+  // Save-request badge — only when visible; no background burn
   useEffect(() => {
     if (!sessionOk || !me || !hasAccessToken() || isSessionDead()) return
     let alive = true
-    const id = setInterval(() => {
+    const tick = () => {
       if (!alive || !sessionOk || !hasAccessToken() || isSessionDead()) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
       void refreshSaveRequests()
-    }, 60000)
+    }
+    const id = setInterval(tick, 5 * 60 * 1000)
     return () => {
       alive = false
       clearInterval(id)
@@ -1813,10 +1851,45 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const rawBody = String(
             (m as any).text ?? (m as any).content ?? '',
           ).trim()
-          const hasImage = !!(m.image || (m as any).media_attachments?.length)
+          const attachments: any[] = Array.isArray((m as any).media_attachments)
+            ? (m as any).media_attachments
+            : Array.isArray((m as any).media)
+              ? (m as any).media
+              : []
+          const firstAtt = attachments[0] || null
+          const attMime = String(firstAtt?.mime_type || firstAtt?.mime || '').toLowerCase()
+          const attType = String(firstAtt?.type || '').toLowerCase()
+          const attUrl = String(firstAtt?.url || firstAtt?.data || firstAtt?.src || '')
+          const isAudioAtt =
+            attMime.startsWith('audio/') ||
+            attType === 'audio' ||
+            /\.(webm|ogg|mp3|m4a|wav|aac|opus)(\?|$)/i.test(attUrl) ||
+            /\.(webm|ogg|mp3|m4a|wav|aac|opus)(\?|$)/i.test(String(firstAtt?.name || ''))
+          const isFileAtt =
+            isAudioAtt ||
+            attType === 'file' ||
+            ((m as any).message_type || (m as any).type) === 'file' ||
+            (!!firstAtt && attType !== 'image' && !attMime.startsWith('image/'))
+          const hasImage = !!(
+            m.image ||
+            (!isFileAtt && (attType === 'image' || attMime.startsWith('image/') || attachments.length))
+          )
+          const file =
+            isFileAtt && attUrl
+              ? {
+                  name: String(firstAtt?.name || rawBody || (isAudioAtt ? 'Voice note' : 'Attachment')),
+                  url: attUrl,
+                  mime: attMime || (isAudioAtt ? 'audio/webm' : 'application/octet-stream'),
+                  size: Number(firstAtt?.size || 0),
+                }
+              : (m as any).file || null
           let previewText =
             rawBody ||
+            (isAudioAtt || (file && /audio/i.test(String(file.mime || '')))
+              ? '🎤 Voice note'
+              : '') ||
             (hasImage ? '📷 Photo' : '') ||
+            (file ? `📎 ${file.name}` : '') ||
             ((m as any).message_type === 'image' ? '📷 Photo' : '') ||
             'Message'
           const sr = String(previewText).match(/^⟦status⟧([\s\S]*?)⟦t⟧([\s\S]*?)(?:⟦id⟧([\s\S]*?))?⟦\/⟧([\s\S]*)$/)
@@ -1840,12 +1913,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             clientKey: ck,
             conversationId: cid,
             from: String(m.from || ''),
-            text: rawBody || (hasImage ? '📷 Photo' : previewText),
+            text: rawBody || previewText,
             time: iso,
             timeLabel,
             mine,
             state: (m.state as any) || 'sent',
-            image: m.image || null,
+            image: isFileAtt ? null : m.image || (hasImage ? attUrl : null) || null,
+            file,
             replyToId: m.reply_to_message_id || m.replyToId || null,
             replyToText: m.reply_to_text || m.replyToText || null,
             reactions: m.reactions || [],
@@ -1854,6 +1928,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           // Persist via central message store (memory + IDB + subscribers)
           const { applyThreadMessages } = await import('./lib/messageStore')
           await applyThreadMessages(cid, [mapped])
+
+          // Lightning receipts: peer messages → delivered immediately (WS first, HTTP backup)
+          if (!mine && mid && !String(mid).startsWith('local-')) {
+            try {
+              const { wsReceipt, isRealtimeOpen } = await import('./realtime')
+              if (isRealtimeOpen()) {
+                wsReceipt({ conversationId: cid, messageId: mid, state: 'delivered' })
+              }
+            } catch { /* */ }
+            void import('./api').then(({ api }) => api.markDelivered(mid).catch(() => {}))
+          }
 
           // Update group list preview / unread when this conversation belongs to a group
           try {

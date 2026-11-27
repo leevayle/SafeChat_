@@ -25,7 +25,17 @@ export type RtMsg = {
   text: string
   time?: string
   type?: string
+  message_type?: string
   image?: string | null
+  media_attachments?: Array<{
+    type?: string
+    url?: string
+    name?: string
+    mime_type?: string
+    mime?: string
+    size?: number
+    data?: string
+  }>
   state?: string
   client_key?: string
   clientKey?: string

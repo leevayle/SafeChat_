@@ -479,7 +479,7 @@ const MessageBubble = memo(function MessageBubble({
           </a>
         )}
 
-        {m.text && /^🎤 Voice note/.test(m.text) && (
+        {m.text && /^🎤 Voice note/.test(m.text) && !(m.file && isAudioFile(m.file)) && (
           <div className={`flex items-center gap-3 px-3 py-2.5 ${mine ? '' : ''}`}>
             <button
               type="button"
@@ -720,6 +720,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   const [recording, setRecording] = useState(false)
   const [recordSecs, setRecordSecs] = useState(0)
   const mediaRecRef = useRef<MediaRecorder | null>(null)
+  const recordSecsRef = useRef(0)
   const recordChunks = useRef<Blob[]>([])
   const recordTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const [editText, setEditText] = useState('')
@@ -992,7 +993,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         void applyThreadMessages(cid, stable, 'merge')
         return stable
       })
-      api.markRead(cid).catch(() => {})
+      markThreadRead(cid)
     } catch (e: any) {
       if (!silent) showToast(e?.message || 'Could not load messages')
     } finally {
@@ -1128,7 +1129,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     // Instant blue ticks for the sender: as soon as this chat surface is open,
     // mark read - do not wait for message history to finish loading.
     if (knownConv && hasAccessToken()) {
-      void api.markRead(knownConv).catch(() => {})
+      markThreadRead(knownConv)
       wsReceipt({ conversationId: knownConv, messageId: 'all', state: 'read' })
       // Clear unread badge on home immediately
       upsertChatPreview({
@@ -1160,6 +1161,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           text?: string
           time?: string
           image?: string | null
+          media_attachments?: any[]
           state?: string
           reply_to_message_id?: string | null
           reply_to_text?: string | null
@@ -1173,7 +1175,33 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       let text = String(
         detail.m.text ?? (detail.m as any).content ?? '',
       ).trim()
+      const atts: any[] = Array.isArray((detail.m as any).media_attachments)
+        ? (detail.m as any).media_attachments
+        : []
+      const firstAtt = atts[0] || null
+      const attMime = String(firstAtt?.mime_type || firstAtt?.mime || '').toLowerCase()
+      const attType = String(firstAtt?.type || '').toLowerCase()
+      const attUrl = String(firstAtt?.url || firstAtt?.data || '')
+      const isAudioAtt =
+        attMime.startsWith('audio/') ||
+        attType === 'audio' ||
+        /\.(webm|ogg|mp3|m4a|wav|aac|opus)(\?|$)/i.test(attUrl + ' ' + String(firstAtt?.name || ''))
+      const isFileAtt =
+        isAudioAtt ||
+        attType === 'file' ||
+        (!!firstAtt && attType !== 'image' && !attMime.startsWith('image/'))
+      const file =
+        isFileAtt && attUrl
+          ? {
+              name: String(firstAtt?.name || text || (isAudioAtt ? 'Voice note' : 'Attachment')),
+              url: attUrl,
+              mime: attMime || (isAudioAtt ? 'audio/webm' : 'application/octet-stream'),
+              size: Number(firstAtt?.size || 0),
+            }
+          : null
       if (!text && detail.m.image) text = '📷 Photo'
+      if (!text && isAudioAtt) text = '🎤 Voice note'
+      if (!text && file) text = `📎 ${file.name}`
       if (!text) text = 'Message'
       let statusReply: { preview: string; time?: string; statusId?: string } | null = null
       {
@@ -1190,7 +1218,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         from: detail.m.from,
         to: contactId,
         text,
-        image: detail.m.image || null,
+        image: isFileAtt ? null : detail.m.image || null,
+        file,
         time: detail.m.time || new Date().toISOString(),
         timeLabel: formatLocalTime(detail.m.time || Date.now()),
         state: (detail.m.state as any) || (mine ? 'sent' : undefined),
@@ -1217,6 +1246,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                   ...x,
                   id: incoming.id,
                   clientKey: x.clientKey || incoming.clientKey,
+                  file: (incoming as any).file ?? (x as any).file,
+                  image: incoming.image ?? x.image,
                   state: rankState(incoming.state) >= rankState(x.state) ? (incoming.state as any) : x.state,
                 }
               : x,
@@ -1228,7 +1259,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         )
       })
       if (!mine && openCid) {
-        void api.markRead(openCid).catch(() => {})
+        markThreadRead(openCid)
       }
     }
     const onRcpt = (ev: Event) => {
@@ -1596,6 +1627,24 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     knownMsgIdsRef.current = new Set()
   }, [contactId])
 
+  /** Read receipts: WS first (instant to sender), HTTP persists. */
+  const markThreadRead = (cid: string | null | undefined) => {
+    if (!cid) return
+    try {
+      if (isRealtimeOpen()) {
+        const list = getCachedMessages(cid) || []
+        for (let i = list.length - 1; i >= 0; i--) {
+          const m = list[i]
+          if (m.mine) continue
+          if (!m.id || String(m.id).startsWith('local-')) continue
+          wsReceipt({ conversationId: cid, messageId: String(m.id), state: 'read' })
+          break
+        }
+      }
+    } catch { /* */ }
+    void api.markRead(cid).catch(() => {})
+  }
+
   const deliverMessage = async (
     localId: string,
     body: string,
@@ -1609,31 +1658,61 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
   ) => {
     if (sendingKeysRef.current.has(localId)) return
     sendingKeysRef.current.add(localId)
+
+    const markLocal = (state: ApiMsg['state'], patch?: Partial<ApiMsg>) => {
+      setMsgs((m) =>
+        m.map((x) =>
+          x.id === localId || x.clientKey === localId
+            ? { ...x, ...patch, state: pickState(state, x.state) }
+            : x,
+        ),
+      )
+      upsertChatPreview({
+        contactId: String((c as any).peerId || peerId || contactId),
+        conversationId: convRef.current || conversationId || undefined,
+        state: state as any,
+        mine: true,
+        last: patch?.text,
+      })
+    }
+
+    const waitForAck = (ck: string, ms: number) =>
+      new Promise<boolean>((resolve) => {
+        let done = false
+        const finish = (ok: boolean) => {
+          if (done) return
+          done = true
+          window.removeEventListener('sc:rt-ack', onAck as EventListener)
+          clearTimeout(timer)
+          resolve(ok)
+        }
+        const onAck = (ev: Event) => {
+          const d = (ev as CustomEvent).detail as { ck?: string; ok?: boolean }
+          if (d?.ck === ck) finish(!!d.ok)
+        }
+        window.addEventListener('sc:rt-ack', onAck as EventListener)
+        const timer = window.setTimeout(() => finish(false), ms)
+      })
+
     try {
-      const cid = await ensureConversation()
+      // Bound ensureConversation so a hung openPrivateChat cannot leave "sending" forever
+      const cid = await Promise.race([
+        ensureConversation(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000)),
+      ])
       if (!cid) {
-        setMsgs((m) => m.map((x) => (x.id === localId ? { ...x, state: 'failed' } : x)))
-        upsertChatPreview({
-          contactId: (c as any).peerId || contactId,
-          conversationId: conversationId || undefined,
-          last: body || (img ? '📷 Photo' : ''),
-          state: 'failed',
-          mine: true,
-          name: c.name,
-          photo: c.photo,
-          hue: c.hue,
-        })
-        showToast('Could not open chat - tap message to retry')
+        markLocal('failed')
+        showToast('Could not open chat — tap to retry')
         return
       }
-      if (cid && cid !== conversationId) {
+      if (cid !== conversationId) {
         setConversationId(cid)
         convRef.current = cid
       }
       if (optimistic) {
-        await applyThreadMessages(cid, [{ ...optimistic, conversationId: cid }], 'merge')
+        void applyThreadMessages(cid, [{ ...optimistic, conversationId: cid }], 'merge')
       }
-      // Prefer persistent WebSocket (no new HTTP handshake)
+
       let wsText = body || ''
       if (opts?.statusReply) {
         wsText = encodeStatusReply(wsText, {
@@ -1642,45 +1721,52 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
           statusId: opts.statusReply.statusId,
         })
       }
-      const usedWs = isRealtimeOpen() && wsSendMessage({
-        conversationId: cid,
-        text: wsText,
-        clientKey: localId,
-        image: img,
-        replyToId: opts?.replyToId || undefined,
-      })
-      if (usedWs) {
-        // Socket accepted the frame → treat as sent until ack upgrades id/state
-        setMsgs((m) =>
-          m.map((x) =>
-            x.id === localId || x.clientKey === localId
-              ? { ...x, state: pickState('sent', x.state) }
-              : x,
-          ),
-        )
-        upsertChatPreview({
-          contactId: (c as any).peerId || contactId,
+
+      // 1) Fast path: WebSocket send — stay pending until real server ACK
+      //    Files always use HTTP (no binary payload on the socket frame).
+      const canWs = !opts?.file && isRealtimeOpen()
+      if (canWs) {
+        const framed = wsSendMessage({
           conversationId: cid,
-          state: 'sent',
-          mine: true,
+          text: wsText,
+          clientKey: localId,
+          image: img,
+          replyToId: opts?.replyToId || undefined,
         })
-        void removeOutbox(localId)
-        sendingKeysRef.current.delete(localId)
-        // sc:rt-ack still maps server id + may bump delivered/read
-        return
+        if (framed) {
+          const acked = await waitForAck(localId, 2800)
+          if (acked) {
+            // onAck already upgraded id/state; keep outbox clear
+            void removeOutbox(localId)
+            return
+          }
+          // No ACK in time — fall through to HTTP with same clientKey (idempotent)
+        }
       }
-      const { message } = await api.send(cid, body || (img ? '📷 Photo' : '') || (opts?.file ? `📎 ${opts.file.name}` : ''), img, {
-        clientKey: localId,
-        ...opts,
-        file: opts?.file || null,
-      })
+
+      // 2) HTTP path (or WS fallback)
+      const { message } = await Promise.race([
+        api.send(
+          cid,
+          body || (img ? '📷 Photo' : '') || (opts?.file ? `📎 ${opts.file.name}` : ''),
+          img,
+          {
+            clientKey: localId,
+            ...opts,
+            file: opts?.file || null,
+          },
+        ),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Send timed out')), 20000),
+        ),
+      ])
+
       const confirmed = {
         ...message,
         clientKey: message.clientKey || localId,
         conversationId: cid,
       }
-      await applyThreadMessages(cid, [confirmed], 'merge')
-      // In-place receipt update only - never replace/remove the printed bubble
+      void applyThreadMessages(cid, [confirmed], 'merge')
       setMsgs((m) =>
         m.map((x) =>
           x.id === localId || x.clientKey === localId
@@ -1694,6 +1780,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
                 time: x.time || message.time,
                 text: x.text || message.text,
                 image: x.image ?? message.image,
+                file: (x as any).file ?? (message as any).file ?? null,
                 replyToId: x.replyToId || message.replyToId || null,
                 replyToText: x.replyToText || message.replyToText || null,
                 statusReply: x.statusReply || message.statusReply || null,
@@ -1702,11 +1789,10 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         ),
       )
       void removeOutbox(localId)
-      sendingKeysRef.current.delete(localId)
       upsertChatPreview({
-        contactId: (c as any).peerId || contactId,
+        contactId: String((c as any).peerId || peerId || contactId),
         conversationId: cid,
-        last: message.text || body || (img ? '📷 Photo' : ''),
+        last: message.text || body || (img ? '📷 Photo' : '') || (opts?.file ? `🎤 Voice note` : ''),
         state: (message.state as any) || 'sent',
         mine: true,
         name: c.name,
@@ -1716,7 +1802,6 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         time: message.timeLabel,
       })
     } catch (e: any) {
-      sendingKeysRef.current.delete(localId)
       const failedCid = convRef.current || conversationId || knownConv
       const cached = getCachedMessages(failedCid)?.find(
         (message) => message.id === localId || message.clientKey === localId,
@@ -1724,9 +1809,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       if (cached && failedCid) {
         void mergeCachedMessages(failedCid, [{ ...cached, state: 'failed' }])
       }
-      setMsgs((m) => m.map((x) => (x.id === localId ? { ...x, state: 'failed' } : x)))
+      setMsgs((m) => m.map((x) => (x.id === localId || x.clientKey === localId ? { ...x, state: 'failed' } : x)))
       upsertChatPreview({
-        contactId: (c as any).peerId || contactId,
+        contactId: String((c as any).peerId || peerId || contactId),
         conversationId: conversationId || undefined,
         last: body || (img ? '📷 Photo' : ''),
         state: 'failed',
@@ -1735,7 +1820,9 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
         photo: c.photo,
         hue: c.hue,
       })
-      showToast(e?.message || 'Message failed - tap to retry')
+      showToast(e?.message || 'Message failed — tap to retry')
+    } finally {
+      sendingKeysRef.current.delete(localId)
     }
   }
 
@@ -1792,8 +1879,8 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     // UI first - message window + chats home at the same time
     setMsgs((m) => [...m, optimistic])
     upsertChatPreview({
-      contactId: (c as any).peerId || contactId,
-      conversationId: conversationId || knownConv || undefined,
+      contactId: String((c as any).peerId || peerId || contactId),
+      conversationId: conversationId || knownConv || convRef.current || undefined,
       last: previewText,
       time: timeLabel,
       iso: nowIso,
@@ -1932,8 +2019,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       }
     }
     load()
-    // Light refresh only — WS is source of truth while connected
-    const id = setInterval(load, 90000)
+    // Presence: WS is source of truth. REST only if tab visible AND socket down.
+    const id = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      if (isRealtimeOpen()) return
+      void load()
+    }, 3 * 60 * 1000)
     return () => {
       alive = false
       clearInterval(id)
@@ -3699,47 +3790,99 @@ const wallpaperCss = resolveWallpaper(settings.wallpaper, settings.colorMode)
                 onClick={async () => {
                   try {
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-                    const rec = new MediaRecorder(stream)
+                    const mimePreferred = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                      ? 'audio/webm;codecs=opus'
+                      : MediaRecorder.isTypeSupported('audio/webm')
+                        ? 'audio/webm'
+                        : MediaRecorder.isTypeSupported('audio/mp4')
+                          ? 'audio/mp4'
+                          : ''
+                    const rec = mimePreferred
+                      ? new MediaRecorder(stream, { mimeType: mimePreferred })
+                      : new MediaRecorder(stream)
                     recordChunks.current = []
                     rec.ondataavailable = (ev) => {
                       if (ev.data.size) recordChunks.current.push(ev.data)
                     }
-                    rec.onstop = async () => {
+                    rec.onstop = () => {
                       stream.getTracks().forEach((t) => t.stop())
                       if (recordTimer.current) clearInterval(recordTimer.current)
                       setRecording(false)
                       ;(window as any).__sc_rec?.(false)
-                      const blob = new Blob(recordChunks.current, { type: rec.mimeType || 'audio/webm' })
+                      const secs = recordSecsRef.current
+                      recordSecsRef.current = 0
+                      setRecordSecs(0)
+                      const mime = rec.mimeType || mimePreferred || 'audio/webm'
+                      const blob = new Blob(recordChunks.current, { type: mime })
                       if (blob.size < 400) {
-                        setRecordSecs(0)
+                        showToast('Recording too short')
                         return
                       }
-                      // Send as data URL voice note (backend stores as media attachment text for now)
                       const reader = new FileReader()
                       reader.onload = () => {
                         const dataUrl = String(reader.result || '')
-                        setText('')
-                        void (async () => {
-                          showToast('Voice note ready')
-                          // Optimistic: show duration as message body with voice prefix
-                          const secs = recordSecs
-                          setRecordSecs(0)
-                          const body = `🎤 Voice note (${secs}s)`
-                          // Reuse send path with body only - media upload path may be added later
-                          setText(body)
-                          setTimeout(() => {
-                            send()
-                          }, 30)
-                        })()
+                        if (!dataUrl) {
+                          showToast('Could not save voice note')
+                          return
+                        }
+                        const ext = mime.includes('ogg')
+                          ? 'ogg'
+                          : mime.includes('mp4') || mime.includes('m4a')
+                            ? 'm4a'
+                            : 'webm'
+                        const name = `Voice note (${secs}s).${ext}`
+                        const file = {
+                          name,
+                          url: dataUrl,
+                          mime: mime.split(';')[0] || 'audio/webm',
+                          size: blob.size,
+                        }
+                        const localId = newClientMessageKey()
+                        const nowIso = utcNowIso()
+                        const timeLabel = formatLocalTime(nowIso)
+                        const previewText = `🎤 Voice note (${secs}s)`
+                        const optimistic: ApiMsg = {
+                          id: localId,
+                          clientKey: localId,
+                          from: me?.id || '',
+                          to: contactId,
+                          text: previewText,
+                          image: null,
+                          file,
+                          time: nowIso,
+                          timeLabel,
+                          state: 'pending',
+                          mine: true,
+                        }
+                        setMsgs((m) => [...m, optimistic])
+                        upsertChatPreview({
+                          contactId: (c as any).peerId || contactId,
+                          conversationId: conversationId || knownConv || undefined,
+                          last: previewText,
+                          time: timeLabel,
+                          iso: nowIso,
+                          unread: 0,
+                          mine: true,
+                          state: 'pending',
+                          name: c.name,
+                          photo: c.photo,
+                          hue: c.hue,
+                        })
+                        void deliverMessage(localId, previewText, null, { file }, optimistic)
                       }
+                      reader.onerror = () => showToast('Could not save voice note')
                       reader.readAsDataURL(blob)
                     }
                     mediaRecRef.current = rec
-                    rec.start()
+                    rec.start(250)
                     setRecording(true)
+                    recordSecsRef.current = 0
                     setRecordSecs(0)
                     ;(window as any).__sc_rec?.(true)
-                    recordTimer.current = setInterval(() => setRecordSecs((s) => s + 1), 1000)
+                    recordTimer.current = setInterval(() => {
+                      recordSecsRef.current += 1
+                      setRecordSecs(recordSecsRef.current)
+                    }, 1000)
                   } catch {
                     showToast('Microphone permission needed')
                   }

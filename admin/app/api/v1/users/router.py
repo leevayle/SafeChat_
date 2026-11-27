@@ -1,0 +1,734 @@
+"""User profile endpoints."""
+from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any, List
+import re
+from bson import ObjectId
+from datetime import datetime, timezone
+from app.api.deps import get_current_user
+from app.core.database import get_database
+from app.core.exceptions import ForbiddenError, success_response, NotFoundError, ValidationError
+
+router = APIRouter(prefix="/users", tags=["Users"])
+
+
+@router.get("/presence/{user_id}")
+async def user_presence(user_id: str, user: dict = Depends(get_current_user)):
+    """Online flag (live WS) + last_seen + premium busy status."""
+    from app.websocket.manager import manager
+    from app.utils.presence import busy_payload_from_doc
+
+    db = get_database()
+    online = manager.is_online(user_id)
+    last_seen = None
+    doc = None
+    if ObjectId.is_valid(user_id):
+        doc = await db.users.find_one(
+            {"_id": ObjectId(user_id)},
+            {
+                "last_seen": 1,
+                "preferences": 1,
+                "subscription_plan": 1,
+            },
+        )
+        if doc and doc.get("last_seen"):
+            ls = doc["last_seen"]
+            last_seen = ls.isoformat() if hasattr(ls, "isoformat") else str(ls)
+            if (
+                isinstance(last_seen, str)
+                and "T" in last_seen
+                and not last_seen.endswith("Z")
+                and "+" not in last_seen[10:]
+            ):
+                last_seen = last_seen + "Z"
+
+    # Scope: contacts-only busy is visible when viewer is a contact of the target.
+    is_contact = None
+    if doc and (doc.get("preferences") or {}).get("busy_scope") == "contacts":
+        edge = await db.contacts.find_one(
+            {
+                "owner_user_id": str(user_id),
+                "contact_user_id": user["id"],
+                "contact_status": "accepted",
+            }
+        )
+        if edge is None:
+            # Also accept the reverse edge / accepted request fallback
+            edge = await db.contacts.find_one(
+                {
+                    "owner_user_id": user["id"],
+                    "contact_user_id": str(user_id),
+                    "contact_status": "accepted",
+                }
+            )
+        is_contact = edge is not None
+
+    busy = busy_payload_from_doc(doc, viewer_id=user["id"], is_contact=is_contact)
+    return success_response(
+        "Presence",
+        {
+            "user_id": user_id,
+            "online": online,
+            "last_seen": last_seen,
+            **busy,
+        },
+    )
+
+
+
+class ProfileUpdate(BaseModel):
+    display_name: Optional[str] = Field(None, min_length=1, max_length=64)
+    bio: Optional[str] = Field(None, max_length=256)
+    profile_photo: Optional[str] = None
+    theme: Optional[str] = Field(None, max_length=32)
+    chat_accent: Optional[str] = Field(None, max_length=32)
+    color_mode: Optional[str] = Field(None, max_length=16)
+    liquid_glass: Optional[bool] = None
+    wallpaper: Optional[str] = Field(None, max_length=64)
+
+
+class PreferencesUpdate(BaseModel):
+    """Loose bag for client preference keys (theme, notifs, etc.)."""
+    theme: Optional[str] = None
+    chat_accent: Optional[str] = None
+    color_mode: Optional[str] = None
+    liquid_glass: Optional[bool] = None
+    wallpaper: Optional[str] = None
+    font_size: Optional[str] = None
+    language: Optional[str] = None
+    status_privacy: Optional[str] = None
+    status_selected_contacts: Optional[List[str]] = None
+    status_excluded_contacts: Optional[List[str]] = None
+    status_validity: Optional[str] = None
+    msg_notif: Optional[bool] = None
+    group_notif: Optional[bool] = None
+    call_notif: Optional[bool] = None
+    enter_is_send: Optional[bool] = None
+    typing_indicator: Optional[bool] = None
+    auto_download: Optional[str] = None
+    sound: Optional[str] = None
+    busy_enabled: Optional[bool] = None
+    busy_message: Optional[str] = None
+    busy_until: Optional[str] = None
+    busy_scope: Optional[str] = None
+    read_receipts: Optional[bool] = None
+    status_like_notif: Optional[bool] = None
+    hide_live_typing: Optional[bool] = None
+    show_fab: Optional[bool] = None
+    time_format: Optional[str] = None
+    previews: Optional[bool] = None
+    vibrate: Optional[bool] = None
+    low_data_calls: Optional[bool] = None
+    disappearing: Optional[str] = None
+    last_seen: Optional[str] = None
+    profile_photo: Optional[str] = None
+    about_privacy: Optional[str] = None
+    groups_add: Optional[str] = None
+    force_read_receipts: Optional[bool] = None
+    live_typing: Optional[bool] = None
+    status_ads_enabled: Optional[bool] = None
+    verified_badge: Optional[bool] = None
+
+
+class PrivacySettingsUpdate(BaseModel):
+    last_seen: Optional[str] = None
+    profile_photo: Optional[str] = None
+    status: Optional[str] = None
+    read_receipts: Optional[bool] = None
+
+
+class NotificationSettingsUpdate(BaseModel):
+    messages: Optional[bool] = None
+    groups: Optional[bool] = None
+    calls: Optional[bool] = None
+    statuses: Optional[bool] = None
+    security: Optional[bool] = None
+
+
+class ChatLockPinBody(BaseModel):
+    pin: str = Field(..., min_length=4, max_length=8)
+
+
+class ChatLockPeersBody(BaseModel):
+    peer_ids: List[str] = Field(default_factory=list)
+
+
+def _chat_lock_public(user: dict) -> dict:
+    peers = user.get("locked_peer_ids") or []
+    if not isinstance(peers, list):
+        peers = []
+    return {
+        "chat_lock_enabled": bool(user.get("chat_lock_pin_hash")),
+        "locked_peer_ids": [str(p) for p in peers if p],
+    }
+
+
+@router.get("/me")
+async def get_my_profile(user: dict = Depends(get_current_user)):
+    lock = _chat_lock_public(user)
+    return success_response(
+        "Profile",
+        {
+            "id": user["id"],
+            "username": user["username"],
+            "display_name": user["display_name"],
+            "email": user.get("email"),
+            "phone_number": user.get("phone_number"),
+            "profile_photo": user.get("profile_photo"),
+            "bio": user.get("bio"),
+            "account_role": user.get("account_role"),
+            "account_status": user.get("account_status"),
+            "privacy_settings": user.get("privacy_settings"),
+            "notification_settings": user.get("notification_settings"),
+            "theme": user.get("theme") or "purple",
+            "chat_accent": user.get("chat_accent") or "purple",
+            "color_mode": user.get("color_mode") or "light",
+            "liquid_glass": bool(user.get("liquid_glass", False)),
+            "chat_lock_enabled": lock["chat_lock_enabled"],
+            "locked_peer_ids": lock["locked_peer_ids"],
+            "created_at": user.get("created_at").isoformat()
+            if user.get("created_at")
+            else None,
+            "last_seen": user.get("last_seen").isoformat()
+            if user.get("last_seen")
+            else None,
+        },
+    )
+
+
+@router.patch("/me")
+async def update_my_profile(
+    body: ProfileUpdate,
+    user: dict = Depends(get_current_user),
+):
+    # profile_photo may be explicitly null (remove photo) — keep nulls for that field
+    raw = body.model_dump(exclude_unset=True)
+    updates = {}
+    for k, v in raw.items():
+        if v is not None:
+            updates[k] = v
+        elif k == "profile_photo":
+            updates[k] = None
+    if not updates:
+        return success_response("Nothing to update")
+    updates["updated_at"] = datetime.now(timezone.utc)
+    db = get_database()
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": updates})
+    await db.user_activity_logs.insert_one(
+        {
+            "user_id": user["id"],
+            "event_type": "user",
+            "action": "profile_update",
+            "resource_type": "user",
+            "resource_id": user["id"],
+            "timestamp": updates["updated_at"],
+            "metadata": {"fields": list(updates.keys())},
+        }
+    )
+    return success_response("Profile updated", updates)
+
+
+class UsernameChange(BaseModel):
+    username: str = Field(..., min_length=3, max_length=32)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+@router.patch("/me/username")
+async def change_my_username(
+    body: UsernameChange,
+    user: dict = Depends(get_current_user),
+):
+    """Change the signed-in user's username (password confirmation required)."""
+    from pymongo.errors import DuplicateKeyError
+    from app.core.exceptions import ConflictError, UnauthorizedError
+    from app.core.security import verify_password
+
+    new_username = body.username.strip().lower()
+    if not re.match(r"^[a-z0-9_]{3,32}$", new_username):
+        raise ValidationError(
+            "Username must be 3-32 chars, lowercase letters, numbers, underscores only"
+        )
+    db = get_database()
+    full = await db.users.find_one({"_id": ObjectId(user["id"])})
+    if not full or not verify_password(body.password, full.get("password_hash") or ""):
+        raise UnauthorizedError("Incorrect password")
+    old_username = full.get("username")
+    if new_username == old_username:
+        raise ValidationError("That is already your username")
+    if await db.users.find_one({"username": new_username}, {"_id": 1}):
+        raise ConflictError("Username already taken")
+    now = datetime.now(timezone.utc)
+    try:
+        await db.users.update_one(
+            {"_id": ObjectId(user["id"])},
+            {"$set": {"username": new_username, "updated_at": now}},
+        )
+    except DuplicateKeyError:  # lost a race with another signup
+        raise ConflictError("Username already taken")
+    await db.user_activity_logs.insert_one(
+        {
+            "user_id": user["id"],
+            "event_type": "user",
+            "action": "username_change",
+            "resource_type": "user",
+            "resource_id": user["id"],
+            "timestamp": now,
+            "metadata": {"from": old_username, "to": new_username},
+        }
+    )
+    if full.get("account_role") in ("ADMIN", "SUPER_ADMIN"):
+        await db.system_audit_logs.insert_one(
+            {
+                "actor_id": user["id"],
+                "actor_username": new_username,
+                "actor_role": full.get("account_role"),
+                "action_type": "admin_username_changed",
+                "resource_type": "user",
+                "resource_id": user["id"],
+                "metadata": {"from": old_username, "to": new_username},
+                "timestamp": now,
+            }
+        )
+    return success_response("Username updated", {"username": new_username})
+
+
+@router.post("/me/chat-lock")
+async def set_chat_lock_pin(
+    body: ChatLockPinBody,
+    user: dict = Depends(get_current_user),
+):
+    """Create or replace the chat-lock PIN. Stored as bcrypt hash only."""
+    pin = (body.pin or "").strip()
+    if not pin.isdigit() or len(pin) < 4 or len(pin) > 8:
+        raise ValidationError("PIN must be 4-8 digits")
+    from app.core.security import hash_password
+
+    db = get_database()
+    hashed = hash_password(pin)
+    await db.users.update_one(
+        {"_id": ObjectId(user["id"])},
+        {
+            "$set": {
+                "chat_lock_pin_hash": hashed,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        },
+    )
+    return success_response("Chat lock PIN saved", {"chat_lock_enabled": True})
+
+
+@router.post("/me/chat-lock/verify")
+async def verify_chat_lock_pin(
+    body: ChatLockPinBody,
+    user: dict = Depends(get_current_user),
+):
+    """Verify chat-lock PIN without exposing the hash."""
+    pin = (body.pin or "").strip()
+    stored = user.get("chat_lock_pin_hash")
+    if not stored:
+        raise ValidationError("Chat lock PIN is not set")
+    from app.core.security import verify_password
+
+    if not verify_password(pin, stored):
+        raise ForbiddenError("Wrong PIN")
+    return success_response("PIN ok", {"ok": True})
+
+
+@router.delete("/me/chat-lock")
+async def clear_chat_lock(
+    body: ChatLockPinBody,
+    user: dict = Depends(get_current_user),
+):
+    """Disable chat lock for all chats after verifying the current PIN."""
+    pin = (body.pin or "").strip()
+    stored = user.get("chat_lock_pin_hash")
+    if not stored:
+        return success_response("Chat lock already disabled", {"chat_lock_enabled": False})
+    from app.core.security import verify_password
+
+    if not verify_password(pin, stored):
+        raise ForbiddenError("Wrong PIN")
+    db = get_database()
+    await db.users.update_one(
+        {"_id": ObjectId(user["id"])},
+        {
+            "$unset": {"chat_lock_pin_hash": ""},
+            "$set": {
+                "locked_peer_ids": [],
+                "updated_at": datetime.now(timezone.utc),
+            },
+        },
+    )
+    return success_response(
+        "Chat lock disabled",
+        {"chat_lock_enabled": False, "locked_peer_ids": []},
+    )
+
+
+@router.put("/me/chat-lock/peers")
+async def set_locked_peers(
+    body: ChatLockPeersBody,
+    user: dict = Depends(get_current_user),
+):
+    """Replace the list of locked peer user ids (synced across devices)."""
+    if not user.get("chat_lock_pin_hash"):
+        raise ValidationError("Set a chat lock PIN first")
+    peers: List[str] = []
+    seen = set()
+    for raw in body.peer_ids or []:
+        pid = str(raw or "").strip()
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        peers.append(pid)
+    db = get_database()
+    await db.users.update_one(
+        {"_id": ObjectId(user["id"])},
+        {
+            "$set": {
+                "locked_peer_ids": peers,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        },
+    )
+    return success_response("Locked chats updated", {"locked_peer_ids": peers})
+
+
+@router.patch("/me/preferences")
+async def update_my_preferences(
+    body: PreferencesUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """Persist appearance + device prefs on the user doc (and preferences subdoc)."""
+    raw = body.model_dump(exclude_unset=True)
+    if not raw:
+        return success_response("Nothing to update")
+
+    db = get_database()
+    # Busy status is a Premium feature
+    if any(k.startswith("busy") for k in raw.keys()):
+        plan = (user.get("subscription_plan") or "pro").lower()
+        if plan != "premium" and raw.get("busy_enabled") is not False:
+            # Allow turning off even if plan lapsed; block enabling/editing otherwise
+            if raw.get("busy_enabled") is True or raw.get("busy_message") is not None:
+                raise ForbiddenError("Busy status requires Premium")
+
+    # Top-level appearance fields for fast login/me reads
+    top_keys = {"theme", "chat_accent", "color_mode", "liquid_glass", "wallpaper"}
+    set_ops: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
+    for k, v in raw.items():
+        if v is None:
+            continue
+        if k in top_keys:
+            set_ops[k] = v
+        set_ops[f"preferences.{k}"] = v
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
+    # Mirror privacy-related prefs into privacy_settings for API consumers
+    privacy_map = {
+        "last_seen": "last_seen",
+        "profile_photo": "profile_photo",
+        "about_privacy": "about",
+        "read_receipts": "read_receipts",
+        "status_privacy": "status",
+        "groups_add": "groups",
+    }
+    priv_ops = {}
+    for k, pk in privacy_map.items():
+        if k in raw and raw[k] is not None:
+            priv_ops[f"privacy_settings.{pk}"] = raw[k]
+    if priv_ops:
+        await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": priv_ops})
+    # Fan-out busy / presence note to contacts when busy fields change
+    if any(k.startswith("busy") for k in raw.keys()):
+        try:
+            from app.websocket.manager import manager
+            from app.websocket.router import _peer_ids_for
+            from app.utils.presence import resolve_busy
+
+            full = await db.users.find_one(
+                {"_id": ObjectId(user["id"])},
+                {"preferences": 1, "subscription_plan": 1},
+            )
+            enabled, message, until = resolve_busy(full)
+            online = manager.is_online(user["id"])
+            payload = {
+                "t": "presence",
+                "userId": user["id"],
+                "online": online,
+                "busy": enabled,
+                "busyMessage": message if enabled else "",
+                "busyUntil": until if enabled else None,
+            }
+            for pid in await _peer_ids_for(user["id"]):
+                await manager.send_user(str(pid), payload)
+        except Exception:
+            pass
+    return success_response("Preferences updated", raw)
+
+
+@router.patch("/me/privacy")
+async def update_privacy(
+    body: PrivacySettingsUpdate,
+    user: dict = Depends(get_current_user),
+):
+    updates = {
+        k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None
+    }
+    if not updates:
+        return success_response("Nothing to update")
+    allowed = {"everyone", "contacts", "nobody"}
+    for key in ("last_seen", "profile_photo", "status"):
+        if key in updates and updates[key] not in allowed:
+            raise ValidationError(f"Invalid value for {key}")
+    db = get_database()
+    set_ops = {f"privacy_settings.{k}": v for k, v in updates.items()}
+    set_ops["updated_at"] = datetime.now(timezone.utc)
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
+    return success_response("Privacy settings updated", updates)
+
+
+@router.patch("/me/notifications")
+async def update_notifications(
+    body: NotificationSettingsUpdate,
+    user: dict = Depends(get_current_user),
+):
+    updates = {
+        k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None
+    }
+    if not updates:
+        return success_response("Nothing to update")
+    db = get_database()
+    set_ops = {f"notification_settings.{k}": v for k, v in updates.items()}
+    set_ops["updated_at"] = datetime.now(timezone.utc)
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
+    return success_response("Notification settings updated", updates)
+
+
+@router.get("/me/sessions")
+async def list_sessions(user: dict = Depends(get_current_user)):
+    """Live sessions: at most one per device class (mobile / tablet / desktop)."""
+    from app.services.session_policy import LABELS, session_class
+
+    db = get_database()
+    cursor = db.sessions.find(
+        {"user_id": user["id"], "revoked": False}
+    ).sort("created_at", -1)
+    sessions = []
+    async for s in cursor:
+        kind = session_class(s)
+        sessions.append(
+            {
+                "id": str(s["_id"]),
+                "device_id": s.get("device_id"),
+                "device_name": s.get("device_name"),
+                "device_type": kind,
+                "device_label": LABELS[kind],
+                "current": bool(user.get("sid")) and s.get("sid") == user.get("sid"),
+                "user_agent": s.get("user_agent"),
+                "ip_address": s.get("ip_address"),
+                "created_at": s["created_at"].isoformat() if s.get("created_at") else None,
+                "last_used_at": s["last_used_at"].isoformat() if s.get("last_used_at") else None,
+                "expires_at": s["expires_at"].isoformat() if s.get("expires_at") else None,
+            }
+        )
+    return success_response("Sessions", sessions)
+
+
+@router.delete("/me/sessions/{session_id}")
+async def revoke_session(session_id: str, user: dict = Depends(get_current_user)):
+    db = get_database()
+    if not ObjectId.is_valid(session_id):
+        raise ValidationError("Invalid session id")
+    target = await db.sessions.find_one(
+        {"_id": ObjectId(session_id), "user_id": user["id"], "revoked": False}
+    )
+    if not target:
+        raise NotFoundError("Session not found")
+    await db.sessions.update_one(
+        {"_id": target["_id"], "revoked": False},
+        {
+            "$set": {
+                "revoked": True,
+                "revoked_at": datetime.now(timezone.utc),
+                "revoked_reason": "user_revoked",
+            }
+        },
+    )
+    if target.get("sid"):  # drop that device's live socket immediately
+        try:
+            from app.websocket.manager import manager
+
+            await manager.close_sessions(user["id"], {target["sid"]})
+        except Exception:
+            pass
+    return success_response("Session revoked")
+
+
+
+@router.post("/me/verify-password")
+async def verify_my_password(
+    body: dict = None,
+    user: dict = Depends(get_current_user),
+):
+    """Confirm the account password without changing any account state."""
+    from app.core.security import verify_password
+    from app.core.exceptions import UnauthorizedError, ValidationError
+
+    db = get_database()
+    password = (body or {}).get("password") if isinstance(body, dict) else None
+    if not password:
+        raise ValidationError("Password is required")
+    full = await db.users.find_one({"_id": ObjectId(user["id"])})
+    if not full or not verify_password(password, full.get("password_hash") or ""):
+        raise UnauthorizedError("Incorrect password")
+    return success_response("Password confirmed", {"ok": True})
+
+
+@router.post("/me/deactivate")
+async def deactivate_account(
+    body: dict = None,
+    user: dict = Depends(get_current_user),
+):
+    """Require password confirmation before deactivating the account."""
+    from app.core.security import verify_password
+    from app.core.exceptions import ForbiddenError, UnauthorizedError, ValidationError
+
+    db = get_database()
+    password = (body or {}).get("password") if isinstance(body, dict) else None
+    if not password:
+        raise ValidationError("Password is required")
+    full = await db.users.find_one({"_id": ObjectId(user["id"])})
+    if not full or not verify_password(password, full.get("password_hash") or ""):
+        raise UnauthorizedError("Incorrect password")
+
+    now = datetime.now(timezone.utc)
+    await db.users.update_one(
+        {"_id": ObjectId(user["id"])},
+        {"$set": {"account_status": "deactivated", "updated_at": now}},
+    )
+    await db.sessions.update_many(
+        {"user_id": user["id"], "revoked": False},
+        {"$set": {"revoked": True, "revoked_at": now}},
+    )
+    return success_response("Account deactivated")
+
+
+@router.get("/{username}")
+async def get_user_by_username(username: str, user: dict = Depends(get_current_user)):
+    db = get_database()
+    target = await db.users.find_one({"username": username.lower()})
+    if not target or target.get("account_status") in ("deleted", "banned"):
+        raise NotFoundError("User not found")
+    return success_response(
+        "User",
+        {
+            "id": str(target["_id"]),
+            "username": target["username"],
+            "display_name": target["display_name"],
+            "profile_photo": target.get("profile_photo"),
+            "bio": target.get("bio"),
+        },
+    )
+
+
+@router.get("/search/{query}")
+async def search_users(
+    query: str,
+    user: dict = Depends(get_current_user),
+):
+    """Simple username / display_name search (min 2 chars)."""
+    if len(query.strip()) < 2:
+        raise ValidationError("Query must be at least 2 characters")
+    db = get_database()
+    q = query.strip()
+    digits = re.sub(r"\D", "", q)
+    phone_query = bool(digits) and bool(re.fullmatch(r"[+\d\s()-]+", q))
+    if phone_query:
+        prefixes = {digits}
+        if digits.startswith("254"):
+            prefixes.add("0" + digits[3:])
+        elif digits.startswith("0"):
+            prefixes.add("254" + digits[1:])
+        elif digits.startswith(("7", "1")):
+            prefixes.add("254" + digits)
+        phone_filters = []
+        for prefix in prefixes:
+            pattern = f"^\\+?{re.escape(prefix)}"
+            phone_filters.extend(
+                [
+                    {"phone_number": {"$regex": pattern, "$options": "i"}},
+                    {"phone": {"$regex": pattern, "$options": "i"}},
+                ]
+            )
+        search_filter = {"$or": phone_filters}
+    else:
+        escaped_query = re.escape(q)
+        search_filter = {
+            "$or": [
+                {"username": {"$regex": f"^{escaped_query}", "$options": "i"}},
+                {"display_name": {"$regex": escaped_query, "$options": "i"}},
+            ]
+        }
+    cursor = (
+        db.users.find(
+            {
+                **search_filter,
+                "account_status": "active",
+                "_id": {"$ne": ObjectId(user["id"])},
+            }
+        )
+        .limit(20)
+    )
+    results = []
+    async for u in cursor:
+        user_phone = re.sub(r"\D", "", str(u.get("phone_number") or u.get("phone") or ""))
+        if user_phone.startswith("0") and len(user_phone) == 10:
+            user_phone = "254" + user_phone[1:]
+        elif len(user_phone) == 9 and user_phone.startswith(("7", "1")):
+            user_phone = "254" + user_phone
+        query_phone = digits
+        if query_phone.startswith("0") and len(query_phone) == 10:
+            query_phone = "254" + query_phone[1:]
+        elif len(query_phone) == 9 and query_phone.startswith(("7", "1")):
+            query_phone = "254" + query_phone
+        results.append(
+            {
+                "id": str(u["_id"]),
+                "username": u["username"],
+                "display_name": u["display_name"],
+                "profile_photo": u.get("profile_photo"),
+                "phone_match": phone_query
+                and len(query_phone) >= 9
+                and user_phone == query_phone,
+            }
+        )
+    return success_response("Search results", results)
+
+
+class PremiumSettingsUpdate(BaseModel):
+    verified_badge: Optional[bool] = None
+    force_read_receipts: Optional[bool] = None
+    live_typing: Optional[bool] = None
+    status_ads_enabled: Optional[bool] = None
+
+
+@router.patch("/me/premium-settings")
+async def update_premium_settings(
+    body: PremiumSettingsUpdate,
+    user: dict = Depends(get_current_user),
+):
+    db = get_database()
+    u = await db.users.find_one({"_id": ObjectId(user["id"])})
+    if not u or (u.get("subscription_plan") or "pro") != "premium":
+        raise ForbiddenError("Premium required")
+    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    if not updates:
+        return success_response("Nothing to update")
+    set_ops = {f"premium_settings.{k}": v for k, v in updates.items()}
+    # Mirror verified_badge to top-level for list serializers
+    if "verified_badge" in updates:
+        set_ops["verified_badge"] = updates["verified_badge"]
+    set_ops["updated_at"] = datetime.now(timezone.utc)
+    await db.users.update_one({"_id": ObjectId(user["id"])}, {"$set": set_ops})
+    return success_response("Premium settings updated", updates)
+

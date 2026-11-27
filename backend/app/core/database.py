@@ -94,6 +94,13 @@ async def create_indexes() -> None:
     await database.conversations.create_index("conversation_type")
     await database.conversations.create_index("last_message_at")
     await database.conversations.create_index("group_id", sparse=True)
+    await database.conversation_members.create_index(
+        [("user_id", 1), ("conversation_id", 1)]
+    )
+    await database.conversation_members.create_index([("user_id", 1), ("hidden", 1)])
+    await database.conversations.create_index(
+        [("participant_ids", 1), ("last_message_at", -1)]
+    )
     # Inbox list: filter by participant then sort by activity
     await database.conversations.create_index(
         [("participant_ids", 1), ("last_message_at", -1)]
