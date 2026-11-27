@@ -1557,13 +1557,15 @@ rejectContactRequest: async (requestId: string) => {
     return { ok: true }
   },
 
-  chats: async (opts?: { lean?: boolean; limit?: number }) => {
+  chats: async (opts?: { lean?: boolean; limit?: number; cursor?: string }) => {
     const q = new URLSearchParams()
     if (opts?.lean) q.set('lean', 'true')
     if (opts?.limit) q.set('limit', String(opts.limit))
+    if (opts?.cursor) q.set('cursor', opts.cursor)
     const qs = q.toString()
     const data = await req<any>(`/api/v1/conversations${qs ? `?${qs}` : ''}`)
     const list = data.conversations || data || []
+    const nextCursor = data.next_cursor || data.nextCursor || null
     const mid = meId()
     const mapped = list
       // Groups belong on the Groups tab only — never in Chats inbox
@@ -1596,7 +1598,7 @@ rejectContactRequest: async (requestId: string) => {
       const nextT = ch.iso ? Date.parse(ch.iso) : 0
       if (nextT >= prevT) byPeer.set(key, ch)
     }
-    return { chats: Array.from(byPeer.values()) }
+    return { chats: Array.from(byPeer.values()), nextCursor: nextCursor as string | null }
   },
 
   deleteConversation: async (conversationId: string) => {
@@ -1672,7 +1674,7 @@ rejectContactRequest: async (requestId: string) => {
     opts?: { limit?: number; beforeId?: string; afterId?: string },
   ) => {
     const q = new URLSearchParams()
-    q.set('limit', String(opts?.limit ?? 50))
+    q.set('limit', String(opts?.limit ?? 25))
     // before_id = older history (scroll up); after_id = delta since cached tip
     if (opts?.afterId) q.set('after_id', opts.afterId)
     else if (opts?.beforeId) q.set('before_id', opts.beforeId)

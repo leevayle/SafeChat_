@@ -173,7 +173,21 @@ manager = ConnectionManager()
 
 
 def packet_msg(conversation_id: str, message: dict) -> dict:
-    """Minimal new-message packet for peers — include reply tag so UI prints once."""
+    """New-message packet for peers — includes media so voice notes / files arrive live."""
+    media = message.get("media_attachments") or message.get("media") or []
+    if not isinstance(media, list):
+        media = []
+    # Prefer explicit image URL for photo messages; files keep full attachment list
+    image_url = None
+    mt = str(message.get("message_type") or message.get("type") or "text")
+    if mt == "image":
+        image_url = _first_media_url(message)
+    elif media:
+        first = media[0] if isinstance(media[0], dict) else {}
+        mime = str((first or {}).get("mime_type") or (first or {}).get("mime") or "")
+        typ = str((first or {}).get("type") or "")
+        if typ == "image" or mime.startswith("image/"):
+            image_url = _first_media_url(message)
     return {
         "t": "msg",
         "c": conversation_id,
@@ -182,8 +196,10 @@ def packet_msg(conversation_id: str, message: dict) -> dict:
             "from": message.get("sender_id") or message.get("from"),
             "text": message.get("content") or message.get("text") or "",
             "time": message.get("created_at") or message.get("time"),
-            "type": message.get("message_type") or message.get("type") or "text",
-            "image": _first_media_url(message),
+            "type": mt,
+            "message_type": mt,
+            "image": image_url,
+            "media_attachments": media,
             "state": message.get("delivery_status") or "sent",
             "reply_to_message_id": message.get("reply_to_message_id"),
             "reply_to_text": message.get("reply_to_text"),

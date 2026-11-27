@@ -937,7 +937,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshChats = useCallback(async (opts?: { lean?: boolean }) => {
     if (!hasAccessToken() || isSessionDead()) return
     try {
-      const { chats: c } = await api.chats({ lean: !!opts?.lean, limit: opts?.lean ? 20 : 40 })
+      const { chats: c, nextCursor } = await api.chats({ lean: !!opts?.lean, limit: opts?.lean ? 12 : 25 })
       // Merge network into UI — never drop a row that is only local / newer than server
       setChats((prev) => {
         const groupConvIds = new Set(
@@ -1447,8 +1447,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return current
       })
     })
-    // Prefetch only top threads (keeps login/home fast). Rest load on open.
-    const targets = snapshot.filter((chat) => chat.conversationId).slice(0, force ? 10 : 6)
+    // Prefetch only the hottest threads (rest open on demand). Small pages = fast.
+    const targets = snapshot.filter((chat) => chat.conversationId).slice(0, force ? 5 : 3)
     const concurrency = 3
     const { applyThreadMessages } = await import('./lib/messageStore')
     for (let i = 0; i < targets.length; i += concurrency) {
@@ -1458,13 +1458,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           const conversationId = chat.conversationId!
           if (!force) {
             const cached = getCachedMessages(conversationId)
-            if (cached && cached.length >= 12) return
+            if (cached && cached.length >= 8) return
           }
           try {
-            const { messages } = await api.messages(conversationId, { limit: 30 })
+            const { messages } = await api.messages(conversationId, { limit: 15 })
             await applyThreadMessages(conversationId, messages, 'merge')
           } catch {
-            /* A thread can be refreshed when it is opened. */
+            /* Loaded when the user opens the thread. */
           }
         }),
       )
@@ -1593,7 +1593,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       /* keep skeleton; network path will unlock */
     }
 
-    // Phase 1 — lean home chats first (required for first login + always revalidate)
+    // Phase 1 — tiny lean inbox first (12 rows) so home is interactive ASAP
     try {
       await refreshChats({ lean: true })
     } catch {
@@ -1607,9 +1607,42 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
     setSessionOk(true)
 
-    // Phase 2 — full list + last 50 msgs per recent thread (background, always cache)
+    // Phase 2 — fill inbox photos + next page of chats in background; prefetch only top threads
     if (isSessionDead()) return
-    void refreshChats({ lean: false })
+    void (async () => {
+      try {
+        await refreshChats({ lean: false })
+        // Next inbox page (older chats) — does not block home
+        await new Promise<void>((resolve) => {
+          setChats((cur) => {
+            const last = cur[cur.length - 1]
+            const cursor = last?.conversationId
+            if (cursor) {
+              void api.chats({ lean: true, limit: 30, cursor }).then(({ chats: page }) => {
+                if (!page?.length) return
+                setChats((prev) => {
+                  const seenConv = new Set(prev.map((p) => p.conversationId).filter(Boolean) as string[])
+                  const seenPeer = new Set(prev.map((p) => p.contactId).filter(Boolean))
+                  const extra = page.filter(
+                    (p) =>
+                      (!p.conversationId || !seenConv.has(p.conversationId)) &&
+                      !seenPeer.has(p.contactId),
+                  )
+                  if (!extra.length) return prev
+                  const merged = sanitizeChatList([...prev, ...extra])
+                  void saveCachedChats(merged)
+                  return merged
+                })
+              })
+            }
+            resolve()
+            return cur
+          })
+        })
+      } catch {
+        /* soft */
+      }
+    })()
     void refreshRecentMessages(false)
 
     // Phase 3 — secondary lists (background)

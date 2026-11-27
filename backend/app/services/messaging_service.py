@@ -202,8 +202,23 @@ class MessagingService:
             "participant_ids": user_id,
             "conversation_type": {"$ne": ConversationType.GROUP.value},
         }
+        # Cursor = conversation id to page after (older last_message_at)
+        cursor_time = None
         if cursor and ObjectId.is_valid(cursor):
-            pass  # simple limit for now
+            cur_doc = await db.conversations.find_one(
+                {"_id": ObjectId(cursor)},
+                {"last_message_at": 1, "updated_at": 1},
+            )
+            if cur_doc:
+                cursor_time = cur_doc.get("last_message_at") or cur_doc.get("updated_at")
+                if cursor_time:
+                    query["$or"] = [
+                        {"last_message_at": {"$lt": cursor_time}},
+                        {
+                            "last_message_at": cursor_time,
+                            "_id": {"$lt": ObjectId(cursor)},
+                        },
+                    ]
 
         hidden_ids: set = set()
         async for mem in db.conversation_members.find(
@@ -315,7 +330,8 @@ class MessagingService:
                     unread_by_cid=unread_by_cid,
                 )
             )
-        return {"conversations": items, "next_cursor": None}
+        next_cursor = items[-1]["id"] if items and len(items) >= min(limit, 100) else None
+        return {"conversations": items, "next_cursor": next_cursor}
 
     @staticmethod
     async def _unhide_membership(db, conversation_id: str, user_id: str) -> None:
@@ -664,11 +680,10 @@ class MessagingService:
         before_id: Optional[str] = None,
         after_id: Optional[str] = None,
     ) -> dict:
-        """Load messages for a thread.
+        """Load messages for a thread — batched, no per-row N+1.
 
         - before_id: page older history (scroll up)
         - after_id: delta sync — only messages newer than the client's cached tip
-          (industry-style incremental fetch; skip what is already on device)
         """
         db = get_database()
         if not ObjectId.is_valid(conversation_id):
@@ -679,58 +694,160 @@ class MessagingService:
         if user_id not in conv.get("participant_ids", []):
             raise ForbiddenError("Not a participant")
 
-        query: Dict[str, Any] = {
-            "conversation_id": conversation_id,
-            # Soft-deleted messages stay in history as placeholders
-        }
-        # Prefer after_id for forward delta; before_id for backward history.
-        # Do not combine both in one query.
-        if after_id and ObjectId.is_valid(after_id):
+        page_limit = min(max(int(limit or 25), 1), 50)
+        query: Dict[str, Any] = {"conversation_id": conversation_id}
+        is_delta = bool(after_id and ObjectId.is_valid(after_id))
+        if is_delta:
             query["_id"] = {"$gt": ObjectId(after_id)}
-            cursor = (
-                db.messages.find(query)
-                .sort("created_at", 1)
-                .limit(min(limit, 100))
-            )
+            cursor = db.messages.find(query).sort("created_at", 1).limit(page_limit)
         else:
             if before_id and ObjectId.is_valid(before_id):
                 query["_id"] = {"$lt": ObjectId(before_id)}
-            cursor = (
-                db.messages.find(query)
-                .sort("created_at", -1)
-                .limit(min(limit, 100))
-            )
+            cursor = db.messages.find(query).sort("created_at", -1).limit(page_limit)
 
-        messages = []
-        now = datetime.now(timezone.utc)
+        raw: list = []
         async for m in cursor:
-            mid = str(m["_id"])
-            # Opening the thread = delivered for the other party's messages
-            if m.get("sender_id") != user_id:
-                await db.message_receipts.update_one(
-                    {"message_id": mid, "user_id": user_id},
-                    {
-                        "$set": {"delivered_at": now},
-                        "$setOnInsert": {
-                            "message_id": mid,
-                            "user_id": user_id,
-                            "conversation_id": conversation_id,
-                            "read_at": None,
-                            "created_at": now,
-                        },
-                    },
-                    upsert=True,
-                )
-            messages.append(await MessagingService._serialize_message(m, viewer_id=user_id))
-        if not (after_id and ObjectId.is_valid(after_id)):
-            messages.reverse()  # chronological when we fetched newest-first
-        next_cursor = messages[0]["id"] if messages and len(messages) == limit and not after_id else None
+            raw.append(m)
+
+        if not is_delta:
+            raw.reverse()  # chronological
+
+        # Bulk-mark delivered for peer messages (one write path, not N sequential upserts)
+        now = datetime.now(timezone.utc)
+        peer_ids = [
+            str(m["_id"])
+            for m in raw
+            if m.get("sender_id") != user_id and m.get("_id")
+        ]
+        if peer_ids:
+            try:
+                ops = []
+                from pymongo import UpdateOne
+                for mid in peer_ids:
+                    ops.append(
+                        UpdateOne(
+                            {"message_id": mid, "user_id": user_id},
+                            {
+                                "$set": {"delivered_at": now},
+                                "$setOnInsert": {
+                                    "message_id": mid,
+                                    "user_id": user_id,
+                                    "conversation_id": conversation_id,
+                                    "read_at": None,
+                                    "created_at": now,
+                                },
+                            },
+                            upsert=True,
+                        )
+                    )
+                if ops:
+                    await db.message_receipts.bulk_write(ops, ordered=False)
+            except Exception:
+                logger.debug("bulk delivered mark failed", exc_info=True)
+
+        messages = await MessagingService._serialize_messages_batch(raw, viewer_id=user_id)
+
+        next_cursor = None
+        if not is_delta and messages and len(messages) >= page_limit:
+            next_cursor = messages[0]["id"]
         newest_id = messages[-1]["id"] if messages else None
         return {
             "messages": messages,
             "next_cursor": next_cursor,
             "newest_id": newest_id,
         }
+
+    @staticmethod
+    async def _serialize_messages_batch(
+        msgs: list, viewer_id: Optional[str] = None
+    ) -> list:
+        """Serialize many messages with batched lookups (senders, reactions, receipts)."""
+        if not msgs:
+            return []
+        db = get_database()
+        sender_oids = []
+        seen_senders = set()
+        msg_ids: list = []
+        for m in msgs:
+            mid = str(m.get("_id") or "")
+            if mid:
+                msg_ids.append(mid)
+            sid = str(m.get("sender_id") or "")
+            if sid and ObjectId.is_valid(sid) and sid not in seen_senders:
+                seen_senders.add(sid)
+                sender_oids.append(ObjectId(sid))
+
+        senders: Dict[str, dict] = {}
+        if sender_oids:
+            async for u in db.users.find(
+                {"_id": {"$in": sender_oids}},
+                {"username": 1, "display_name": 1},
+            ):
+                senders[str(u["_id"])] = u
+
+        # Reactions for page
+        reactions_by_mid: Dict[str, list] = {mid: [] for mid in msg_ids}
+        if msg_ids:
+            async for r in db.message_reactions.find({"message_id": {"$in": msg_ids}}):
+                mid = str(r.get("message_id") or "")
+                if mid in reactions_by_mid:
+                    reactions_by_mid[mid].append(
+                        {"emoji": r.get("emoji"), "user_id": r.get("user_id")}
+                    )
+
+        # Receipts only needed for viewer's own sends (tick state)
+        own_mids = [
+            str(m["_id"])
+            for m in msgs
+            if viewer_id and str(m.get("sender_id") or "") == str(viewer_id)
+        ]
+        receipt_state: Dict[str, str] = {}
+        if own_mids:
+            async for r in db.message_receipts.find({"message_id": {"$in": own_mids}}):
+                mid = str(r.get("message_id") or "")
+                if r.get("read_at"):
+                    receipt_state[mid] = DeliveryStatus.READ.value
+                elif r.get("delivered_at") and receipt_state.get(mid) != DeliveryStatus.READ.value:
+                    receipt_state[mid] = DeliveryStatus.DELIVERED.value
+                elif mid not in receipt_state:
+                    receipt_state[mid] = DeliveryStatus.SENT.value
+
+        out = []
+        for m in msgs:
+            mid = str(m["_id"])
+            sender = senders.get(str(m.get("sender_id") or ""))
+            status = m.get("delivery_status", DeliveryStatus.SENT.value)
+            if viewer_id and str(m.get("sender_id") or "") == str(viewer_id):
+                status = receipt_state.get(mid) or status
+            out.append(
+                {
+                    "id": mid,
+                    "conversation_id": m.get("conversation_id"),
+                    "sender_id": m.get("sender_id"),
+                    "sender_username": sender.get("username") if sender else None,
+                    "sender_display_name": sender.get("display_name") if sender else None,
+                    "message_type": m.get("message_type"),
+                    "content": None if m.get("deleted_at") else m.get("content"),
+                    "media_attachments": []
+                    if m.get("deleted_at")
+                    else (m.get("media_attachments") or []),
+                    "reply_to_message_id": m.get("reply_to_message_id"),
+                    "reply_to_text": m.get("reply_to_text"),
+                    "forwarded_from": m.get("forwarded_from"),
+                    "created_at": _utc_iso(m.get("created_at")),
+                    "updated_at": m["updated_at"].isoformat()
+                    if m.get("updated_at")
+                    else None,
+                    "deleted_at": m["deleted_at"].isoformat()
+                    if m.get("deleted_at")
+                    else None,
+                    "delivery_status": status,
+                    "edited": bool(m.get("edited")),
+                    "client_key": m.get("idempotency_key") or m.get("client_key"),
+                    "reactions": reactions_by_mid.get(mid) or [],
+                }
+            )
+        return out
 
     @staticmethod
     async def edit_message(message_id: str, user_id: str, content: str) -> dict:

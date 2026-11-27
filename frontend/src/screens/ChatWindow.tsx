@@ -874,12 +874,12 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
       }
       const { messages, nextCursor } = await api.messages(
         cid,
-        tipId ? { limit: 50, afterId: tipId } : { limit: 50 },
+        tipId ? { limit: 30, afterId: tipId } : { limit: 25 },
       )
       // When delta-syncing, keep older-cursor from previous session if any
       if (!tipId) {
         setThreadCursor(cid, nextCursor || (messages.length ? messages[0]?.id : null))
-        setHasMoreOlder(!!nextCursor || messages.length >= 50)
+        setHasMoreOlder(!!nextCursor || messages.length >= 25)
       }
       // Incoming messages we just pulled: ack delivered before/while painting (no await)
       for (const m of messages) {
@@ -1015,7 +1015,7 @@ function ChatWindowInner({ contactId, onBack, onCall, onOpenCalls, onOpenStatus 
     setLoadingOlder(true)
     markLoadingOlder(cid, true)
     try {
-      const { messages, nextCursor } = await api.messages(cid, { limit: 40, beforeId: String(beforeId) })
+      const { messages, nextCursor } = await api.messages(cid, { limit: 25, beforeId: String(beforeId) })
       if (!messages.length) {
         setHasMoreOlder(false)
         setThreadCursor(cid, null)
